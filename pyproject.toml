@@ -1,0 +1,154 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "voice-stack"
+version = "0.1.0"
+description = "ASR + TTS services with CUDA/Metal-friendly dev workflow"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Vitor Garbim", email = "vyscava@gmail.com" }]
+
+dependencies = [
+  # runtime deps go here (keep minimal; pin in prod if needed)
+]
+
+[project.optional-dependencies]
+dev = [
+  "black>=24.4.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+  "pytest>=8.0.0",
+  "pytest-cov>=5.0.0",
+  # add type stubs as you need them, e.g.:
+  "types-requests",
+  "types-PyYAML",
+]
+
+[tool.hatch.metadata]
+allow-direct-refs = true
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "pyproject.toml", "README.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# -----------------------
+# Hatch environments
+# -----------------------
+[tool.hatch.envs.default]
+dependencies = [
+  "black>=24.4.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+  "pytest>=8.0.0",
+  "pytest-cov>=5.0.0",
+]
+[tool.hatch.envs.default.scripts]
+fmt = [
+  "black .",
+  # Sort imports (only) via Ruff, so Black remains the formatter
+  "ruff check . --select I --fix"
+]
+lint = [
+  # Fast linter; do not fix here to keep it ‘lint-only’
+  "ruff check .",
+  # Type check (strict-ish; see mypy section below)
+  "mypy"
+]
+test = "pytest -q --disable-warnings --maxfail=1"
+cov = "pytest --cov=src --cov-report=term-missing"
+
+# Optional separate envs (useful if you want to keep default clean)
+[tool.hatch.envs.test]
+dependencies = ["pytest>=8.0.0", "pytest-cov>=5.0.0"]
+[tool.hatch.envs.test.scripts]
+run = "pytest -q --disable-warnings --maxfail=1"
+cov = "pytest --cov=src --cov-report=term-missing"
+
+[tool.hatch.envs.typecheck]
+dependencies = ["mypy>=1.10.0"]
+[tool.hatch.envs.typecheck.scripts]
+run = "mypy"
+
+[tool.hatch.envs.lint]
+dependencies = ["ruff>=0.5.0"]
+[tool.hatch.envs.lint.scripts]
+run = "ruff check ."
+
+[tool.hatch.envs.fmt]
+dependencies = ["black>=24.4.0", "ruff>=0.5.0"]
+[tool.hatch.envs.fmt.scripts]
+run = [
+  "black .",
+  "ruff check . --select I --fix"
+]
+
+# -----------------------
+# Ruff
+# -----------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["build", "dist", ".nox", ".venv", "venv"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F",        # pycodestyle/pyflakes
+  "I",            # import sorting (used in fmt step)
+  "UP",           # pyupgrade
+  "B",            # bugbear
+  "C4",           # comprehensions
+  "PIE",          # misc correctness
+  "PERF",         # performance
+]
+ignore = [
+  # Add rule codes to ignore if needed
+]
+
+# Use the new unified Ruff formatter only if you decide to drop Black entirely.
+# [tool.ruff.format]
+# docstring-code-format = true
+
+# -----------------------
+# Black
+# -----------------------
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+extend-exclude = "build|dist|.nox|.venv|venv"
+
+# -----------------------
+# MyPy
+# -----------------------
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+strict_equality = true
+pretty = true
+show_column_numbers = true
+show_error_codes = true
+
+# Per-module relaxation is handy while migrating:
+# [[tool.mypy.overrides]]
+# module = ["torch.*", "TTS.*"]
+# ignore_missing_imports = true
+
+# -----------------------
+# Pytest
+# -----------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+pythonpath = ["src"]
