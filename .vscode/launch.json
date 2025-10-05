@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API (uvicorn via hatch)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "tts.app:app",
+        "--host", "0.0.0.0",
+        "--port", "5002",
+        "--reload",
+        "--reload-dir", "tts"
+      ],
+      "env": {
+        "LOG_LEVEL": "INFO",
+        "TTS_DEVICE": "cpu",
+        "TTS_MAX_CHARS": "180",
+        "TTS_MAX_INPUT_CHARS": "4000",
+        "TTS_AUTO_LANG": "1",
+        "TTS_MODEL": "tts_models/multilingual/multi-dataset/xtts_v2"
+      },
+      "jinja": true,
+      "justMyCode": true
+    },
+    {
+      "name": "Run nox session (tests)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "nox",
+      "args": ["-s", "tests"],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

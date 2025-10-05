@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "fmt (hatch)",
+      "type": "shell",
+      "command": "hatch fmt",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint (hatch)",
+      "type": "shell",
+      "command": "hatch lint",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "typecheck (hatch)",
+      "type": "shell",
+      "command": "hatch run mypy",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "test (nox)",
+      "type": "shell",
+      "command": "nox -s tests",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}
