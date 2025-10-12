@@ -7,9 +7,10 @@
   // Nice-to-haves that don’t affect your tooling:
   "files.trimTrailingWhitespace": true,
   "files.insertFinalNewline": true,
-  "editor.tabSize": 2,
+  "editor.tabSize": 4,
   "editor.rulers": [100],
 
   // (Optional) Don’t auto-activate built-in Python features if you prefer a silent editor.
-  "python.analysis.diagnosticMode": "openFilesOnly"
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.defaultInterpreterPath": "${workspace}/.venv/bin/python"
 }

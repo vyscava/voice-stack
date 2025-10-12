@@ -2,29 +2,58 @@
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
+[dirs.env]
+virtual = ".venv"
+
 [project]
 name = "voice-stack"
 version = "0.1.0"
-description = "ASR + TTS services with CUDA/Metal-friendly dev workflow"
+description = "ASR + TTS services with CUDA/Metal-friendly"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Vitor Garbim", email = "vyscava@gmail.com" }]
+keywords = ["speech-recognition", "whisper", "asr", "webservice"]
 
+# Cross-platform/runtime deps only
 dependencies = [
-  # runtime deps go here (keep minimal; pin in prod if needed)
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart",
+  "pydantic",
+  "requests",
+  "ffmpeg"
 ]
 
 [project.optional-dependencies]
+# Split by feature so you can `pip install .[tts]` on lightweight machines, etc.
+tts = [
+  "coqui-tts",
+  "resampy",
+  "soundfile",
+  "numpy",
+]
+asr = [
+  "faster-whisper",
+  "silero-vad",
+  "torch",
+  "torchaudio",
+]
+server = [
+  "python-dotenv",
+  "pydantic-settings",
+]
 dev = [
-  "black>=24.4.0",
-  "ruff>=0.5.0",
-  "mypy>=1.10.0",
-  "pytest>=8.0.0",
-  "pytest-cov>=5.0.0",
-  # add type stubs as you need them, e.g.:
+  "nox",
+  "black",
+  "ruff",
+  "mypy",
+  "pytest",
+  "pytest-cov",
+  "httpx",
   "types-requests",
   "types-PyYAML",
+  "debugpy"
 ]
 
 [tool.hatch.metadata]
@@ -40,51 +69,75 @@ packages = ["src"]
 # Hatch environments
 # -----------------------
 [tool.hatch.envs.default]
-dependencies = [
-  "black>=24.4.0",
-  "ruff>=0.5.0",
-  "mypy>=1.10.0",
-  "pytest>=8.0.0",
-  "pytest-cov>=5.0.0",
-]
+type = "virtual"
+path = ".venv"
+features = ["dev", "server", "tts", "asr"]
+dependencies = []
+
 [tool.hatch.envs.default.scripts]
 fmt = [
-  "black .",
-  # Sort imports (only) via Ruff, so Black remains the formatter
-  "ruff check . --select I --fix"
+  "black {root}/src {root}/tests",
+  "ruff check --fix {root}/src {root}/tests",
 ]
 lint = [
-  # Fast linter; do not fix here to keep it ‘lint-only’
-  "ruff check .",
-  # Type check (strict-ish; see mypy section below)
-  "mypy"
+  "black --check {root}/src {root}tests",
+  "ruff check {root}/src {root}tests",
+  "mypy {root}/src"
 ]
+typecheck = "mypy {root}/src"
 test = "pytest -q --disable-warnings --maxfail=1"
-cov = "pytest --cov=src --cov-report=term-missing"
+cov = "pytest --cov={root}/src --cov-report=term-missing"
 
-# Optional separate envs (useful if you want to keep default clean)
+#run_asr = "cd {root}/src && PYTHONPATH={root}/src uvicorn asr.app:app --host 0.0.0.0 --port 5001 --reload --reload-dir asr"
+run_asr = "uvicorn asr.app:app --app-dir {root}/src --host 0.0.0.0 --port 5001 --reload --reload-dir {root}/src --log-level info"
+run_tts = "uvicorn tts.app:app --app-dir {root}/src --host 0.0.0.0 --port 5002 --reload --reload-dir {root}/src --log-level info"
+
+run_asr_dbg = "python -m debugpy --listen 0.0.0.0:5678 -m uvicorn asr.app:app --app-dir {root}/src --host 0.0.0.0 --port 5001 --log-level debug"
+run_tts_dbg = "python -m debugpy --listen 0.0.0.0:5678 -m uvicorn tts.app:app --app-dir {root}/src --host 0.0.0.0 --port 5002 --log-level debug"
+
+smoke = "python -c \"print('Add small smoke tests here')\""
+
 [tool.hatch.envs.test]
+type = "virtual"
+path = ".venv-test"
+features = []
 dependencies = ["pytest>=8.0.0", "pytest-cov>=5.0.0"]
 [tool.hatch.envs.test.scripts]
 run = "pytest -q --disable-warnings --maxfail=1"
 cov = "pytest --cov=src --cov-report=term-missing"
 
 [tool.hatch.envs.typecheck]
-dependencies = ["mypy>=1.10.0"]
+type = "virtual"
+path = ".venv-tycheck"
+skip-install = true
+features = []
+dependencies = ["mypy>=1.10.0", "types-requests", "types-PyYAML"]
 [tool.hatch.envs.typecheck.scripts]
-run = "mypy"
+run = "mypy src"
 
 [tool.hatch.envs.lint]
+type = "virtual"
+path = ".venv-lint"
+skip-install = true
+features = []
 dependencies = ["ruff>=0.5.0"]
 [tool.hatch.envs.lint.scripts]
-run = "ruff check ."
+run =[
+  "black --check {root}/src {root}tests",
+  "ruff check {root}/src {root}tests",
+  "mypy {root}/src"
+]
 
 [tool.hatch.envs.fmt]
+type = "virtual"
+path = ".venv-fmt"
+skip-install = true
+features = []
 dependencies = ["black>=24.4.0", "ruff>=0.5.0"]
 [tool.hatch.envs.fmt.scripts]
 run = [
-  "black .",
-  "ruff check . --select I --fix"
+  "black {root}/src {root}/tests",
+  "ruff check --fix {root}/src {root}/tests",
 ]
 
 # -----------------------
@@ -92,12 +145,15 @@ run = [
 # -----------------------
 [tool.ruff]
 target-version = "py310"
-line-length = 100
+line-length = 120
 extend-exclude = ["build", "dist", ".nox", ".venv", "venv"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["asr", "app", "core"]
 
 [tool.ruff.lint]
 select = [
-  "E", "F",        # pycodestyle/pyflakes
+  "E", "F",       # pycodestyle/pyflakes
   "I",            # import sorting (used in fmt step)
   "UP",           # pyupgrade
   "B",            # bugbear
@@ -107,6 +163,9 @@ select = [
 ]
 ignore = [
   # Add rule codes to ignore if needed
+  "B008", # do not perform function calls in argument defaults
+  "C901", # too complex
+  #"UP006", # do not use typing (mypy) use annotations
 ]
 
 # Use the new unified Ruff formatter only if you decide to drop Black entirely.
@@ -117,7 +176,7 @@ ignore = [
 # Black
 # -----------------------
 [tool.black]
-line-length = 100
+line-length = 120
 target-version = ["py310"]
 extend-exclude = "build|dist|.nox|.venv|venv"
 
@@ -138,11 +197,19 @@ strict_equality = true
 pretty = true
 show_column_numbers = true
 show_error_codes = true
+ignore_missing_imports = true
 
 # Per-module relaxation is handy while migrating:
-# [[tool.mypy.overrides]]
-# module = ["torch.*", "TTS.*"]
-# ignore_missing_imports = true
+[[tool.mypy.overrides]]
+module = [
+  "ffmpeg.*",
+  "torch.*",
+  "resampy.*",
+  "soundfile.*",
+  "numpy.*",
+  "silero_vad.*"
+]
+ignore_missing_imports = true
 
 # -----------------------
 # Pytest
