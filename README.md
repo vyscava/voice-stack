@@ -53,6 +53,11 @@ It’s designed for **local development** on macOS and **production deployment**
 
 3. **Create and activate the dev environment**
    ```bash
+
+   # 1. Install dependencies and create the virtual environment
+   hatch env create
+
+   # 2. Activate the environment
    hatch shell
    ```
 
