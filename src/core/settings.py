@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # ASR settings
     # -------------
     ASR_LOG_NAME: str = Field(default="asr.app", description="Python Logger name for the ASR Service.")
+    ASR_ENGINE: str = Field(default="fasterwhisper", description="fasterwhisper|whisper")
     ASR_DEVICE: str = Field(default="cpu", description="cpu|cuda|auto")
     ASR_MODEL: str = Field(default="base", description="Faster-Whisper model.")
     ASR_MODEL_LOCATION: str | None = Field(default=None, description="Location where to store the downloaded models.")
@@ -48,11 +49,9 @@ class Settings(BaseSettings):
     ASR_CACHE_ENABLED: bool = Field(default=True, description="Whether to use or not in memory cache")
     ASR_CACHE_MAX_ITEMS: int = Field(default=64, description="Number of transcription to keep in memory")
     ASR_VAD_ENABLED: bool = Field(default=True)
-    ASR_VAD_THRESHOLD: float = Field(default=0.5)
-    ASR_CHUNK_SEC: float = Field(default=30.0)
     ASR_TRANSCRIBE_LANG: str | None = Field(default=None, description="Force language to use while transcribing.")
     ASR_TRANSCRIBE_BEAM_SIZE: int = Field(
-        default=3, description="Width of beam search (number of hypotheses tracked during decoding)"
+        default=5, description="Width of beam search (number of hypotheses tracked during decoding)"
     )
     ASR_TRANSCRIBE_TEMPERATURE: float = Field(
         default=0.0, description="Sampling temperature controlling output randomness"
