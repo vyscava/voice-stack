@@ -1,8 +1,23 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+
+class Task(str, Enum):
+    TRANSCRIBE = "transcribe"
+    TRANSLATE = "translate"
+
+
+class Output(str, Enum):
+    TXT = "txt"
+    VTT = "vtt"
+    SRT = "srt"
+    TSV = "tsv"
+    JSON = "json"
+    JSONL = "jsonl"
 
 
 class ModelData(BaseModel):
@@ -39,3 +54,11 @@ class ListModelsResponse(BaseModel):
 
     object: Literal["list"] = Field("list", description="Type discriminator; always 'list'.")
     data: list[ModelData] = Field(..., description="List of available model entries.")
+
+
+class DetectedLanguage(BaseModel):
+    detected_language: str
+    language_code: str
+    confidence: float
+    detect_lang_length: float | None = None
+    detect_lang_offset: float | None = None

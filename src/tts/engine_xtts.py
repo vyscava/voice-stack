@@ -28,7 +28,6 @@ add_safe_globals(
 )
 
 from TTS.api import TTS
-
 from utils.language_helper import (
     CANONICAL_LANGS,
     canon_lang,

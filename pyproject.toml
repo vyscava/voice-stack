@@ -22,7 +22,7 @@ dependencies = [
   "python-multipart",
   "pydantic",
   "requests",
-  "ffmpeg"
+  "ffmpeg-python"
 ]
 
 [project.optional-dependencies]
@@ -35,9 +35,11 @@ tts = [
 ]
 asr = [
   "faster-whisper",
+  "openai-whisper",
   "silero-vad",
   "torch",
   "torchaudio",
+  "ipdb"
 ]
 server = [
   "python-dotenv",

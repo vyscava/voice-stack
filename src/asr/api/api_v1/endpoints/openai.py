@@ -15,9 +15,9 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 
-from asr.engine import audio_engine
+from asr.engine_factory import get_audio_engine
 from asr.schemas.audio_engine import ListModelsResponse
 from asr.schemas.openai import (
     OpenAITranscription,
@@ -32,6 +32,7 @@ from core.settings import get_settings
 router = APIRouter()
 
 settings = get_settings()
+engine = get_audio_engine()
 
 
 @router.post(
@@ -55,16 +56,16 @@ async def transcriptions(
         # Read entire uploaded audio bytes into memory
         audio = await file.read()
 
-        result = audio_engine.transcribe_file(
+        result = engine.transcribe_file(
             file_bytes=audio, filename=file.filename, request_language=request.language, temperature=request.temperature
         )
 
         # If return  is text lets give it a plan text
         if request.response_format == "text":
-            return PlainTextResponse(content=result.get("text", ""), status_code=status.HTTP_200_OK)
+            return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
 
         # or we default to JSON
-        return JSONResponse({"text": result.get("text", "")})
+        return OpenAITranscription(**result.to_dict())
 
     except Exception as e:
         msg = f"OpenAI Transcription Error: {e}"
@@ -96,7 +97,7 @@ async def transcriptions_verbose(
     try:
         audio = await file.read()
 
-        result = audio_engine.transcribe_file(
+        result = engine.transcribe_file(
             file_bytes=audio,
             filename=file.filename,
             request_language=request.language,
@@ -110,10 +111,10 @@ async def transcriptions_verbose(
 
         if request.response_format == "text":
             # If someone still asks for text, mirror the minimal behavior.
-            return PlainTextResponse(content=result.get("text", ""), status_code=status.HTTP_200_OK)
+            return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
 
         # Full JSON payload for debugging/analytics.
-        return JSONResponse(result)
+        return TranscribeVerboseResponse(**result.to_dict())
 
     except Exception as e:
         msg = f"OpenAI Transcription (Verbose) Error: {e}"
@@ -149,7 +150,7 @@ async def translations(
     try:
         audio = await file.read()
 
-        result = audio_engine.transcribe_file(
+        result = engine.transcribe_file(
             file_bytes=audio,
             filename=file.filename,
             # Let the engine auto-detect source language; translation target is English.
@@ -159,9 +160,9 @@ async def translations(
         )
 
         if request.response_format == "text":
-            return PlainTextResponse(content=result.get("text", ""), status_code=status.HTTP_200_OK)
+            return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
 
-        return JSONResponse({"text": result.get("text", "")})
+        return OpenAITranscription(**result.to_dict())
 
     except Exception as e:
         msg = f"OpenAI Translation Error: {e}"
@@ -175,4 +176,4 @@ def list_models() -> Any:
     OpenAI-compatible models listing. Delegates to the engine so other
     API mocks (or future services) can reuse the same definition.
     """
-    return audio_engine.list_models()
+    return ListModelsResponse(**engine.list_models())

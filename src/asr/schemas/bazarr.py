@@ -1,26 +1,49 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from fastapi import Form
+from pydantic import BaseModel, Field
+
+from asr.schemas.audio_engine import Output, Task
+from utils.language.language_codes import LanguageCode
 
 
-class Segment(BaseModel):
-    start: float
-    end: float
-    text: str
+class BazarrAsrRequest(BaseModel):
+    """Input model matching bazarr-compatible asr fields."""
+
+    encode: bool = Field(default=True, description="IGNORED: Encode audio first through ffmpeg")
+    task: Task | None = Field(default=Task.TRANSCRIBE, description="Operation should be transcribe or translate")
+    language: LanguageCode | None = Field(default=LanguageCode.UNKNOWN, description="Language of the audio if known")
+    initial_prompt: str | None = Field(default=None, description="Prompt text; ignored for Whisper.")
+    output: Output | None = Field(default=Output.TXT, description="Output formats: txt|vtt|srt|tsv|json")
+
+    @classmethod
+    def as_form(
+        cls,
+        encode: bool = Form(None),
+        task: Task | None = Form(Task.TRANSCRIBE),
+        language: LanguageCode | None = Form(LanguageCode.UNKNOWN),
+        initial_prompt: str | None = Form(None),
+        output: Output | None = Form(Output.TXT),
+    ) -> BazarrAsrRequest:
+        return cls(encode=encode, task=task, language=language, initial_prompt=initial_prompt, output=output)
 
 
-class TranscribeResponse(BaseModel):
-    text: str
-    segments: list[Segment]
-    language: str | None = None
+class BazarrDetectLanguageRequest(BaseModel):
+    """Input model matching bazarr-compatible detect language."""
 
+    encode: bool = Field(default=True, description="IGNORED: Encode audio first through ffmpeg")
+    detect_lang_length: int | None = Field(default=None, description="Detect language on X seconds of the file")
+    detect_lang_offset: int | None = Field(default=None, description="Start Detect language X seconds into the file")
 
-# OpenAI-style response
-class OpenAITranscription(BaseModel):
-    text: str
-
-
-# Bazarr-style (adjust if your Bazarr integration expects a different shape)
-class BazarrTranscription(BaseModel):
-    language: str | None = None
-    segments: list[Segment]
+    @classmethod
+    def as_form(
+        cls,
+        encode: bool = Form(True),
+        detect_lang_length: int | None = Form(None),
+        detect_lang_offset: int | None = Form(None),
+    ) -> BazarrDetectLanguageRequest:
+        return cls(
+            encode=encode,
+            detect_lang_length=detect_lang_length,
+            detect_lang_offset=detect_lang_offset,
+        )
