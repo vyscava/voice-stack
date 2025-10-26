@@ -88,6 +88,5 @@ def build_safe_chunks(text: str, max_chars: int) -> list[str]:
         if len(sent) <= max_chars:
             chunks.append(ensure_terminal_punct(sent))
         else:
-            for sub in wrap_words(sent, max_chars):
-                chunks.append(ensure_terminal_punct(sub))
+            chunks.extend(ensure_terminal_punct(sub) for sub in wrap_words(sent, max_chars))
     return chunks

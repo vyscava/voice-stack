@@ -32,6 +32,7 @@ tts = [
   "resampy",
   "soundfile",
   "numpy",
+  "langdetect",
 ]
 asr = [
   "faster-whisper",

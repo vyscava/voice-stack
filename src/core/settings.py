@@ -64,7 +64,8 @@ class Settings(BaseSettings):
     # TTS settings
     # -------------
     TTS_LOG_NAME: str = Field(default="tts.app", description="Python Logger name for the TTS Service.")
-    TTS_DEVICE: str = Field(default="cuda", description="cuda|cpu|mps")
+    TTS_ENGINE: str = Field(default="coqui", description="Only Coqui for now.")
+    TTS_DEVICE: str = Field(default="cpu", description="cuda|cpu|mps")
     TTS_MODEL: str = Field(default="tts_models/multilingual/multi-dataset/xtts_v2")
     TTS_VOICES_DIR: str = Field(default="voices")
     TTS_SAMPLE_RATE: int = Field(default=24000)
@@ -75,8 +76,8 @@ class Settings(BaseSettings):
 
     TTS_DEFAULT_LANG: str = Field(default="en")
     TTS_AUTO_LANG: bool = Field(default=True)
-    TTS_LANG_HINT: str = Field(default="")
-    TTS_FORCE_LANG: str = Field(default="")
+    TTS_LANG_HINT: str | None = Field(default=None)
+    TTS_FORCE_LANG: str | None = Field(default=None)
 
     # Debugpy
     DEBUGPY_ENABLE: bool = Field(default=False)
