@@ -5,6 +5,7 @@ from typing import Any
 
 import ffmpeg
 import numpy as np
+import numpy.typing as npt
 
 # Known audio file extensions (lowercase)
 AUDIO_EXTENSIONS: tuple[str, ...] = (
@@ -73,6 +74,22 @@ EXT_TO_INPUT_FORMAT: dict[str, str | None] = {
 }
 
 
+def _pcm_from_wav_cli(wav_bytes: bytes, sr: int, ch: int) -> bytes:
+    # Minimal CLI path for PCM if no ffmpeg-python available
+    return _encode_with_cli(wav_bytes, "pcm", sr, ch)
+
+
+def _suffix_for(tf: str) -> str:
+    return {
+        "wav": ".wav",
+        "pcm": ".s16le",
+        "mp3": ".mp3",
+        "flac": ".flac",
+        "aac": ".aac",
+        "opus": ".ogg",
+    }.get(tf, ".wav")
+
+
 def _resolve_input_format(fmt_hint: str | None) -> str | None:
     """
     Given an audio file extension (no dot), return a valid FFmpeg input format.
@@ -83,7 +100,7 @@ def _resolve_input_format(fmt_hint: str | None) -> str | None:
     return EXT_TO_INPUT_FORMAT.get(fmt_hint.lower().lstrip("."), None)
 
 
-def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_output: bool) -> np.ndarray[Any, Any]:
+def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_output: bool) -> npt.NDArray[np.int16]:
     """
     Try decoding with ffmpeg-python. If input_format is None, we don't pass 'f='
     (let FFmpeg probe). If use_alt_output, add -vn and larger probe/analyze.
@@ -152,7 +169,7 @@ def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_ou
     return audio_i16
 
 
-def _ffmpeg_cli_decode(raw_bytes: bytes) -> np.ndarray[Any, Any]:
+def _ffmpeg_cli_decode(raw_bytes: bytes) -> npt.NDArray[np.int16]:
     """
     Last-resort CLI fallback: write input to a temp file, run `ffmpeg -i` to raw PCM,
     read stdout. We don’t pass `-f` for input — we let FFmpeg fully probe.
@@ -183,7 +200,7 @@ def _ffmpeg_cli_decode(raw_bytes: bytes) -> np.ndarray[Any, Any]:
             "pcm_s16le",
             fout.name,
         ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run(cmd, capture_output=True)
         if proc.returncode != 0:
             err = proc.stderr.decode("utf-8", "ignore")
             raise RuntimeError(f"ffmpeg CLI decode failed:\n{err}")
@@ -201,7 +218,7 @@ def decode_with_ffmpeg(
     fmt_hint: str | None = None,
     _attempt: int = 0,
     _max_attempts: int = 4,
-) -> tuple[np.ndarray[Any, Any], int]:
+) -> tuple[npt.NDArray[np.float32], int]:
     """
     Decode arbitrary audio bytes to mono 16 kHz float32 via a recursive fallback chain:
 
@@ -263,3 +280,106 @@ def decode_with_ffmpeg(
         return decode_with_ffmpeg(
             raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
         )
+
+
+def encode_audio_from_wav_bytes(
+    *,
+    wav_bytes: bytes,
+    target_format: str,  # "mp3"|"opus"|"aac"|"flac"|"wav"|"pcm"
+    sample_rate: int = 24000,
+    channels: int = 1,
+) -> bytes:
+    """
+    Transcode WAV-in-memory to the requested target format using ffmpeg-python,
+    falling back to ffmpeg CLI on error. For "pcm", returns raw s16le (no header).
+
+    Requires a working ffmpeg binary on PATH.
+    """
+    tf = (target_format or "wav").lower()
+    if tf not in {"mp3", "opus", "aac", "flac", "wav", "pcm"}:
+        # Unknown target just return the original WAV
+        return wav_bytes
+
+    if not shutil.which("ffmpeg"):
+        # No ffmpeg: only WAV is guaranteed; else return WAV
+        return wav_bytes if tf != "pcm" else _pcm_from_wav_cli(wav_bytes, sample_rate, channels)
+
+    try:
+        stream = ffmpeg.input("pipe:0", f="wav")
+        if tf == "wav":
+            out = ffmpeg.output(stream, "pipe:1", format="wav", ac=channels, ar=sample_rate)
+        elif tf == "pcm":
+            out = ffmpeg.output(
+                stream,
+                "pipe:1",
+                format="s16le",
+                acodec="pcm_s16le",
+                ac=channels,
+                ar=sample_rate,
+            )
+        elif tf == "mp3":
+            out = ffmpeg.output(stream, "pipe:1", format="mp3", ac=channels, ar=sample_rate)
+        elif tf == "flac":
+            out = ffmpeg.output(stream, "pipe:1", format="flac", ac=channels, ar=sample_rate)
+        elif tf == "aac":
+            # Prefer ADTS for raw AAC
+            try:
+                out = ffmpeg.output(stream, "pipe:1", format="adts", ac=channels, ar=sample_rate)
+            except Exception:
+                out = ffmpeg.output(stream, "pipe:1", format="aac", ac=channels, ar=sample_rate)
+        elif tf == "opus":
+            # libopus normally in OGG container
+            try:
+                out = ffmpeg.output(stream, "pipe:1", format="ogg", acodec="libopus", ac=channels, ar=sample_rate)
+            except Exception:
+                out = ffmpeg.output(stream, "pipe:1", format="opus", ac=channels, ar=sample_rate)
+        else:
+            out = ffmpeg.output(stream, "pipe:1", format="wav", ac=channels, ar=sample_rate)
+
+        out = out.global_args("-hide_banner", "-loglevel", "error")
+        encoded, _ = ffmpeg.run(out, capture_stdout=True, capture_stderr=True, input=wav_bytes, cmd="ffmpeg")
+        return encoded
+    except Exception:
+        # CLI fallback
+        return _encode_with_cli(wav_bytes, tf, sample_rate, channels)
+
+
+def _encode_with_cli(wav_bytes: bytes, tf: str, sr: int, ch: int) -> bytes:
+    import tempfile
+
+    with (
+        tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as fin,
+        tempfile.NamedTemporaryFile(suffix=_suffix_for(tf), delete=True) as fout,
+    ):
+        fin.write(wav_bytes)
+        fin.flush()
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            fin.name,
+            "-ac",
+            str(ch),
+            "-ar",
+            str(sr),
+        ]
+        if tf == "pcm":
+            cmd += ["-f", "s16le", "-acodec", "pcm_s16le", fout.name]
+        elif tf == "mp3":
+            cmd += ["-f", "mp3", fout.name]
+        elif tf == "flac":
+            cmd += ["-f", "flac", fout.name]
+        elif tf == "aac":
+            cmd += ["-f", "adts", fout.name]
+        elif tf == "opus":
+            cmd += ["-f", "ogg", "-acodec", "libopus", fout.name]
+        else:
+            cmd += ["-f", "wav", fout.name]
+
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0:
+            return wav_bytes  # last-resort: return input WAV
+        return fout.read()

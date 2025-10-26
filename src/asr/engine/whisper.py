@@ -1,4 +1,3 @@
-# asr/engine/whisper_torch.py
 from __future__ import annotations
 
 import os

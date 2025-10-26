@@ -7,15 +7,9 @@ that return **LanguageCode** enums to keep the rest of the stack consistent.
 
 from __future__ import annotations
 
-from utils.language_codes import LanguageCode
+from langdetect import detect as _ld_detect
 
-# Optional language detection (installed in TTS/ASR dev extras)
-try:
-    from langdetect import detect as _ld_detect  # type: ignore
-
-    _LANGDETECT_OK = True
-except Exception:  # pragma: no cover - optional dependency
-    _LANGDETECT_OK = False
+from utils.language.language_codes import LanguageCode
 
 
 def detect_lang(text: str) -> LanguageCode | None:
@@ -25,10 +19,10 @@ def detect_lang(text: str) -> LanguageCode | None:
     Returns:
         LanguageCode or None if detector is unavailable/indecisive.
     """
-    if not _LANGDETECT_OK or not text or len(text) < 8:
+    if not text or len(text) < 8:
         return None
     try:
-        code = (_ld_detect(text) or "").lower()
+        code: str = str(_ld_detect(text) or "").lower()
         # normalize zh* → zh-cn, strip region suffixes (en-us → en)
         code = "zh-cn" if code.startswith("zh") else code.split("-")[0]
         return LanguageCode.from_string(code)

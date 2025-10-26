@@ -74,11 +74,6 @@ def decode_with_soundfile(*, raw_bytes: bytes) -> tuple[npt.NDArray[np.float32],
     return audio, sr
 
 
-# --------------------------------------------------------------------------------------
-# TorchAudio device helpers and resampling (primary) + resampy fallback
-# --------------------------------------------------------------------------------------
-
-
 def _torch_available() -> bool:
     """
     Cheap probe to check if PyTorch is importable.
@@ -547,3 +542,20 @@ def apply_vad_silero(
         # Any failure should not break the ASR pipeline; just return original audio.
         log.warning("[VAD:silero] error, returning original audio: %s", e)
         return pcm16
+
+
+def wav_bytes_to_pcm16le_bytes(wav_bytes: bytes) -> bytes:
+    """
+    Convert a WAV container (any subtype readable by soundfile) into raw PCM16 LE bytes (no header).
+    Keeps channel layout (interleaved if >1ch).
+    """
+    data, _ = sf.read(io.BytesIO(wav_bytes), dtype="float32", always_2d=False)
+
+    # Normalize to float32 mono/stereo → int16 LE bytes
+    if isinstance(data, np.ndarray):
+        data = (np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    else:
+        arr = np.array(data, dtype=np.float32, copy=False)
+        data = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+    return data
