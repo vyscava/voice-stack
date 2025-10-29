@@ -79,19 +79,18 @@ dependencies = []
 
 [tool.hatch.envs.default.scripts]
 fmt = [
-  "black {root}/src {root}/tests",
-  "ruff check --fix {root}/src {root}/tests",
+  "black {root}/src {root}/tests {root}/scripts",
+  "ruff check --fix {root}/src {root}/tests {root}/scripts",
 ]
 lint = [
-  "black --check {root}/src {root}tests",
-  "ruff check {root}/src {root}tests",
-  "mypy {root}/src"
+  "black --check {root}/src {root}/tests {root}/scripts",
+  "ruff check {root}/src {root}/tests {root}/scripts",
+  "mypy {root}/src {root}/scripts"
 ]
 typecheck = "mypy {root}/src"
 test = "pytest -q --disable-warnings --maxfail=1"
 cov = "pytest --cov={root}/src --cov-report=term-missing"
 
-#run_asr = "cd {root}/src && PYTHONPATH={root}/src uvicorn asr.app:app --host 0.0.0.0 --port 5001 --reload --reload-dir asr"
 run_asr = "uvicorn asr.app:app --app-dir {root}/src --host 0.0.0.0 --port 5001 --reload --reload-dir {root}/src --log-level info"
 run_tts = "uvicorn tts.app:app --app-dir {root}/src --host 0.0.0.0 --port 5002 --reload --reload-dir {root}/src --log-level info"
 
@@ -139,8 +138,8 @@ features = []
 dependencies = ["black>=24.4.0", "ruff>=0.5.0"]
 [tool.hatch.envs.fmt.scripts]
 run = [
-  "black {root}/src {root}/tests",
-  "ruff check --fix {root}/src {root}/tests",
+  "black {root}/src/*.py {root}/tests/*.py {root}/scripts/*.py",
+  "ruff check --fix {root}/src {root}/tests {root}/scripts",
 ]
 
 # -----------------------

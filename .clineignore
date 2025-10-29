@@ -1,0 +1,70 @@
+# Cline ignore rules - files/directories to exclude from scanning
+# Mirrors the rules in .clinerules/04-repo-mapping.md
+
+# Dependencies & Build Artifacts
+node_modules/
+dist/
+build/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Version Control
+.git/
+.svn/
+
+# Test & Coverage
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.tox/
+
+# IDE & System Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Cache Directories
+.cache/
+.next/
+.nuxt/
+.cypress/
+.playwright/
+.storybook-out/
+
+# Large Data & Binary Files
+*.log
+*.tmp
+*.parquet
+*.csv
+*.sqlite
+*.db
+*.bin
+*.pkl
+*.pickle
+
+# Game Engine (if applicable)
+Saved/
+DerivedDataCache/
+Intermediate/
+Binaries/
+
+# Secrets & Environment
+.env*
+!.env.example
+.secrets*/
+.gcloud/
+.aws/
+
+# Documentation Build Artifacts
+_build/
+site/
