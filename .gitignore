@@ -4,3 +4,7 @@
 .ruff*
 
 __pycache__
+
+.docs
+.continue
+.clinerules
