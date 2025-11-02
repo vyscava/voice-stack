@@ -7,6 +7,29 @@ Designed for **local development** on macOS and **production deployment** on Lin
 
 ---
 
+## 📋 Table of Contents
+
+- [Key Features](#-key-features)
+- [Prerequisites](#-prerequisites)
+- [Development Setup](#-development-setup)
+- [Production Deployment (Systemd Services)](#-production-deployment-systemd-services)
+- [Configuration](#-configuration)
+- [Build & Packaging](#-build--packaging)
+- [Project Structure](#-project-structure)
+- [Common Commands](#-common-commands)
+- [API Endpoints](#-api-endpoints)
+- [Advanced Usage](#-advanced-usage)
+- [Testing](#-testing)
+- [Troubleshooting](#-troubleshooting)
+- [Documentation](#-documentation)
+- [Contributing](#-contributing)
+- [Performance](#-performance)
+- [Roadmap](#-roadmap)
+- [Technical Notes](#-technical-notes)
+- [License](#-license)
+
+---
+
 ## 🚀 Key Features
 
 ### ASR (Automatic Speech Recognition)
