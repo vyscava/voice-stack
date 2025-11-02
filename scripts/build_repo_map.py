@@ -142,9 +142,9 @@ def parse_pyproject(path: pathlib.Path) -> dict[str, Any]:
             # Parse optional dependencies
             opt = project.get("optional-dependencies", {})
             if isinstance(opt, dict):
-                for _, v in opt.items():
-                    if isinstance(v, list):
-                        meta["dependencies"]["dev"] = v[:25]
+                for values in opt.values():
+                    if isinstance(values, list):
+                        meta["dependencies"]["dev"] = values[:25]
                         break
 
             # Parse entry points

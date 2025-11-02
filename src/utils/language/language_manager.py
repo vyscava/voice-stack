@@ -13,7 +13,7 @@ Notes:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from utils.language_codes import LanguageCode
 from utils.language_helper import detect_lang, latin_heuristic, script_heuristic
@@ -49,10 +49,13 @@ def detect_language_from_audio(
     This indirection keeps utils free from ASR engine imports while allowing
     the app layer to share a single function signature everywhere.
     """
-    return audio_engine.detect_language(
+    result = audio_engine.detect_language(
         file_bytes=file_bytes,
         audio_array=audio_array,
         sr=sr,
         detect_lang_length=detect_lang_length,
         detect_lang_offset=detect_lang_offset,
     )
+    if not isinstance(result, dict):
+        raise TypeError("audio_engine.detect_language must return a dict")
+    return cast(dict[str, Any], result)

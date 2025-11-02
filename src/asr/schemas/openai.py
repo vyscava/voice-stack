@@ -23,7 +23,7 @@ def _parse_optional_float(v: Any) -> float | None:
     v = _empty_to_none(v)
     if v is None:
         return None
-    if isinstance(v, (int, float)):
+    if isinstance(v, int | float):
         return float(v)
     try:
         return float(str(v))

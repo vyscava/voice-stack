@@ -62,7 +62,9 @@ def wrap_words(s: str, max_chars: int) -> list[str]:
     """Word-wrap a long sentence into <= max_chars pieces without breaking words."""
     if len(s) <= max_chars:
         return [s]
-    out, cur, n = [], [], 0
+    out: list[str] = []
+    cur: list[str] = []
+    n = 0
     for w in s.split(" "):
         need = len(w) + (1 if n else 0)
         if n + need > max_chars and cur:

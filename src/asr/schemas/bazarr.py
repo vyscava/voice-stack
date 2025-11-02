@@ -19,7 +19,7 @@ class BazarrAsrRequest(BaseModel):
     @classmethod
     def as_form(
         cls,
-        encode: bool = Form(None),
+        encode: bool = Form(True),
         task: Task | None = Form(Task.TRANSCRIBE),
         language: LanguageCode | None = Form(LanguageCode.UNKNOWN),
         initial_prompt: str | None = Form(None),

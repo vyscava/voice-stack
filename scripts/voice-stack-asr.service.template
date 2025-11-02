@@ -1,0 +1,40 @@
+[Unit]
+Description=Voice Stack ASR (Automatic Speech Recognition) Service
+Documentation=https://github.com/vyscava/voice-stack
+After=network.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
+WorkingDirectory=__INSTALL_DIR__
+Environment="PATH=__INSTALL_DIR__/.venv-asr/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=__INSTALL_DIR__/.env
+ExecStart=__INSTALL_DIR__/.venv-asr/bin/uvicorn asr.app:app --app-dir __INSTALL_DIR__/src --host 0.0.0.0 --port 5001 --log-level info
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__INSTALL_DIR__ __HOME_DIR__/.cache __HOME_DIR__/.local
+
+# Resource limits (adjust as needed)
+LimitNOFILE=65536
+# Uncomment and adjust if you want memory limits
+# MemoryMax=8G
+# MemoryHigh=6G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voice-stack-asr
+
+[Install]
+WantedBy=multi-user.target
