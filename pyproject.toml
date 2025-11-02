@@ -29,9 +29,10 @@ dependencies = [
 # Split by feature so you can `pip install .[tts]` on lightweight machines, etc.
 tts = [
   "coqui-tts",
-  "resampy",
-  "soundfile",
+  "torch",
   "numpy",
+  "soundfile",
+  "resampy",
   "langdetect",
 ]
 asr = [
@@ -40,7 +41,10 @@ asr = [
   "silero-vad",
   "torch",
   "torchaudio",
-  "ipdb"
+  "numpy",
+  "soundfile",
+  "resampy",
+  "ipdb",  # Required by silero-vad (undeclared dependency)
 ]
 server = [
   "python-dotenv",
@@ -59,7 +63,8 @@ dev = [
   "types-requests",
   "types-PyYAML",
   "debugpy",
-  "pre-commit"
+  "pre-commit",
+  "ipdb"
 ]
 
 [tool.hatch.metadata]
