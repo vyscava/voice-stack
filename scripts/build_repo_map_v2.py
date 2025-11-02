@@ -182,7 +182,7 @@ class TopLevelVisitor(ast.NodeVisitor):
                 method = dec.func.attr
                 if method in FASTAPI_METHODS:
                     path = ""
-                    if dec.args and isinstance(dec.args[0], (ast.Str, ast.Constant)):
+                    if dec.args and isinstance(dec.args[0], ast.Str | ast.Constant):
                         path = dec.args[0].s if isinstance(dec.args[0], ast.Str) else (
                             dec.args[0].value if isinstance(dec.args[0].value, str) else ""
                         )

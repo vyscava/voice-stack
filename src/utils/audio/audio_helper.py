@@ -122,7 +122,9 @@ def pick_torch_device(prefer: tuple[str, ...] = ("mps", "cuda", "cpu")) -> str:
 
     for dev in prefer:
         if dev == "mps":
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():  # type: ignore[attr-defined]
+            mps_backend = getattr(torch.backends, "mps", None)
+            is_available = getattr(mps_backend, "is_available", None)
+            if callable(is_available) and is_available():
                 return "mps"
         elif dev == "cuda":
             if torch.cuda.is_available():
@@ -145,6 +147,15 @@ def _to_torch_device(x: Any, device: str) -> Any:
         return x.to(device)
     except AttributeError:
         return x  # e.g., if x is a plain Python object
+
+
+def _device_to_str(dev: Any) -> str:
+    if isinstance(dev, str):
+        return dev.split(":", 1)[0]
+    dev_type = getattr(dev, "type", None)
+    if isinstance(dev_type, str):
+        return dev_type
+    return "cpu"
 
 
 def _resample_torch_audio(
@@ -290,7 +301,12 @@ def load_silero_model(log: logging.Logger) -> tuple[Any, Any]:
 
     try:
         # Prevent Silero from breaking into ipdb
-        sys.modules["ipdb"] = types.SimpleNamespace(set_trace=lambda *a, **k: None)
+        def _noop(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        fake_ipdb = types.ModuleType("ipdb")
+        fake_ipdb.set_trace = _noop
+        sys.modules["ipdb"] = fake_ipdb
     except Exception as e:
         print(f"Warning: failed to neutralize ipdb: {e}")
 
@@ -301,10 +317,12 @@ def load_silero_model(log: logging.Logger) -> tuple[Any, Any]:
 
         # 1) Load model (official API loads CPU by default), eval mode
         model = load_silero_vad()
-        try:
-            model.eval()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        eval_fn = getattr(model, "eval", None)
+        if callable(eval_fn):
+            try:
+                eval_fn()
+            except Exception:
+                pass
 
         # 2) Try to move to an accelerated device (MPS -> CUDA -> CPU).
         #    If anything fails, we revert to CPU.
@@ -317,8 +335,9 @@ def load_silero_model(log: logging.Logger) -> tuple[Any, Any]:
                 # We use ~0.25s of zeros at 16 kHz.
                 test = torch.zeros(4000, dtype=torch.float32, device=device)
                 # Some silero wrappers accept waveform + sr directly; others need only waveform at 16k
+                speech_fn: Any = get_speech_timestamps
                 with torch.no_grad():
-                    _ = get_speech_timestamps(test, model, sampling_rate=16000)  # type: ignore[misc]
+                    _ = speech_fn(test, model, sampling_rate=16000)
                 chosen = device
             except Exception as e:
                 log.warning("Silero VAD acceleration (%s) unavailable, falling back to CPU: %s", device, e)
@@ -363,7 +382,7 @@ def _concat_chunks_numpy(wav_np: npt.NDArray[np.float32], timestamps: list[dict[
         return wav_np
 
     n = wav_np.shape[0]
-    pieces: list[np.ndarray] = []
+    pieces: list[npt.NDArray[np.float32]] = []
     for t in timestamps:
         # Clamp to valid bounds
         s = max(0, min(n, int(t.get("start", 0))))
@@ -383,7 +402,7 @@ def apply_vad_silero(
     silero_model: Any,
     get_speech_timestamps_fn: Any,
     log: logging.Logger,
-) -> npt.NDArray[np.float32]:
+) -> npt.NDArray[np.int16]:
     """
     Apply Silero VAD to PCM16 mono audio and return speech-only PCM16.
 
@@ -431,47 +450,48 @@ def apply_vad_silero(
         Speech-only PCM16. If VAD unavailable/failed, returns input unchanged.
     """
     if silero_model is None or get_speech_timestamps_fn is None:
-        return pcm16.astype(np.float32) / 32768.0
+        return pcm16
 
     try:
         import torch
 
         # torch/torchaudio might not be present; we handle fallback later.
         try:
-            import torchaudio
+            import torchaudio as torchaudio_module
         except Exception:
-            torchaudio = None  # type: ignore
+            torchaudio_module = None
 
         # Helper: infer device from the model if possible (jit/script or nn.Module).
         def _infer_model_device(m: Any) -> str:
             # Try parameters first (nn.Module)
             try:
-                params = list(m.parameters())  # type: ignore[attr-defined]
-                if params:
-                    dev = params[0].device  # torch.device
-                    return dev.type  # "cpu" | "cuda" | "mps"
+                params_attr = getattr(m, "parameters", None)
+                if callable(params_attr):
+                    for param in params_attr():
+                        dev = getattr(param, "device", None)
+                        if dev is not None:
+                            return _device_to_str(dev)
+                        break
             except Exception:
                 pass
 
             # Try buffers (some modules have no params)
             try:
-                bufs = list(m.buffers())  # type: ignore[attr-defined]
-                if bufs:
-                    dev = bufs[0].device
-                    return dev.type
+                buffers_attr = getattr(m, "buffers", None)
+                if callable(buffers_attr):
+                    bufs_iter = buffers_attr()
+                    for buf in bufs_iter:
+                        dev = getattr(buf, "device", None)
+                        if dev is not None:
+                            return _device_to_str(dev)
+                        break
             except Exception:
                 pass
 
             # Fallback: attribute on custom/torchscript objects
             dev = getattr(m, "device", None)
             if dev is not None:
-                try:
-                    if isinstance(dev, torch.device):
-                        return dev.type
-                    if isinstance(dev, str):
-                        return dev.split(":", 1)[0]  # "cuda:0" -> "cuda"
-                except Exception:
-                    pass
+                return _device_to_str(dev)
 
             return "cpu"
 
@@ -484,7 +504,7 @@ def apply_vad_silero(
             # If it's a torch.device object or similar, stringify may have returned 'device(type=\'cpu\')'
             exec_device = "cpu"
 
-        def _run_on_device(device: str) -> npt.NDArray[np.float32]:
+        def _run_on_device(device: str) -> npt.NDArray[np.int16]:
             """
             Attempt the full pipeline on the requested device.
             Falls back to CPU at the caller if any op fails here.
@@ -494,9 +514,9 @@ def apply_vad_silero(
 
             # 2) Resample to 16 kHz on the same device when possible
             if _sr != 16000:
-                if torchaudio is not None:
+                if torchaudio_module is not None:
                     try:
-                        resampler = torchaudio.transforms.Resample(orig_freq=_sr, new_freq=16000)
+                        resampler = torchaudio_module.transforms.Resample(orig_freq=_sr, new_freq=16000)
                         resampler = _to_torch_device(resampler, device)
                         x = resampler(x)
                         _sr = 16000

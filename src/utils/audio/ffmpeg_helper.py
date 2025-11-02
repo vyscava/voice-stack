@@ -1,7 +1,7 @@
 import shutil
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, cast
 
 import ffmpeg
 import numpy as np
@@ -337,8 +337,9 @@ def encode_audio_from_wav_bytes(
             out = ffmpeg.output(stream, "pipe:1", format="wav", ac=channels, ar=sample_rate)
 
         out = out.global_args("-hide_banner", "-loglevel", "error")
-        encoded, _ = ffmpeg.run(out, capture_stdout=True, capture_stderr=True, input=wav_bytes, cmd="ffmpeg")
-        return encoded
+        encoded_stdout, _ = ffmpeg.run(out, capture_stdout=True, capture_stderr=True, input=wav_bytes, cmd="ffmpeg")
+        encoded_bytes = cast(bytes, encoded_stdout)
+        return encoded_bytes
     except Exception:
         # CLI fallback
         return _encode_with_cli(wav_bytes, tf, sample_rate, channels)

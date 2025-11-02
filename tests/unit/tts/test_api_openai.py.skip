@@ -1,0 +1,270 @@
+"""Unit tests for TTS OpenAI-compatible API endpoints."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from tts.app import app
+from tts.schemas.audio_engine import AudioFormat, ModelResponse, ModelsResponse, StreamFormat
+
+
+@pytest.fixture
+def tts_client() -> TestClient:
+    """Create a test client for the TTS app."""
+    return TestClient(app)
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_list_models(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test GET /v1/models endpoint."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.list_models.return_value = ModelsResponse(
+            data=[
+                ModelResponse(id="tts-1"),
+                ModelResponse(id="tts-1-hd"),
+            ]
+        )
+
+        response = tts_client.get("/v1/models")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["object"] == "list"
+        assert len(data["data"]) == 2
+        assert data["data"][0]["id"] == "tts-1"
+        assert data["data"][1]["id"] == "tts-1-hd"
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_get_model(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test GET /v1/models/{model_id} endpoint."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.get_model.return_value = ModelResponse(id="test-model")
+
+        response = tts_client.get("/v1/models/test-model")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "test-model"
+        assert data["object"] == "model"
+        mock_tts_engine.get_model.assert_called_once_with(model_id="test-model")
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_audio_format(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test POST /v1/audio/speech with audio stream format."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.speech.return_value = b"fake audio data"
+
+        from fastapi.responses import Response
+
+        mock_response = Response(content=b"fake audio", media_type="audio/mpeg")
+        mock_tts_engine.helper_return_audio_file.return_value = mock_response
+
+        request_data = {
+            "model": "tts-1",
+            "input": "Hello world",
+            "voice": "alloy",
+            "response_format": "mp3",
+            "stream_format": "audio",
+        }
+
+        response = tts_client.post("/v1/audio/speech", json=request_data)
+
+        assert response.status_code == 200
+        mock_tts_engine.speech.assert_called_once()
+        call_kwargs = mock_tts_engine.speech.call_args[1]
+        assert call_kwargs["input"] == "Hello world"
+        assert call_kwargs["voice"] == "alloy"
+        assert call_kwargs["response_format"] == AudioFormat.MP3
+        assert call_kwargs["stream_format"] == StreamFormat.AUDIO
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_sse_format(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test POST /v1/audio/speech with SSE stream format."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.speech.return_value = b"fake audio data"
+
+        from fastapi.responses import StreamingResponse
+
+        mock_response = StreamingResponse(iter([b"data"]), media_type="text/event-stream")
+        mock_tts_engine.helper_return_sse_stream.return_value = mock_response
+
+        request_data = {
+            "model": "tts-1",
+            "input": "Hello world",
+            "voice": "alloy",
+            "response_format": "mp3",
+            "stream_format": "sse",
+        }
+
+        response = tts_client.post("/v1/audio/speech", json=request_data)
+
+        assert response.status_code == 200
+        mock_tts_engine.speech.assert_called_once()
+        mock_tts_engine.helper_return_sse_stream.assert_called_once()
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_different_voices(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test speech endpoint with different voices."""
+    voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        from fastapi.responses import Response
+
+        mock_response = Response(content=b"fake audio", media_type="audio/mpeg")
+        mock_tts_engine.helper_return_audio_file.return_value = mock_response
+
+        for voice in voices:
+            request_data = {
+                "model": "tts-1",
+                "input": "Test",
+                "voice": voice,
+            }
+
+            response = tts_client.post("/v1/audio/speech", json=request_data)
+            assert response.status_code == 200
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_different_formats(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test speech endpoint with different audio formats."""
+    formats = ["mp3", "opus", "aac", "flac", "wav", "pcm"]
+
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        from fastapi.responses import Response
+
+        mock_response = Response(content=b"fake audio", media_type="audio/mpeg")
+        mock_tts_engine.helper_return_audio_file.return_value = mock_response
+
+        for fmt in formats:
+            request_data = {
+                "model": "tts-1",
+                "input": "Test",
+                "voice": "alloy",
+                "response_format": fmt,
+            }
+
+            response = tts_client.post("/v1/audio/speech", json=request_data)
+            assert response.status_code == 200
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_with_speed(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test speech endpoint with speed parameter."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        from fastapi.responses import Response
+
+        mock_response = Response(content=b"fake audio", media_type="audio/mpeg")
+        mock_tts_engine.helper_return_audio_file.return_value = mock_response
+
+        request_data = {
+            "model": "tts-1",
+            "input": "Test",
+            "voice": "alloy",
+            "speed": 1.5,
+        }
+
+        response = tts_client.post("/v1/audio/speech", json=request_data)
+
+        assert response.status_code == 200
+        call_kwargs = mock_tts_engine.speech.call_args[1]
+        assert call_kwargs["speed"] == 1.5
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_error_handling(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test speech endpoint error handling."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.speech.side_effect = Exception("TTS engine error")
+
+        request_data = {
+            "model": "tts-1",
+            "input": "Test",
+            "voice": "alloy",
+        }
+
+        response = tts_client.post("/v1/audio/speech", json=request_data)
+
+        assert response.status_code == 500
+        assert "error" in response.json()["detail"].lower()
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_list_models_error_handling(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test list_models endpoint error handling."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.list_models.side_effect = Exception("Engine error")
+
+        response = tts_client.get("/v1/models")
+
+        assert response.status_code == 500
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_get_model_error_handling(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test get_model endpoint error handling."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        mock_tts_engine.get_model.side_effect = Exception("Model not found")
+
+        response = tts_client.get("/v1/models/nonexistent")
+
+        assert response.status_code == 500
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_minimal_request(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test speech endpoint with minimal request (only required fields)."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        from fastapi.responses import Response
+
+        mock_response = Response(content=b"fake audio", media_type="audio/mpeg")
+        mock_tts_engine.helper_return_audio_file.return_value = mock_response
+
+        request_data = {
+            "input": "Hello world",
+            "voice": "alloy",
+        }
+
+        response = tts_client.post("/v1/audio/speech", json=request_data)
+
+        assert response.status_code == 200
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_create_speech_long_text(tts_client: TestClient, mock_tts_engine) -> None:
+    """Test speech endpoint with long text input."""
+    with patch("tts.api.api_v1.endpoints.openai.engine", mock_tts_engine):
+        from fastapi.responses import Response
+
+        mock_response = Response(content=b"fake audio", media_type="audio/mpeg")
+        mock_tts_engine.helper_return_audio_file.return_value = mock_response
+
+        long_text = " ".join(["This is a test sentence."] * 50)
+        request_data = {
+            "input": long_text,
+            "voice": "alloy",
+        }
+
+        response = tts_client.post("/v1/audio/speech", json=request_data)
+
+        assert response.status_code == 200
+        call_kwargs = mock_tts_engine.speech.call_args[1]
+        assert len(call_kwargs["input"]) > 100

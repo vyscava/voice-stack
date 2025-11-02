@@ -10,13 +10,13 @@ import numpy as np
 import numpy.typing as npt
 import soundfile as sf
 from torch.serialization import add_safe_globals
+from TTS.api import TTS
 from TTS.config.shared_configs import BaseAudioConfig, BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 
 from core.logging import logger_tts as logger
 from core.settings import get_settings
-from TTS.api import TTS
 from tts.engine.base import TTSBase, languange_canonical_str, speech_effective_options
 from tts.schemas.audio_engine import AudioFormat, ModelResponse, ModelsResponse, StreamFormat
 from utils.audio.audio_helper import wav_bytes_to_pcm16le_bytes
@@ -111,20 +111,20 @@ class TTSCoqui(TTSBase):
         # 4) Autodetect
         if self.auto_language:
             detected = detect_lang(chunk)
-            detected_can = detected.value if detected and detected != LanguageCode.UNKNOWN else None
+            detected_can: str | None = detected.value if detected and detected != LanguageCode.UNKNOWN else None
             if detected_can and detected_can in self.supported_langs:
                 return detected_can
 
             # Script heuristic (robust for non-Latin)
             script_guess = script_heuristic(chunk)
-            sc_can = script_guess.value if script_guess and script_guess != LanguageCode.UNKNOWN else None
+            sc_can: str | None = script_guess.value if script_guess and script_guess != LanguageCode.UNKNOWN else None
             if sc_can and sc_can in self.supported_langs:
                 logger.info("tts.coqui | langdetect=%s unsupported -> script_guess=%s", detected_can, sc_can)
                 return sc_can
 
             # Latin heuristic (quick PT/ES/FR/DE/IT cues)
             latin_guess = latin_heuristic(chunk)
-            la_can = latin_guess.value if latin_guess and latin_guess != LanguageCode.UNKNOWN else None
+            la_can: str | None = latin_guess.value if latin_guess and latin_guess != LanguageCode.UNKNOWN else None
             if la_can and la_can in self.supported_langs:
                 logger.info("tts.coqui | langdetect=%s unsupported -> latin_guess=%s", detected_can, la_can)
                 return la_can

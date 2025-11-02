@@ -8,7 +8,7 @@ def maybe_enable_debugpy(*, host: str, port: int, wait_for_client: bool) -> None
     Safe to call multiple times (in parent or reloader child).
     """
     try:
-        import debugpy  # type: ignore
+        import debugpy
     except Exception:
         return  # debugpy not installed in this env
 

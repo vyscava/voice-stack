@@ -169,7 +169,7 @@ class TTSBase(ABC):
         }
 
         # Case 1: blob -> wrap to SSE
-        if isinstance(audio, (bytes, bytearray)):
+        if isinstance(audio, bytes | bytearray):
 
             def _to_sse_from_bytes(b: bytes) -> Iterator[bytes]:
                 import base64
@@ -205,7 +205,7 @@ class TTSBase(ABC):
         filename = f"tts-{int(time.time())}.{_ext_for(response_format)}"
 
         # If engine returned bytes -> regular Response; if it returned an iterable -> stream it.
-        if isinstance(audio, (bytes, bytearray)):
+        if isinstance(audio, bytes | bytearray):
             # Return as a downloadable file (or use inline by omitting Content-Disposition)
             return Response(
                 content=bytes(audio),

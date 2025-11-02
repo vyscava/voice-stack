@@ -51,12 +51,15 @@ dev = [
   "black",
   "ruff",
   "mypy",
-  "pytest",
-  "pytest-cov",
-  "httpx",
+  "pytest>=8.0.0",
+  "pytest-cov>=5.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-mock>=3.12.0",
+  "httpx>=0.26.0",
   "types-requests",
   "types-PyYAML",
-  "debugpy"
+  "debugpy",
+  "pre-commit"
 ]
 
 [tool.hatch.metadata]
@@ -85,11 +88,24 @@ fmt = [
 lint = [
   "black --check {root}/src {root}/tests {root}/scripts",
   "ruff check {root}/src {root}/tests {root}/scripts",
-  "mypy {root}/src {root}/scripts"
 ]
-typecheck = "mypy {root}/src"
-test = "pytest -q --disable-warnings --maxfail=1"
-cov = "pytest --cov={root}/src --cov-report=term-missing"
+typecheck = "mypy {root}/src {root}/scripts"
+
+# Test commands
+test = "pytest -v {args:}"
+test-fast = "pytest -q --disable-warnings --maxfail=1 {args:}"
+test-asr = "pytest tests/unit/asr -v {args:}"
+test-tts = "pytest tests/unit/tts -v {args:}"
+test-core = "pytest tests/unit/core -v {args:}"
+test-utils = "pytest tests/unit/utils -v {args:}"
+test-integration = "pytest tests/integration -v {args:}"
+
+# Coverage commands
+cov = "pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml {args:}"
+cov-asr = "pytest tests/unit/asr --cov=src/asr --cov-report=term-missing {args:}"
+cov-tts = "pytest tests/unit/tts --cov=src/tts --cov-report=term-missing {args:}"
+cov-report = "coverage report --show-missing {args:}"
+cov-html = "coverage html {args:}"
 
 run_asr = "uvicorn asr.app:app --app-dir {root}/src --host 0.0.0.0 --port 5001 --reload --reload-dir {root}/src --log-level info"
 run_tts = "uvicorn tts.app:app --app-dir {root}/src --host 0.0.0.0 --port 5002 --reload --reload-dir {root}/src --log-level info"
@@ -98,6 +114,23 @@ run_asr_dbg = "python -m debugpy --listen 0.0.0.0:5678 -m uvicorn asr.app:app --
 run_tts_dbg = "python -m debugpy --listen 0.0.0.0:5678 -m uvicorn tts.app:app --app-dir {root}/src --host 0.0.0.0 --port 5002 --log-level debug"
 
 smoke = "python -c \"print('Add small smoke tests here')\""
+
+# Production environments (no dev dependencies)
+[tool.hatch.envs.prod-asr]
+type = "virtual"
+path = ".venv-asr"
+features = ["server", "asr"]
+dependencies = []
+[tool.hatch.envs.prod-asr.scripts]
+run = "uvicorn asr.app:app --app-dir {root}/src --host 0.0.0.0 --port 5001 --log-level info"
+
+[tool.hatch.envs.prod-tts]
+type = "virtual"
+path = ".venv-tts"
+features = ["server", "tts"]
+dependencies = []
+[tool.hatch.envs.prod-tts.scripts]
+run = "uvicorn tts.app:app --app-dir {root}/src --host 0.0.0.0 --port 5002 --log-level info"
 
 [tool.hatch.envs.test]
 type = "virtual"
@@ -151,7 +184,8 @@ line-length = 120
 extend-exclude = ["build", "dist", ".nox", ".venv", "venv"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["asr", "app", "core"]
+known-first-party = ["asr", "app", "core", "tts"]
+known-third-party = ["TTS"]
 
 [tool.ruff.lint]
 select = [
@@ -218,6 +252,64 @@ ignore_missing_imports = true
 # -----------------------
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q"
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config",
+  "--showlocals",
+]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "unit: Unit tests",
+  "integration: Integration tests",
+  "slow: Slow running tests",
+  "asr: ASR service tests",
+  "tts: TTS service tests",
+  "requires_gpu: Tests that require GPU",
+  "requires_models: Tests that require model downloads",
+]
+filterwarnings = [
+  "error",
+  "ignore::UserWarning",
+  "ignore::DeprecationWarning",
+]
+asyncio_mode = "auto"
+
+# -----------------------
+# Coverage
+# -----------------------
+[tool.coverage.run]
+source = ["src"]
+omit = [
+  "*/tests/*",
+  "*/__pycache__/*",
+  "*/.venv/*",
+  "*/venv/*",
+]
+branch = true
+parallel = true
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "def __repr__",
+  "if self.debug:",
+  "if settings.DEBUG",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if 0:",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "class .*\\bProtocol\\):",
+  "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"

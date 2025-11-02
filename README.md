@@ -43,8 +43,9 @@ Designed for **local development** on macOS and **production deployment** on Lin
 ### macOS (Development)
 - **Python 3.11+** (3.10 minimum)
 - **Hatch** (>=1.13) — `pip install hatch`
+- **Nox** (>=2024.4) — `pip install nox`
+- **pre-commit** (>=3.5) — `pip install pre-commit`
 - **FFmpeg** — `brew install ffmpeg`
-- Optional: **Nox** for isolated test environments
 
 ### Debian 12 (Production)
 - **Python 3.11+**
@@ -63,14 +64,13 @@ Designed for **local development** on macOS and **production deployment** on Lin
    cd voice-stack
    ```
 
-2. **Install Hatch (if not already)**
+2. **Install tooling (if not already)**
    ```bash
-   pip install --upgrade hatch
+   pip install --upgrade hatch nox pre-commit
    ```
 
 3. **Create and activate the dev environment**
    ```bash
-
    # 1. Install dependencies and create the virtual environment
    hatch env create
 
@@ -96,23 +96,94 @@ Designed for **local development** on macOS and **production deployment** on Lin
    hatch run run_tts_dbg    # Debugpy on 0.0.0.0:5678
    ```
 
-5. **Format, lint, and type-check code**
+5. **Install pre-commit hooks (recommended)**
+   ```bash
+   pre-commit install
+   ```
+   Commits now run `nox -s fmt` (auto-format + import sort) and `nox -s lint` (Black check + Ruff).
+
+6. **Format, lint, and type-check code**
    ```bash
    hatch run fmt          # Auto-format with Black + Ruff
    hatch run lint         # Check style and types
    hatch run typecheck    # Run mypy
    ```
 
-6. **Run tests**
+7. **Run tests**
    ```bash
    hatch run test         # Quick test run
    hatch run cov          # With coverage report
    ```
 
-7. **Deactivate environment**
+8. **Deactivate environment**
    ```bash
    exit
    ```
+
+---
+
+## 🚀 Production Deployment (Systemd Services)
+
+For production deployment on Debian/Ubuntu Linux, Voice Stack provides automated systemd service installation scripts.
+
+### Quick Installation
+
+```bash
+# Clone repository to your desired location
+cd /opt  # or any location you prefer
+git clone https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
+cd voice-stack
+
+# Install system dependencies
+sudo ./scripts/install_system_deps.sh
+
+# Install ASR service
+sudo ./scripts/install-asr.sh
+
+# Install TTS service
+sudo ./scripts/install-tts.sh
+```
+
+### Service Management
+
+```bash
+# Start/Stop/Restart services
+sudo systemctl start voice-stack-asr
+sudo systemctl stop voice-stack-asr
+sudo systemctl restart voice-stack-asr
+
+# View logs
+sudo journalctl -u voice-stack-asr -f
+
+# Check service status
+sudo systemctl status voice-stack-asr
+```
+
+### Updating Services
+
+After pulling code changes:
+
+```bash
+cd /path/to/voice-stack
+git pull --rebase
+sudo ./scripts/update-asr.sh
+sudo ./scripts/update-tts.sh
+```
+
+### Full Documentation
+
+For complete installation, configuration, and troubleshooting guides:
+
+📖 **[Service Installation Guide](scripts/SERVICE_INSTALLATION.md)**
+
+Topics covered:
+- Installation (system-wide or user-specific)
+- Configuration (.env setup)
+- GPU/CUDA configuration
+- Service management and monitoring
+- Updating and uninstalling services
+- Troubleshooting common issues
+- Advanced topics (Nginx proxy, custom paths, etc.)
 
 ---
 
@@ -179,11 +250,30 @@ This creates a wheel and source distribution under `dist/`.
 ```bash
 nox -s tests
 ```
+This executes the full suite across the supported Python versions. For targeted runs (matching the CI split) you can use:
+```bash
+hatch run test-asr         # Unit tests for ASR
+hatch run test-tts         # Unit tests for TTS
+hatch run test-core        # Core-only tests
+hatch run test-utils       # Utility tests
+hatch run test-integration # Integration tests
+```
 
 ### Format and lint with Nox
 ```bash
-nox -s format lint
+nox -s fmt lint
 ```
+`fmt` mutates files using Black and Ruff fixes for import order; `lint` performs the non-mutating checks.
+
+### Nox sessions at a glance
+- `nox -s fmt` — auto-format via Black and Ruff import fixes
+- `nox -s lint` — format check + Ruff lint (read-only)
+- `nox -s typecheck` — run MyPy with the project configuration
+- `nox -s tests` — pytest suite under each configured Python interpreter
+- `nox -s ci` — convenience bundle (Black check, Ruff, MyPy, pytest)
+
+### Pre-commit hooks (recap)
+Hooks are installed in the development setup (step 5). Re-run `pre-commit install` if the repo’s hook configuration changes.
 
 ---
 
@@ -241,7 +331,11 @@ voice-stack/
 └── README.md
 ```
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed design documentation.
+## 📚 Documentation
+
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Whisper Cheat Sheet](docs/WHISPER_CHEAT_SHEET.md)
+- [Generated Code Index](.docs/README.md)
 
 ---
 
@@ -472,9 +566,8 @@ hatch run run_asr_dbg
 ## 📚 Documentation
 
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** — System design and architecture
-- **[.docs/README.md](./.docs/README.md)** — Code base index usage
 - **[WHISPER_CHEAT_SHEET.md](./WHISPER_CHEAT_SHEET.md)** — Whisper model guide
-- **[.clinerules/](./.clinerules/)** — Development guidelines for AI agents
+- **[SERVICE_INSTALLATION.md](./scripts/SERVICE_INSTALLATION.md)** — Production deployment with systemd
 
 ## 🤝 Contributing
 
