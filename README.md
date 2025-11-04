@@ -414,20 +414,25 @@ curl -X POST "http://localhost:5001/v1/audio/transcriptions" \
   -F "language=en"
 
 # Bazarr subtitle generation (JSON format)
-curl -X POST "http://localhost:5001/bazarr/asr" \
-  -F "file=@audio.mp3" \
-  -F "language=en" \
-  -F "output=json"
+curl -X POST "http://localhost:5001/bazarr/asr?language=en&output=json" \
+  -F "file=@audio.mp3"
 
 # Bazarr subtitle generation (SRT format)
-curl -X POST "http://localhost:5001/bazarr/asr" \
+curl -X POST "http://localhost:5001/bazarr/asr?language=en&output=srt" \
   -F "file=@audio.mp3" \
-  -F "language=en" \
-  -F "output=srt" \
   --output subtitles.srt
 
-# Bazarr language detection
+# Bazarr subtitle generation with all parameters
+curl -X POST "http://localhost:5001/bazarr/asr?language=en&output=srt&task=transcribe&video_file=/data/Movies/example.mp4" \
+  -F "file=@audio.mp3" \
+  --output subtitles.srt
+
+# Bazarr language detection (basic)
 curl -X POST "http://localhost:5001/bazarr/detect-language" \
+  -F "file=@audio.mp3"
+
+# Bazarr language detection with parameters
+curl -X POST "http://localhost:5001/bazarr/detect-language?encode=false&detect_lang_length=30&detect_lang_offset=0&video_file=/data/Movies/example.mp4" \
   -F "file=@audio.mp3"
 ```
 
@@ -481,24 +486,40 @@ import requests
 
 # Transcribe for subtitles (JSON format with segments)
 url = "http://localhost:5001/bazarr/asr"
-files = {"file": open("movie.mkv", "rb")}
-data = {
+params = {
     "language": "en",
-    "output": "json"  # Options: json, srt, vtt, txt, tsv, jsonl
+    "output": "json",  # Options: json, srt, vtt, txt, tsv, jsonl
+    "task": "transcribe",  # or "translate"
+    "video_file": "/data/Movies/example.mp4"  # Optional, for logging
 }
+files = {"file": open("movie.mkv", "rb")}
 
-response = requests.post(url, files=files, data=data)
+response = requests.post(url, params=params, files=files)
 subtitle_data = response.json()
 
 print(f"Detected language: {subtitle_data['language']}")
 for segment in subtitle_data['segments']:
     print(f"[{segment['start']:.2f}s - {segment['end']:.2f}s] {segment['text']}")
 
-# Detect language only
+# Detect language only (basic)
 url = "http://localhost:5001/bazarr/detect-language"
 files = {"file": open("audio.mp3", "rb")}
 
 response = requests.post(url, files=files)
+lang_info = response.json()
+print(f"Language: {lang_info['language_code']} (confidence: {lang_info['confidence']})")
+
+# Detect language with parameters
+url = "http://localhost:5001/bazarr/detect-language"
+params = {
+    "encode": False,
+    "detect_lang_length": 30,
+    "detect_lang_offset": 0,
+    "video_file": "/data/Movies/example.mp4"
+}
+files = {"file": open("audio.mp3", "rb")}
+
+response = requests.post(url, params=params, files=files)
 lang_info = response.json()
 print(f"Language: {lang_info['language_code']} (confidence: {lang_info['confidence']})")
 ```

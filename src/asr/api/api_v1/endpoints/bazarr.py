@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
 from asr.engine_factory import get_audio_engine
 from asr.schemas.audio_engine import DetectedLanguage, ListModelsResponse, Output
-from asr.schemas.bazarr import BazarrAsrRequest, BazarrDetectLanguageRequest
 from core.logging import logger_asr as logger
 from core.settings import get_settings
 
@@ -17,7 +16,6 @@ engine = get_audio_engine()
 
 @router.post(
     "/asr",
-    response_model=BazarrAsrRequest,
     responses={
         status.HTTP_200_OK: {
             "content": {
@@ -33,8 +31,13 @@ engine = get_audio_engine()
     },
 )
 async def bazarr_asr(
-    request: BazarrAsrRequest = Depends(BazarrAsrRequest.as_form),
     file: UploadFile = File(...),
+    task: str = Query(default="transcribe", description="Operation: transcribe or translate"),
+    language: str | None = Query(default=None, description="Language of the audio if known"),
+    initial_prompt: str | None = Query(default=None, description="Prompt text; ignored for Whisper"),
+    encode: bool = Query(default=True, description="IGNORED: Encode audio first through ffmpeg"),
+    output: Output | None = Query(default=Output.TXT, description="Output formats: txt|vtt|srt|tsv|json|jsonl"),
+    video_file: str | None = Query(default=None, description="Original video file path for logging purposes"),
 ) -> Any:
     """
     Returns segments suitable for creating subtitles in Bazarr workflows.
@@ -46,27 +49,29 @@ async def bazarr_asr(
         audio = await file.read()
         size_b = len(audio)
 
-        # default to TXT if request.output is None (defensive)
-        output: Output = request.output or Output.TXT
+        # default to TXT if output is None (defensive)
+        output_format: Output = output or Output.TXT
 
         logger.info(
-            "ASR/Bazarr request: filename=%s size=%dB lang_hint=%s output=%s",
-            getattr(file, "filename", None),
+            "ASR/Bazarr request: filename=%s video_file=%s size=%dB lang_hint=%s output=%s task=%s",
+            file.filename,
+            video_file,
             size_b,
-            request.language,
-            request.output,
+            language,
+            output_format,
+            task,
         )
 
         result = engine.transcribe_file(
             file_bytes=audio,
             filename=file.filename,
-            request_language=request.language,
+            request_language=language,
             beam_size=5,
             temperature=0.0,
             best_of=1,
         )
 
-        return engine.helper_write_output(file=file, result=result, output=output)
+        return engine.helper_write_output(file=file, result=result, output=output_format)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bazarr ASR error: {e}") from e
@@ -85,8 +90,11 @@ async def bazarr_asr(
     },
 )
 async def detect_language(
-    request: BazarrDetectLanguageRequest = Depends(BazarrDetectLanguageRequest.as_form),
     file: UploadFile = File(...),
+    encode: bool = Query(default=True, description="IGNORED: Encode audio first through ffmpeg"),
+    detect_lang_length: int | None = Query(default=None, description="Detect language on X seconds of the file"),
+    detect_lang_offset: int | None = Query(default=None, description="Start Detect language X seconds into the file"),
+    video_file: str | None = Query(default=None, description="Original video file path for logging purposes"),
 ) -> Any:
     """
     Detect the Language of Audio for Bazarr
@@ -94,11 +102,19 @@ async def detect_language(
     try:
         audio = await file.read()
 
+        logger.info(
+            "Detect Language request: filename=%s video_file=%s detect_lang_length=%s detect_lang_offset=%s",
+            file.filename,
+            video_file,
+            detect_lang_length,
+            detect_lang_offset,
+        )
+
         result = engine.detect_language_file(
             file_bytes=audio,
             filename=file.filename,
-            detect_lang_length=request.detect_lang_length,
-            detect_lang_offset=request.detect_lang_offset,
+            detect_lang_length=detect_lang_length,
+            detect_lang_offset=detect_lang_offset,
         )
 
         return DetectedLanguage(**result.to_dict())

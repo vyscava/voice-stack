@@ -130,6 +130,7 @@ coverage:report:
 
 secret_detection:
   stage: secret-detection
+  before_script: []
 
 include:
   - template: Security/Secret-Detection.gitlab-ci.yml
