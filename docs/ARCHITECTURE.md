@@ -92,8 +92,8 @@ Transcribe audio files or streams into text using Whisper-based models.
   - `GET /v1/models` — List available models
 
 - **`bazarr.py`**: Custom endpoints for Bazarr subtitle integration
-  - `POST /v1/bazarr/transcribe` — Transcription with subtitle timing
-  - `POST /v1/bazarr/detect-language` — Audio language detection
+  - `POST /v1/bazarr/asr` — Transcription with subtitle timing (supports JSON, SRT, VTT, TXT, TSV, JSONL)
+  - `POST /v1/bazarr/detect-language` — Audio language detection (accepts query parameters: encode, detect_lang_length, detect_lang_offset, video_file)
 
 **`engine/`** — ASR Engine Implementations
 

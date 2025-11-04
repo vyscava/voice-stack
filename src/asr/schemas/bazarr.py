@@ -34,16 +34,4 @@ class BazarrDetectLanguageRequest(BaseModel):
     encode: bool = Field(default=True, description="IGNORED: Encode audio first through ffmpeg")
     detect_lang_length: int | None = Field(default=None, description="Detect language on X seconds of the file")
     detect_lang_offset: int | None = Field(default=None, description="Start Detect language X seconds into the file")
-
-    @classmethod
-    def as_form(
-        cls,
-        encode: bool = Form(True),
-        detect_lang_length: int | None = Form(None),
-        detect_lang_offset: int | None = Form(None),
-    ) -> BazarrDetectLanguageRequest:
-        return cls(
-            encode=encode,
-            detect_lang_length=detect_lang_length,
-            detect_lang_offset=detect_lang_offset,
-        )
+    video_file: str | None = Field(default=None, description="Original video file path for logging purposes")
