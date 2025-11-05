@@ -274,7 +274,6 @@ def transcribe_effective_options(
 
 
 class ASRBase(ABC):
-
     _WHISPER_VARIANTS = [
         "tiny",
         "base",
@@ -286,7 +285,6 @@ class ASRBase(ABC):
     ]
 
     def __init__(self) -> None:
-
         # Optional Silero VAD (CPU)
         if settings.ASR_VAD_ENABLED:
             self.silero_model, self.silero_ts_fn = load_silero_model(logger)
@@ -301,6 +299,62 @@ class ASRBase(ABC):
         self.cache_max = int(settings.ASR_CACHE_MAX_ITEMS or 64)
         self._cache: dict[str, TranscribeResult | DetectLanguageResult] = {}
         self._order: list[str] = []  # FIFO keys
+
+        # Idle timeout management (optional feature)
+        from datetime import datetime
+
+        self.idle_timeout_minutes = int(getattr(settings, "ASR_IDLE_TIMEOUT_MINUTES", 0))
+        self.last_used = datetime.now()
+        self._model_loaded = True
+
+        if self.idle_timeout_minutes > 0:
+            logger.info(f"ASR idle timeout enabled: {self.idle_timeout_minutes} minutes")
+
+    def _touch(self) -> None:
+        """Update last used timestamp - call this on every inference request."""
+        from datetime import datetime
+
+        self.last_used = datetime.now()
+        self._model_loaded = True
+
+    @abstractmethod
+    def _unload_model(self) -> None:
+        """
+        Subclass-specific model cleanup.
+
+        This method should safely free GPU/CPU memory for the model without
+        affecting other services. Typically involves:
+        1. Deleting model references
+        2. Running gc.collect()
+        3. For GPU models: torch.cuda.synchronize() (NOT empty_cache!)
+
+        DO NOT call torch.cuda.empty_cache() as it affects all processes
+        sharing the GPU.
+        """
+        raise NotImplementedError
+
+    def check_and_unload_if_idle(self) -> bool:
+        """
+        Check if model has been idle and unload if past timeout.
+
+        Returns:
+            bool: True if model was unloaded, False otherwise
+        """
+        if self.idle_timeout_minutes <= 0 or not self._model_loaded:
+            return False
+
+        from datetime import datetime, timedelta
+
+        idle_time = datetime.now() - self.last_used
+        timeout = timedelta(minutes=self.idle_timeout_minutes)
+
+        if idle_time > timeout:
+            logger.info(f"Model idle for {idle_time}, unloading...")
+            self._unload_model()
+            self._model_loaded = False
+            return True
+
+        return False
 
     @abstractmethod
     def _transcribe_core(
@@ -350,6 +404,10 @@ class ASRBase(ABC):
         request_language = request_language if request_language is not LanguageCode.UNKNOWN else None
 
         logger.info("Decoded via %s: sr=%d samples=%d", source, sr, int(audio_f32.shape[0]))
+
+        # Update last used timestamp for idle timeout tracking
+        self._touch()
+
         return self._transcribe_core(
             audio_f32=audio_f32,
             sr=sr,
@@ -400,6 +458,10 @@ class ASRBase(ABC):
             source = "ffmpeg"
 
         logger.info("Decoded via %s: sr=%d samples=%d", source, sr, int(audio_f32.shape[0]))
+
+        # Update last used timestamp for idle timeout tracking
+        self._touch()
+
         return self._detect_language_core(
             audio_f32=audio_f32,
             sr=sr,
@@ -425,10 +487,8 @@ class ASRBase(ABC):
         return h.hexdigest()
 
     def helper_apply_vad(self, *, audio_f32: npt.NDArray[np.float32]) -> tuple[npt.NDArray[np.float32], bool]:
-
         # Check if model was loaded and is available
         if self.silero_model is not None and self.silero_ts_fn is not None:
-
             # Lets convert the narray to integer as SILERO needs a PCM16 Integer
             # Clip between -1 and 1 to avoid integer overflow
             pcm16 = (np.clip(audio_f32, -1.0, 1.0) * 32767.0).astype(np.int16)
@@ -526,7 +586,6 @@ class ASRBase(ABC):
     def helper_check_cache(
         self, *, opts: CacheConf, raw_bytes: bytes | None
     ) -> tuple[TranscribeResult | DetectLanguageResult | None, bool]:
-
         # Check if cache is enable and raw bytes has content
         if self.cache_enabled and raw_bytes is not None:
             try:

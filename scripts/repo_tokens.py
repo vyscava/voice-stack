@@ -5,6 +5,7 @@ Approximate token stats per top-level module/folder.
 Heuristic:
     approx_tokens ~= bytes / 4
 """
+
 import pathlib
 import sys
 

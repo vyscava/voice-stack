@@ -77,6 +77,42 @@ class ASRWhisperTorch(ASRBase):
             else:
                 raise
 
+    def _unload_model(self) -> None:
+        """
+        Safely unload PyTorch Whisper model.
+
+        Moves the model to CPU (if on GPU/MPS) to free accelerator memory,
+        then deletes the model reference and runs garbage collection.
+
+        Note: Do NOT call torch.cuda.empty_cache() as it would affect other
+        services (TTS, Open WebUI) sharing the same GPU.
+        """
+        import gc
+
+        if hasattr(self, "model") and self.model is not None:
+            logger.info("Unloading PyTorch Whisper model from memory...")
+
+            # Move model to CPU to release GPU/MPS memory
+            try:
+                if self.device in ("cuda", "mps"):
+                    self.model = self.model.to("cpu")
+                    logger.info(f"Model moved from {self.device} to CPU")
+            except Exception as e:
+                logger.warning(f"Error moving model to CPU: {e}")
+
+            # Delete model reference
+            del self.model
+            self.model = None  # type: ignore
+
+            # Run garbage collection to free Python objects and torch memory
+            gc.collect()
+
+            # Synchronize CUDA operations if using CUDA
+            if self.device == "cuda":
+                torch.cuda.synchronize()
+
+            logger.info("PyTorch Whisper model unloaded successfully")
+
     def _transcribe_core(
         self,
         *,
@@ -91,7 +127,6 @@ class ASRWhisperTorch(ASRBase):
         word_timestamps: bool | None,
         vad: bool | None,
     ) -> TranscribeResult:
-
         t0 = time.time()
         props = transcribe_effective_options(
             request_language=request_language,
@@ -194,7 +229,6 @@ class ASRWhisperTorch(ASRBase):
         detect_lang_length: float | None = None,
         detect_lang_offset: float | None = None,
     ) -> DetectLanguageResult:
-
         t0 = time.time()
         # Re-use your transcribe options builder for consistency
         props = transcribe_effective_options(

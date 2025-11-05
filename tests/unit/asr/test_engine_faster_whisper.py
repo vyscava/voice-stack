@@ -33,7 +33,6 @@ def test_faster_whisper_initialization_with_settings() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_DEVICE = "cpu"
         mock_settings.ASR_COMPUTE_TYPE = "int8"
@@ -66,7 +65,6 @@ def test_transcribe_core_basic() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
         mock_settings.ASR_ENGINE = "fasterwhisper"
@@ -120,7 +118,6 @@ def test_transcribe_core_with_language() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
         mock_settings.ASR_TRANSCRIBE_LANG = None
@@ -162,7 +159,6 @@ def test_transcribe_core_with_task_translate() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
 
@@ -199,7 +195,6 @@ def test_transcribe_core_with_word_timestamps() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
 
@@ -236,7 +231,6 @@ def test_transcribe_core_multiple_segments() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
         mock_settings.ASR_ENGINE = "fasterwhisper"
@@ -298,7 +292,6 @@ def test_detect_language_core_basic() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
         mock_settings.ASR_ENGINE = "fasterwhisper"
@@ -334,7 +327,6 @@ def test_detect_language_with_offset_and_length() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
 
@@ -376,7 +368,6 @@ def test_detect_language_ignores_zero_offset_and_length() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
 
@@ -413,7 +404,6 @@ def test_transcribe_uses_cache() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = True
         mock_settings.ASR_CACHE_MAX_ITEMS = 10
@@ -479,7 +469,6 @@ def test_transcribe_handles_empty_segments() -> None:
         patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
         mock_settings.ASR_ENGINE = "fasterwhisper"
@@ -541,7 +530,6 @@ def test_transcribe_resamples_audio() -> None:
         patch("asr.engine.fasterwhisper.settings") as mock_settings,
         patch("asr.engine.fasterwhisper.resample_to_16k_mono") as mock_resample,
     ):
-
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
 

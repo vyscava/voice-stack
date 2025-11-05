@@ -110,6 +110,7 @@ def gather_dependencies(root: pathlib.Path) -> dict[str, list[str]]:
     data = None
     try:
         import tomllib  # py3.11+
+
         txt = read_text(root / "pyproject.toml")
         if txt:
             data = tomllib.loads(txt)
@@ -183,8 +184,10 @@ class TopLevelVisitor(ast.NodeVisitor):
                 if method in FASTAPI_METHODS:
                     path = ""
                     if dec.args and isinstance(dec.args[0], ast.Str | ast.Constant):
-                        path = dec.args[0].s if isinstance(dec.args[0], ast.Str) else (
-                            dec.args[0].value if isinstance(dec.args[0].value, str) else ""
+                        path = (
+                            dec.args[0].s
+                            if isinstance(dec.args[0], ast.Str)
+                            else (dec.args[0].value if isinstance(dec.args[0].value, str) else "")
                         )
                     self.routes.append({"method": method.upper(), "path": path})
 
@@ -215,11 +218,7 @@ def build_modules(root: pathlib.Path, files: list[pathlib.Path]):
         top_dirs = [
             child.name
             for child in src.iterdir()
-            if (
-                child.is_dir()
-                and child.name not in EXCLUDE_DIRS
-                and not child.name.startswith(".")
-            )
+            if (child.is_dir() and child.name not in EXCLUDE_DIRS and not child.name.startswith("."))
         ]
 
     for p in files:
@@ -263,8 +262,7 @@ def build_modules(root: pathlib.Path, files: list[pathlib.Path]):
         d["public_api"]["functions"] = sorted(set(d["public_api"]["functions"]))[:80]
         d["notable_files"] = sorted(set(d["notable_files"]))[:12]
         d["http_routes"] = [
-            {"method": m, "path": p}
-            for (m, p) in sorted({(r["method"], r["path"]) for r in d["http_routes"]})
+            {"method": m, "path": p} for (m, p) in sorted({(r["method"], r["path"]) for r in d["http_routes"]})
         ][:60]
         if not d["purpose"]:
             leaf = d["path"].split("/")[-1]
@@ -288,6 +286,7 @@ def detect_tests(root: pathlib.Path):
                 count += 1
     try:
         import tomllib
+
         data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         devdeps = []
         proj = data.get("project", {})
@@ -327,15 +326,9 @@ def parse_ci_stages(root: pathlib.Path):
         if m:
             stages = [s.strip() for s in m.group(1).split(",") if s.strip()]
         else:
-            block = re.search(
-                r"stages:\s*\n((?:\s*-\s*[A-Za-z0-9_-]+\s*\n)+)", txt, re.MULTILINE
-            )
+            block = re.search(r"stages:\s*\n((?:\s*-\s*[A-Za-z0-9_-]+\s*\n)+)", txt, re.MULTILINE)
             if block:
-                stages = [
-                    s.strip("- ").strip()
-                    for s in block.group(1).splitlines()
-                    if s.strip().startswith("-")
-                ]
+                stages = [s.strip("- ").strip() for s in block.group(1).splitlines() if s.strip().startswith("-")]
     return {"system": system, "stages": stages}
 
 
@@ -343,6 +336,7 @@ def parse_pyproject_meta(root: pathlib.Path) -> dict:
     meta = {"name": "", "description": "", "entry_points": {"cli": [], "web": [], "jobs": []}}
     try:
         import tomllib
+
         txt = read_text(root / "pyproject.toml")
         if not txt:
             return meta
@@ -356,14 +350,10 @@ def parse_pyproject_meta(root: pathlib.Path) -> dict:
             if isinstance(cs, list):
                 meta["entry_points"]["cli"] += cs[:12]
             elif isinstance(cs, dict):
-                meta["entry_points"]["cli"] += [
-                    f"{k}={v}" for k, v in list(cs.items())[:12]
-                ]
+                meta["entry_points"]["cli"] += [f"{k}={v}" for k, v in list(cs.items())[:12]]
         scripts = project.get("scripts", {})
         if isinstance(scripts, dict):
-            meta["entry_points"]["cli"] += [
-                f"{k}={v}" for k, v in list(scripts.items())[:12]
-            ]
+            meta["entry_points"]["cli"] += [f"{k}={v}" for k, v in list(scripts.items())[:12]]
     except Exception:
         meta["name"] = root.name
     return meta
@@ -371,12 +361,8 @@ def parse_pyproject_meta(root: pathlib.Path) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--root", type=str, default=None, help="Repo root (defaults to git root or CWD)"
-    )
-    ap.add_argument(
-        "--max-bytes", type=int, default=24000, help="Target max JSON bytes"
-    )
+    ap.add_argument("--root", type=str, default=None, help="Repo root (defaults to git root or CWD)")
+    ap.add_argument("--max-bytes", type=int, default=24000, help="Target max JSON bytes")
     args = ap.parse_args()
 
     start = pathlib.Path.cwd()
@@ -439,9 +425,7 @@ def main():
             break
 
     out = root / ".docs" / "repo_map.json"
-    out.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {out} (bytes={len(packed(data))})")
 
 

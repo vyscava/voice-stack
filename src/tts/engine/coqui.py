@@ -18,7 +18,14 @@ from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 from core.logging import logger_tts as logger
 from core.settings import get_settings
 from tts.engine.base import TTSBase, languange_canonical_str, speech_effective_options
-from tts.schemas.audio_engine import AudioFormat, ModelResponse, ModelsResponse, StreamFormat
+from tts.schemas.audio_engine import (
+    AudioFormat,
+    ModelResponse,
+    ModelsResponse,
+    StreamFormat,
+    VoiceResponse,
+    VoicesResponse,
+)
 from utils.audio.audio_helper import wav_bytes_to_pcm16le_bytes
 from utils.audio.ffmpeg_helper import encode_audio_from_wav_bytes
 from utils.language.language_codes import LanguageCode
@@ -31,7 +38,6 @@ add_safe_globals([BaseAudioConfig, BaseDatasetConfig, XttsConfig, XttsArgs, Xtts
 
 
 class TTSCoqui(TTSBase):
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -47,6 +53,44 @@ class TTSCoqui(TTSBase):
 
         # Supported languages reported by the model (preferred)
         self._load_supported_languages()
+
+    def _unload_model(self) -> None:
+        """
+        Safely unload Coqui TTS model from GPU.
+
+        Moves the model to CPU first to free GPU memory, then deletes the model
+        reference and runs garbage collection.
+
+        Note: Do NOT call torch.cuda.empty_cache() as it would affect other
+        services (ASR, Open WebUI) sharing the same GPU.
+        """
+        import gc
+
+        import torch
+
+        if hasattr(self, "tts") and self.tts is not None:
+            logger.info("Unloading Coqui TTS model from GPU...")
+
+            # Move model to CPU to release GPU memory
+            try:
+                self.tts.to("cpu")
+                logger.info("Model moved to CPU")
+            except Exception as e:
+                logger.warning(f"Error moving model to CPU: {e}")
+
+            # Delete model reference
+            del self.tts
+            self.tts = None  # type: ignore
+
+            # Run garbage collection to free Python objects and PyTorch tensors
+            gc.collect()
+
+            # Synchronize CUDA to ensure GPU operations complete
+            # This does NOT clear the cache - it just waits for pending ops
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+            logger.info("Coqui TTS model successfully unloaded")
 
     def _load_voices_presets(self) -> None:
         """
@@ -143,6 +187,18 @@ class TTSCoqui(TTSBase):
     def list_models(self) -> ModelsResponse:
         return ModelsResponse(data=[ModelResponse(id=model) for model in self.available_models])
 
+    def list_voices(self) -> VoicesResponse:
+        """
+        List all available voices for this TTS model.
+        Returns a VoicesResponse containing all builtin speakers.
+        """
+        if not self.voice_to_preset:
+            return VoicesResponse(data=[])
+
+        return VoicesResponse(
+            data=[VoiceResponse(id=voice_id, name=voice_name) for voice_id, voice_name in self.voice_to_preset.items()]
+        )
+
     def speech(
         self,
         *,
@@ -154,7 +210,6 @@ class TTSCoqui(TTSBase):
         requested_language: str | None = None,
         language_hint: str | None = None,
     ) -> Any:
-
         props = speech_effective_options(
             input=input,
             voice=voice,
@@ -164,6 +219,9 @@ class TTSCoqui(TTSBase):
             requested_language=requested_language,
             language_hint=language_hint,
         )
+
+        # Update last used timestamp for idle timeout tracking
+        self._touch()
 
         if (props.speed) != 1.0:
             logger.warning(

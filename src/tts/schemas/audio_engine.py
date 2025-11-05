@@ -45,3 +45,14 @@ class ModelResponse(BaseModel):
 class ModelsResponse(BaseModel):
     object: str = Field(default="list")
     data: list[ModelResponse] = Field(...)
+
+
+class VoiceResponse(BaseModel):
+    id: str = Field(..., description="The voice identifier, which can be referenced in the API endpoints.")
+    name: str = Field(..., description="The display name of the voice.")
+    object: str = Field(default="voice", description="The object type, which is always 'voice'.")
+
+
+class VoicesResponse(BaseModel):
+    object: str = Field(default="list")
+    data: list[VoiceResponse] = Field(...)

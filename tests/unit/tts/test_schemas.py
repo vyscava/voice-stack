@@ -12,6 +12,8 @@ from tts.schemas.audio_engine import (
     ModelResponse,
     ModelsResponse,
     StreamFormat,
+    VoiceResponse,
+    VoicesResponse,
     return_date_as_unix_ts,
 )
 from tts.schemas.openai import OpenAICreateSpeechRequest
@@ -192,6 +194,95 @@ class TestModelsResponse:
         assert isinstance(data["data"], list)
         assert len(data["data"]) == 1
         assert data["data"][0]["id"] == "model-1"
+
+
+@pytest.mark.unit
+class TestVoiceResponse:
+    """Tests for VoiceResponse schema."""
+
+    def test_voice_response_creation_with_required_fields(self) -> None:
+        """Test creating VoiceResponse with required id and name fields."""
+        response = VoiceResponse(id="test-voice-id", name="Test Voice")
+        assert response.id == "test-voice-id"
+        assert response.name == "Test Voice"
+
+    def test_voice_response_defaults(self) -> None:
+        """Test VoiceResponse has correct default object value."""
+        response = VoiceResponse(id="test-voice", name="Test")
+        assert response.object == "voice"
+
+    def test_voice_response_custom_object(self) -> None:
+        """Test VoiceResponse with custom object value."""
+        response = VoiceResponse(
+            id="custom-voice",
+            name="Custom Voice",
+            object="custom-voice-object",
+        )
+        assert response.id == "custom-voice"
+        assert response.name == "Custom Voice"
+        assert response.object == "custom-voice-object"
+
+    def test_voice_response_serialization(self) -> None:
+        """Test VoiceResponse can be serialized to dict."""
+        response = VoiceResponse(id="voice-1", name="Voice One")
+        data = response.model_dump()
+        assert isinstance(data, dict)
+        assert data["id"] == "voice-1"
+        assert data["name"] == "Voice One"
+        assert data["object"] == "voice"
+
+    def test_voice_response_json_serialization(self) -> None:
+        """Test VoiceResponse can be serialized to JSON."""
+        response = VoiceResponse(id="test-voice", name="Test Voice")
+        json_str = response.model_dump_json()
+        assert isinstance(json_str, str)
+        assert "test-voice" in json_str
+        assert "Test Voice" in json_str
+
+
+@pytest.mark.unit
+class TestVoicesResponse:
+    """Tests for VoicesResponse schema."""
+
+    def test_voices_response_creation(self) -> None:
+        """Test creating VoicesResponse with data."""
+        voices = [
+            VoiceResponse(id="voice-1", name="Voice One"),
+            VoiceResponse(id="voice-2", name="Voice Two"),
+        ]
+        response = VoicesResponse(data=voices)
+        assert len(response.data) == 2
+        assert response.data[0].id == "voice-1"
+        assert response.data[0].name == "Voice One"
+        assert response.data[1].id == "voice-2"
+        assert response.data[1].name == "Voice Two"
+
+    def test_voices_response_default_object(self) -> None:
+        """Test VoicesResponse has default object value."""
+        response = VoicesResponse(data=[])
+        assert response.object == "list"
+
+    def test_voices_response_custom_object(self) -> None:
+        """Test VoicesResponse with custom object value."""
+        response = VoicesResponse(data=[], object="custom-list")
+        assert response.object == "custom-list"
+
+    def test_voices_response_empty_data(self) -> None:
+        """Test VoicesResponse with empty data list."""
+        response = VoicesResponse(data=[])
+        assert response.data == []
+        assert isinstance(response.data, list)
+
+    def test_voices_response_serialization(self) -> None:
+        """Test VoicesResponse serialization."""
+        voices = [VoiceResponse(id="voice-1", name="Voice One")]
+        response = VoicesResponse(data=voices)
+        data = response.model_dump()
+        assert data["object"] == "list"
+        assert isinstance(data["data"], list)
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "voice-1"
+        assert data["data"][0]["name"] == "Voice One"
 
 
 @pytest.mark.unit

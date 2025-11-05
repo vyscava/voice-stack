@@ -6,6 +6,7 @@
 htmlcov
 .ruff*
 .nox**
+.env
 
 __pycache__
 

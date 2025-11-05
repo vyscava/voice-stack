@@ -18,23 +18,31 @@ from fastapi import APIRouter, HTTPException, status
 
 from core.logging import logger_asr as logger
 from core.settings import get_settings
-from tts.engine_factory import get_audio_engine
-from tts.schemas.audio_engine import ModelResponse, ModelsResponse
+from tts.engine_factory import acquire_engine, get_audio_engine, release_engine
+from tts.schemas.audio_engine import ModelResponse, ModelsResponse, VoicesResponse
 from tts.schemas.openai import OpenAICreateSpeechRequest
 
 router = APIRouter()
 
 settings = get_settings()
-engine = get_audio_engine()
+# Note: get_audio_engine() is used for model/voice listing (read-only),
+# but synthesis endpoints use acquire_engine() for concurrency control
+_engine_for_listing = get_audio_engine()
 
 
-@router.get("/audio/voices")
+@router.get("/audio/voices", response_model=VoicesResponse)
 async def list_voices() -> Any:
-    try:
-        pass
+    """
+    List all available voices for the current TTS engine.
+    Returns a list of voice objects with their IDs and names.
 
+    Note: This endpoint uses get_audio_engine() directly (not acquire_engine())
+    because it's just reading voice metadata, not performing synthesis.
+    """
+    try:
+        return _engine_for_listing.list_voices()
     except Exception as e:
-        msg = f"OpenAI Transcription Error: {e}"
+        msg = f"OpenAI List Voices Error: {e}"
         logger.exception(msg)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
 
@@ -42,8 +50,12 @@ async def list_voices() -> Any:
 # Reference: https://platform.openai.com/docs/api-reference/models/list
 @router.get("/models", response_model=ModelsResponse)
 async def list_models() -> Any:
+    """
+    Note: This endpoint uses get_audio_engine() directly (not acquire_engine())
+    because it's just reading model metadata, not performing synthesis.
+    """
     try:
-        return engine.list_models()
+        return _engine_for_listing.list_models()
     except Exception as e:
         msg = f"OpenAI Transcription Error: {e}"
         logger.exception(msg)
@@ -53,8 +65,12 @@ async def list_models() -> Any:
 # Reference: https://platform.openai.com/docs/api-reference/models/retrieve
 @router.get("/models/{model_id}", response_model=ModelResponse)
 async def get_model(model_id: str) -> Any:
+    """
+    Note: This endpoint uses get_audio_engine() directly (not acquire_engine())
+    because it's just reading model metadata, not performing synthesis.
+    """
     try:
-        return engine.get_model(model_id=model_id)
+        return _engine_for_listing.get_model(model_id=model_id)
     except Exception as e:
         msg = f"OpenAI Transcription Error: {e}"
         logger.exception(msg)
@@ -64,6 +80,9 @@ async def get_model(model_id: str) -> Any:
 # Reference: https://platform.openai.com/docs/api-reference/audio/createSpeech
 @router.post("/audio/speech")
 async def tts(request: OpenAICreateSpeechRequest) -> Any:
+    # Acquire engine with concurrency control
+    engine = await acquire_engine()
+
     try:
         result = engine.speech(
             input=request.input,
@@ -82,3 +101,6 @@ async def tts(request: OpenAICreateSpeechRequest) -> Any:
         msg = f"OpenAI Transcription Error: {e}"
         logger.exception(msg)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+    finally:
+        # Always release the concurrency slot
+        release_engine()

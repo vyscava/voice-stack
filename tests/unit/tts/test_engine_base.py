@@ -319,6 +319,14 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _unload_model(self):
+                pass
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
         with patch("tts.engine.base.settings") as mock_settings:
             mock_settings.TTS_MODEL = "test-model"
             mock_settings.TTS_SAMPLE_RATE = 48000
@@ -351,6 +359,14 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _unload_model(self):
+                pass
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
         with (
             patch("tts.engine.base.settings") as mock_settings,
             patch("tts.engine.base.pick_torch_device") as mock_pick_device,
@@ -381,6 +397,14 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _unload_model(self):
+                pass
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
         with patch("tts.engine.base.settings") as mock_settings:
             mock_settings.TTS_DEVICE = "cpu"
             mock_settings.TTS_MODEL = "model"
@@ -407,6 +431,14 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _unload_model(self):
+                pass
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
         with patch("tts.engine.base.settings") as mock_settings:
             mock_settings.TTS_DEVICE = "cpu"
             mock_settings.TTS_MODEL = "model"
@@ -427,12 +459,25 @@ class TestTTSBase:
             assert len(models.data) == 10
             assert all(m.id.startswith("model_") for m in models.data)
 
+    def test_ttsbase_list_voices_is_abstract(self) -> None:
+        """Test that list_voices method must be implemented by subclasses."""
+
+        # Attempting to create TTSBase without implementing list_voices should fail
+        class IncompleteTTS(TTSBase):
+            def speech(self, **kwargs):
+                pass
+
+        # Should not be able to instantiate an abstract class
+        with pytest.raises(TypeError, match="abstract"):
+            IncompleteTTS()
+
     def test_ttsbase_speech_is_abstract(self) -> None:
         """Test that speech method must be implemented by subclasses."""
 
         # Attempting to create TTSBase without implementing speech should fail
         class IncompleteTTS(TTSBase):
-            pass
+            def list_voices(self):
+                pass
 
         # Should not be able to instantiate an abstract class
         with pytest.raises(TypeError, match="abstract"):
@@ -444,6 +489,14 @@ class TestTTSBase:
         class ConcreteTTS(TTSBase):
             def speech(self, **kwargs):
                 pass
+
+            def _unload_model(self):
+                pass
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
 
         with patch("tts.engine.base.settings") as mock_settings:
             mock_settings.TTS_DEVICE = "cpu"
@@ -476,6 +529,14 @@ class TestTTSBase:
         class ConcreteTTS(TTSBase):
             def speech(self, **kwargs):
                 pass
+
+            def _unload_model(self):
+                pass
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
 
         with patch("tts.engine.base.settings") as mock_settings:
             mock_settings.TTS_DEVICE = "cpu"

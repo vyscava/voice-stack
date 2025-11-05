@@ -49,6 +49,7 @@ asr = [
 server = [
   "python-dotenv",
   "pydantic-settings",
+  "psutil",  # Required for ResourceGuardMiddleware (system resource monitoring)
 ]
 dev = [
   "nox",
@@ -64,7 +65,9 @@ dev = [
   "types-PyYAML",
   "debugpy",
   "pre-commit",
-  "ipdb"
+  "ipdb",
+  "aiohttp",   # Required for load testing script
+  "aiofiles",  # Required for load testing script
 ]
 
 [tool.hatch.metadata]

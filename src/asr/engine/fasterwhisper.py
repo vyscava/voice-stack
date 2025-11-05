@@ -21,7 +21,6 @@ settings = get_settings()
 
 
 class ASRFasterWhisper(ASRBase):
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -38,6 +37,30 @@ class ASRFasterWhisper(ASRBase):
             num_workers=settings.ASR_NUM_OF_WORKERS,
         )
 
+    def _unload_model(self) -> None:
+        """
+        Safely unload faster-whisper model.
+
+        faster-whisper uses CTranslate2 backend which manages its own memory.
+        We delete the model reference and run garbage collection to free memory.
+
+        Note: Do NOT call torch.cuda.empty_cache() as it would affect other
+        services (TTS, Open WebUI) sharing the same GPU.
+        """
+        import gc
+
+        if hasattr(self, "model") and self.model is not None:
+            logger.info("Unloading faster-whisper model from memory...")
+
+            # Delete model reference
+            del self.model
+            self.model = None  # type: ignore
+
+            # Run garbage collection to free Python objects and CTranslate2 memory
+            gc.collect()
+
+            logger.info("Faster-whisper model successfully unloaded")
+
     def _transcribe_core(
         self,
         *,
@@ -52,7 +75,6 @@ class ASRFasterWhisper(ASRBase):
         word_timestamps: bool | None,
         vad: bool | None,
     ) -> TranscribeResult:
-
         t0 = time.time()
         props = transcribe_effective_options(
             request_language=request_language,
