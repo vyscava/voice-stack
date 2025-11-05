@@ -3,9 +3,9 @@ default:
   before_script:
     - python -m pip install --upgrade pip
     - pip install --upgrade hatch nox
-    - hatch env create
   cache:
     key: "$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG"
+    policy: pull  # Only download cache by default
     paths:
       - .cache/pip
       - .cache/.config/hatch
@@ -15,6 +15,7 @@ default:
       - .mypy_cache
 
 stages:
+  - setup
   - quality
   - test
   - coverage
@@ -24,6 +25,23 @@ variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   HATCH_CACHE_DIR: "$CI_PROJECT_DIR/.cache/.config/hatch"
   SECRET_DETECTION_ENABLED: "true"
+
+# Setup job - creates environment once and pushes to cache
+setup:env:
+  stage: setup
+  cache:
+    key: "$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG"
+    policy: pull-push  # Download and upload cache
+    paths:
+      - .cache/pip
+      - .cache/.config/hatch
+      - .venv
+      - .pytest_cache
+      - .ruff_cache
+      - .mypy_cache
+  script:
+    - hatch env create
+    - echo "Environment created and cached successfully"
 
 quality:fmt:
   stage: quality

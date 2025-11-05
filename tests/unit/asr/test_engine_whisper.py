@@ -64,7 +64,6 @@ def test_whisper_torch_initialization_cpu() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -88,7 +87,6 @@ def test_whisper_torch_initialization_cuda() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cuda"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -112,7 +110,6 @@ def test_whisper_torch_initialization_mps() -> None:
         patch("asr.engine.whisper._pick_device", return_value="mps"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -136,7 +133,6 @@ def test_whisper_torch_mps_fallback_to_cpu() -> None:
         patch("asr.engine.whisper._pick_device", return_value="mps"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -164,7 +160,6 @@ def test_transcribe_core_basic() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -213,7 +208,6 @@ def test_transcribe_core_with_language() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -254,7 +248,6 @@ def test_transcribe_core_translate_task() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -293,7 +286,6 @@ def test_transcribe_core_with_beam_size() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -332,7 +324,6 @@ def test_transcribe_core_with_temperature() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -371,7 +362,6 @@ def test_transcribe_core_multiple_segments() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -419,7 +409,6 @@ def test_transcribe_handles_empty_segments() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -470,7 +459,6 @@ def test_detect_language_core_basic() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -511,7 +499,6 @@ def test_detect_language_with_offset_and_length() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -556,7 +543,6 @@ def test_transcribe_uses_cache() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cpu"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = True
@@ -616,7 +602,6 @@ def test_transcribe_fp16_on_cuda() -> None:
         patch("asr.engine.whisper._pick_device", return_value="cuda"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -656,7 +641,6 @@ def test_transcribe_fp32_on_mps() -> None:
         patch("asr.engine.whisper._pick_device", return_value="mps"),
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
@@ -697,7 +681,6 @@ def test_transcribe_resamples_audio() -> None:
         patch("asr.engine.whisper.resample_to_16k_mono") as mock_resample,
         patch("asr.engine.whisper.settings") as mock_settings,
     ):
-
         mock_settings.ASR_MODEL = "base"
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False

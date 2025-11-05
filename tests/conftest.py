@@ -148,6 +148,8 @@ def mock_settings() -> Mock:
     settings.ASR_ENGINE = "faster-whisper"
     settings.ASR_VAD_ENABLED = True
     settings.ASR_LANGUAGE = None
+    settings.ASR_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
+    settings.ASR_MAX_CONCURRENT_REQUESTS = 2
 
     # TTS settings
     settings.TTS_DEVICE = "cpu"
@@ -156,6 +158,13 @@ def mock_settings() -> Mock:
     settings.TTS_AUTO_LANG = True
     settings.TTS_MAX_CHARS = 180
     settings.TTS_SAMPLE_RATE = 24000
+    settings.TTS_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
+    settings.TTS_MAX_CONCURRENT_REQUESTS = 2
+
+    # Resource management settings
+    settings.MEMORY_THRESHOLD_PERCENT = 90
+    settings.SWAP_THRESHOLD_PERCENT = 80
+    settings.MAX_UPLOAD_SIZE_MB = 100
 
     return settings
 
@@ -360,13 +369,28 @@ def asr_client(mock_asr_engine: Mock, mock_settings: Mock, monkeypatch: pytest.M
     monkeypatch.setattr("asr.engine_factory._engine", mock_asr_engine)
     monkeypatch.setattr("asr.engine_factory.get_audio_engine", lambda: mock_asr_engine)
 
+    # Mock acquire_engine and release_engine for new concurrency control
+    async def mock_acquire_engine():
+        return mock_asr_engine
+
+    def mock_release_engine():
+        pass
+
+    monkeypatch.setattr("asr.engine_factory.acquire_engine", mock_acquire_engine)
+    monkeypatch.setattr("asr.engine_factory.release_engine", mock_release_engine)
+
     # Mock settings to use test values
     monkeypatch.setattr("asr.app.settings", mock_settings)
     monkeypatch.setattr("core.settings.get_settings", lambda: mock_settings)
 
-    # Patch the engine in the endpoint modules (they import it at module level)
-    monkeypatch.setattr("asr.api.api_v1.endpoints.openai.engine", mock_asr_engine)
-    monkeypatch.setattr("asr.api.api_v1.endpoints.bazarr.engine", mock_asr_engine)
+    # Patch the acquire/release functions in the endpoint modules
+    monkeypatch.setattr("asr.api.api_v1.endpoints.openai.acquire_engine", mock_acquire_engine)
+    monkeypatch.setattr("asr.api.api_v1.endpoints.openai.release_engine", mock_release_engine)
+    monkeypatch.setattr("asr.api.api_v1.endpoints.openai.get_audio_engine", lambda: mock_asr_engine)
+
+    monkeypatch.setattr("asr.api.api_v1.endpoints.bazarr.acquire_engine", mock_acquire_engine)
+    monkeypatch.setattr("asr.api.api_v1.endpoints.bazarr.release_engine", mock_release_engine)
+    monkeypatch.setattr("asr.api.api_v1.endpoints.bazarr.get_audio_engine", lambda: mock_asr_engine)
 
     # Import after patching to ensure the mock is used
     from asr.app import app
@@ -377,11 +401,25 @@ def asr_client(mock_asr_engine: Mock, mock_settings: Mock, monkeypatch: pytest.M
 
 
 @pytest.fixture
-def tts_client(mock_tts_engine: Mock, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def tts_client(mock_tts_engine: Mock, mock_settings: Mock, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Return FastAPI test client for TTS service."""
     # Mock the engine factory to return our mock engine
     monkeypatch.setattr("tts.engine_factory._engine", mock_tts_engine)
     monkeypatch.setattr("tts.engine_factory.get_audio_engine", lambda: mock_tts_engine)
+
+    # Mock acquire_engine and release_engine for new concurrency control
+    async def mock_acquire_engine():
+        return mock_tts_engine
+
+    def mock_release_engine():
+        pass
+
+    monkeypatch.setattr("tts.engine_factory.acquire_engine", mock_acquire_engine)
+    monkeypatch.setattr("tts.engine_factory.release_engine", mock_release_engine)
+
+    # Mock settings to use test values
+    monkeypatch.setattr("tts.app.settings", mock_settings)
+    monkeypatch.setattr("core.settings.get_settings", lambda: mock_settings)
 
     # Import after patching to ensure the mock is used
     from tts.app import app

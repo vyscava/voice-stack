@@ -60,6 +60,14 @@ class Settings(BaseSettings):
         default=1, description="Number of parallel sampling candidates when beam_size == 1"
     )
 
+    # ASR Resource Management
+    ASR_IDLE_TIMEOUT_MINUTES: int = Field(
+        default=60, description="Unload ASR model after N minutes of inactivity (0 = disabled)"
+    )
+    ASR_MAX_CONCURRENT_REQUESTS: int = Field(
+        default=2, description="Maximum number of concurrent ASR inference requests"
+    )
+
     # -------------
     # TTS settings
     # -------------
@@ -78,6 +86,25 @@ class Settings(BaseSettings):
     TTS_AUTO_LANG: bool = Field(default=True)
     TTS_LANG_HINT: str | None = Field(default=None)
     TTS_FORCE_LANG: str | None = Field(default=None)
+
+    # TTS Resource Management
+    TTS_IDLE_TIMEOUT_MINUTES: int = Field(
+        default=60, description="Unload TTS model after N minutes of inactivity (0 = disabled)"
+    )
+    TTS_MAX_CONCURRENT_REQUESTS: int = Field(
+        default=2, description="Maximum number of concurrent TTS synthesis requests"
+    )
+
+    # -------------
+    # Resource Safeguards (applies to both ASR and TTS)
+    # -------------
+    MAX_UPLOAD_SIZE_MB: int = Field(default=100, description="Maximum file upload size in MB")
+    MEMORY_THRESHOLD_PERCENT: int = Field(
+        default=90, description="Reject requests when RAM usage exceeds this percentage"
+    )
+    SWAP_THRESHOLD_PERCENT: int = Field(
+        default=80, description="Reject requests when swap usage exceeds this percentage"
+    )
 
     # Debugpy
     DEBUGPY_ENABLE: bool = Field(default=False)

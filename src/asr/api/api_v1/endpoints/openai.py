@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import PlainTextResponse
 
-from asr.engine_factory import get_audio_engine
+from asr.engine_factory import acquire_engine, get_audio_engine, release_engine
 from asr.schemas.audio_engine import ListModelsResponse
 from asr.schemas.openai import (
     OpenAITranscription,
@@ -32,7 +32,9 @@ from core.settings import get_settings
 router = APIRouter()
 
 settings = get_settings()
-engine = get_audio_engine()
+# Note: get_audio_engine() is used for model listing (read-only),
+# but inference endpoints use acquire_engine() for concurrency control
+_engine_for_listing = get_audio_engine()
 
 
 @router.post(
@@ -52,6 +54,9 @@ async def transcriptions(
     request: OpenAITranscriptionRequest = Depends(OpenAITranscriptionRequest.as_form),
     file: UploadFile = File(...),
 ) -> Any:
+    # Acquire engine with concurrency control
+    engine = await acquire_engine()
+
     try:
         # Read entire uploaded audio bytes into memory
         audio = await file.read()
@@ -71,6 +76,9 @@ async def transcriptions(
         msg = f"OpenAI Transcription Error: {e}"
         logger.exception(msg)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+    finally:
+        # Always release the concurrency slot
+        release_engine()
 
 
 @router.post(
@@ -94,6 +102,9 @@ async def transcriptions_verbose(
     Verbose response: returns the full dict from the engine, including:
       text, segments, language, language_probability, durations, timings, vad_used, model.
     """
+    # Acquire engine with concurrency control
+    engine = await acquire_engine()
+
     try:
         audio = await file.read()
 
@@ -120,6 +131,9 @@ async def transcriptions_verbose(
         msg = f"OpenAI Transcription (Verbose) Error: {e}"
         logger.exception(msg)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+    finally:
+        # Always release the concurrency slot
+        release_engine()
 
 
 @router.post(
@@ -147,6 +161,9 @@ async def translations(
       - Returns OpenAI minimal shape for JSON: {"text": "..."}.
       - If response_format="text", returns plain text instead of JSON.
     """
+    # Acquire engine with concurrency control
+    engine = await acquire_engine()
+
     try:
         audio = await file.read()
 
@@ -168,6 +185,9 @@ async def translations(
         msg = f"OpenAI Translation Error: {e}"
         logger.exception(msg)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+    finally:
+        # Always release the concurrency slot
+        release_engine()
 
 
 @router.get("/models", response_model=ListModelsResponse)
@@ -175,5 +195,8 @@ def list_models() -> Any:
     """
     OpenAI-compatible models listing. Delegates to the engine so other
     API mocks (or future services) can reuse the same definition.
+
+    Note: This endpoint uses get_audio_engine() directly (not acquire_engine())
+    because it's just reading model metadata, not performing inference.
     """
-    return ListModelsResponse(**engine.list_models())
+    return ListModelsResponse(**_engine_for_listing.list_models())

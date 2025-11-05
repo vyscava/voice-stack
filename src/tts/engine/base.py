@@ -10,7 +10,7 @@ from typing import Any
 from fastapi.responses import Response, StreamingResponse
 
 from core.settings import get_settings
-from tts.schemas.audio_engine import AudioFormat, ModelResponse, ModelsResponse, StreamFormat
+from tts.schemas.audio_engine import AudioFormat, ModelResponse, ModelsResponse, StreamFormat, VoicesResponse
 from utils.audio.audio_helper import pick_torch_device
 from utils.language.language_codes import LanguageCode
 
@@ -112,7 +112,6 @@ def speech_effective_options(
 
 
 class TTSBase(ABC):
-
     def __init__(self) -> None:
         # Retrieving requested settings
         self.model_id = settings.TTS_MODEL
@@ -132,11 +131,76 @@ class TTSBase(ABC):
         if self.model_device == "auto":
             self.model_device = pick_torch_device()
 
+        # Idle timeout management (optional feature)
+        from datetime import datetime
+
+        from core.logging import logger_tts as logger
+
+        self.idle_timeout_minutes = int(getattr(settings, "TTS_IDLE_TIMEOUT_MINUTES", 0))
+        self.last_used = datetime.now()
+        self._model_loaded = True
+
+        if self.idle_timeout_minutes > 0:
+            logger.info(f"TTS idle timeout enabled: {self.idle_timeout_minutes} minutes")
+
+    def _touch(self) -> None:
+        """Update last used timestamp - call this on every synthesis request."""
+        from datetime import datetime
+
+        self.last_used = datetime.now()
+        self._model_loaded = True
+
+    @abstractmethod
+    def _unload_model(self) -> None:
+        """
+        Subclass-specific model cleanup.
+
+        This method should safely free GPU/CPU memory for the model without
+        affecting other services. Typically involves:
+        1. Moving model to CPU (for GPU models)
+        2. Deleting model references
+        3. Running gc.collect()
+        4. torch.cuda.synchronize() (NOT empty_cache!)
+
+        DO NOT call torch.cuda.empty_cache() as it affects all processes
+        sharing the GPU.
+        """
+        raise NotImplementedError
+
+    def check_and_unload_if_idle(self) -> bool:
+        """
+        Check if model has been idle and unload if past timeout.
+
+        Returns:
+            bool: True if model was unloaded, False otherwise
+        """
+        if self.idle_timeout_minutes <= 0 or not self._model_loaded:
+            return False
+
+        from datetime import datetime, timedelta
+
+        from core.logging import logger_tts as logger
+
+        idle_time = datetime.now() - self.last_used
+        timeout = timedelta(minutes=self.idle_timeout_minutes)
+
+        if idle_time > timeout:
+            logger.info(f"Model idle for {idle_time}, unloading...")
+            self._unload_model()
+            self._model_loaded = False
+            return True
+
+        return False
+
     def get_model(self, model_id: str) -> ModelResponse:
         return ModelResponse(id=model_id)
 
     def list_models(self) -> ModelsResponse:
         return ModelsResponse(data=[ModelResponse(id=f"model_{i}") for i in range(1, 11)])
+
+    @abstractmethod
+    def list_voices(self) -> VoicesResponse:
+        raise NotImplementedError
 
     @abstractmethod
     def speech(

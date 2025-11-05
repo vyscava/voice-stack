@@ -10,13 +10,14 @@ Group=__SERVICE_GROUP__
 WorkingDirectory=__INSTALL_DIR__
 Environment="PATH=__INSTALL_DIR__/.venv-asr/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=__INSTALL_DIR__/.env
-ExecStart=__INSTALL_DIR__/.venv-asr/bin/uvicorn asr.app:app --app-dir __INSTALL_DIR__/src --host 0.0.0.0 --port 5001 --log-level info
+ExecStart=__INSTALL_DIR__/.venv-asr/bin/uvicorn asr.app:app --app-dir __INSTALL_DIR__/src --host 0.0.0.0 --port 5001 --log-level info --timeout-keep-alive 300 --timeout-graceful-shutdown 30
 
 # Restart policy
 Restart=on-failure
 RestartSec=10s
 StartLimitBurst=5
 StartLimitIntervalSec=300
+TimeoutStopSec=35
 
 # Security hardening
 NoNewPrivileges=true

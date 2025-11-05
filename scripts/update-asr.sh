@@ -46,9 +46,21 @@ stop_service_if_running "$SERVICE_NAME"
 log_info "Pulling latest changes from git..."
 cd "$REPO_ROOT"
 
+# Check for uncommitted changes and stash if needed
+STASHED=false
 if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+    if ! sudo -u "$SUDO_USER" git diff-index --quiet HEAD --; then
+        log_warn "Uncommitted changes detected. Stashing them..."
+        sudo -u "$SUDO_USER" git stash push -m "Auto-stash by update-asr.sh"
+        STASHED=true
+    fi
     sudo -u "$SUDO_USER" git pull --rebase
 else
+    if ! git diff-index --quiet HEAD --; then
+        log_warn "Uncommitted changes detected. Stashing them..."
+        git stash push -m "Auto-stash by update-asr.sh"
+        STASHED=true
+    fi
     git pull --rebase
 fi
 
@@ -61,13 +73,13 @@ ensure_hatch_installed
 log_info "Rebuilding Hatch environment (this may take a few minutes)..."
 cd "$REPO_ROOT"
 
-# Prune the old environment
+# Remove the old environment
 log_info "Removing old environment..."
 if [ -d "$VENV_PATH" ]; then
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" hatch env prune "$HATCH_ENV" || rm -rf "$VENV_PATH"
+        sudo -u "$SUDO_USER" hatch env remove "$HATCH_ENV" || rm -rf "$VENV_PATH"
     else
-        hatch env prune "$HATCH_ENV" || rm -rf "$VENV_PATH"
+        hatch env remove "$HATCH_ENV" || rm -rf "$VENV_PATH"
     fi
 fi
 
@@ -131,4 +143,24 @@ else
     systemctl status "$SERVICE_NAME" --no-pager || true
 fi
 echo ""
+
+# Restore stashed changes if we stashed them
+if [ "$STASHED" = true ]; then
+    log_info "Restoring stashed changes..."
+    cd "$REPO_ROOT"
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        if sudo -u "$SUDO_USER" git stash pop; then
+            log_success "Stashed changes restored"
+        else
+            log_warn "Failed to restore stashed changes. You can manually restore them with: git stash pop"
+        fi
+    else
+        if git stash pop; then
+            log_success "Stashed changes restored"
+        else
+            log_warn "Failed to restore stashed changes. You can manually restore them with: git stash pop"
+        fi
+    fi
+fi
+
 log_success "Update complete!"

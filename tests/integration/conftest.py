@@ -314,6 +314,13 @@ def asr_integration_client(mock_asr_engine: Mock, monkeypatch: pytest.MonkeyPatc
     mock_settings.ASR_ENGINE = "faster-whisper"
     mock_settings.ASR_VAD_ENABLED = True
     mock_settings.ASR_LANGUAGE = None
+    mock_settings.ASR_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
+    mock_settings.ASR_MAX_CONCURRENT_REQUESTS = 2
+
+    # Resource management settings
+    mock_settings.MEMORY_THRESHOLD_PERCENT = 90
+    mock_settings.SWAP_THRESHOLD_PERCENT = 80
+    mock_settings.MAX_UPLOAD_SIZE_MB = 100
 
     monkeypatch.setattr("asr.app.settings", mock_settings)
     monkeypatch.setattr("core.settings.get_settings", lambda: mock_settings)
@@ -363,6 +370,13 @@ def tts_integration_client(mock_tts_engine: Mock, monkeypatch: pytest.MonkeyPatc
     mock_settings.TTS_AUTO_LANG = True
     mock_settings.TTS_MAX_CHARS = 180
     mock_settings.TTS_SAMPLE_RATE = 24000
+    mock_settings.TTS_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
+    mock_settings.TTS_MAX_CONCURRENT_REQUESTS = 2
+
+    # Resource management settings
+    mock_settings.MEMORY_THRESHOLD_PERCENT = 90
+    mock_settings.SWAP_THRESHOLD_PERCENT = 80
+    mock_settings.MAX_UPLOAD_SIZE_MB = 100
 
     monkeypatch.setattr("tts.app.settings", mock_settings)
     monkeypatch.setattr("core.settings.get_settings", lambda: mock_settings)

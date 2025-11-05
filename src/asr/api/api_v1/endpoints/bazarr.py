@@ -4,14 +4,16 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
-from asr.engine_factory import get_audio_engine
+from asr.engine_factory import acquire_engine, get_audio_engine, release_engine
 from asr.schemas.audio_engine import DetectedLanguage, ListModelsResponse, Output
 from core.logging import logger_asr as logger
 from core.settings import get_settings
 
 router = APIRouter()
 settings = get_settings()
-engine = get_audio_engine()
+# Note: get_audio_engine() is used for model listing (read-only),
+# but inference endpoints use acquire_engine() for concurrency control
+_engine_for_listing = get_audio_engine()
 
 
 @router.post(
@@ -44,6 +46,9 @@ async def bazarr_asr(
      JSON shape (when output=json):
       { "language": "en", "segments": [ { "start": 0.0, "end": 1.2, "text": "..." }, ... ] }
     """
+    # Acquire engine with concurrency control
+    engine = await acquire_engine()
+
     try:
         # Read entire uploaded audio bytes into memory
         audio = await file.read()
@@ -75,6 +80,9 @@ async def bazarr_asr(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Bazarr ASR error: {e}") from e
+    finally:
+        # Always release the concurrency slot
+        release_engine()
 
 
 @router.post(
@@ -99,6 +107,9 @@ async def detect_language(
     """
     Detect the Language of Audio for Bazarr
     """
+    # Acquire engine with concurrency control
+    engine = await acquire_engine()
+
     try:
         audio = await file.read()
 
@@ -120,6 +131,9 @@ async def detect_language(
         return DetectedLanguage(**result.to_dict())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ASR error: {e}") from e
+    finally:
+        # Always release the concurrency slot
+        release_engine()
 
 
 @router.get("/models", response_model=ListModelsResponse)
@@ -127,5 +141,8 @@ def list_models() -> Any:
     """
     OpenAI-compatible models listing. Delegates to the engine so other
     API mocks (or future services) can reuse the same definition.
+
+    Note: This endpoint uses get_audio_engine() directly (not acquire_engine())
+    because it's just reading model metadata, not performing inference.
     """
-    return ListModelsResponse(**engine.list_models())
+    return ListModelsResponse(**_engine_for_listing.list_models())
