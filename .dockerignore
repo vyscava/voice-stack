@@ -1,0 +1,117 @@
+# ============================================================================
+# Docker Build Context Exclusions
+# ============================================================================
+# Files and directories to exclude from Docker build context
+# Reduces build time and image size
+# ============================================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+.gitlab-ci.yml
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist
+build
+*.egg
+
+# Virtual Environments
+.venv
+.venv-*
+venv/
+ENV/
+env/
+
+# Hatch
+.hatch
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+reports/
+
+# Linting and Type Checking
+.mypy_cache
+.ruff_cache
+.black/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+*.md
+!README.md
+docs/
+*.rst
+
+# CI/CD
+.github/
+.gitlab/
+
+# Local configuration
+.env
+.env.local
+.env.*.local
+
+# Models and large files (downloaded at runtime)
+models/
+*.pth
+*.pt
+*.bin
+*.onnx
+*.h5
+
+# Voice samples (mounted at runtime)
+voices/*.wav
+voices/*.mp3
+
+# Logs
+logs/
+*.log
+
+# System files
+Thumbs.db
+.DS_Store
+
+# Docker files (don't need in context)
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile*
+.dockerignore
+
+# Scripts (needed scripts are COPY'd explicitly in Dockerfiles)
+# Included: entrypoint.sh, install_torch.sh, accept_coqui_license.sh
+# Excluded: everything else
+scripts/build_repo_map.py
+scripts/build_repo_map_v2.py
+scripts/load_test.py
+scripts/repo_tokens.py
+scripts/install-*.sh
+scripts/uninstall-*.sh
+scripts/update-*.sh
+scripts/common-setup.sh
+scripts/*.service.template
+scripts/SERVICE_INSTALLATION.md
+
+# Temporary files
+tmp/
+temp/
+*.tmp

@@ -20,7 +20,7 @@ from utils.debugpy_helper import maybe_enable_debugpy
 settings = get_settings()
 
 
-async def idle_timeout_checker():
+async def idle_timeout_checker() -> None:
     """
     Background task that periodically checks if the TTS model should be unloaded due to inactivity.
 
