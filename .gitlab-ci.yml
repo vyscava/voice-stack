@@ -1,65 +1,194 @@
-default:
-  image: python:3.11
-  before_script:
-    - python -m pip install --upgrade pip
-    - pip install --upgrade hatch nox
-  cache:
-    key: "$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG"
-    policy: pull  # Only download cache by default
-    paths:
-      - .cache/pip
-      - .cache/.config/hatch
-      - .venv
-      - .pytest_cache
-      - .ruff_cache
-      - .mypy_cache
+# ============================================================================
+# Voice Stack GitLab CI/CD Pipeline
+# ============================================================================
+# Docker-based pipeline for reliable, fast builds
+#
+# Pipeline Flow:
+#   1. build-images: Build CI and production Docker images (SHA-tagged only)
+#   2. quality: Code formatting and linting
+#   3. test: Unit and integration tests
+#   4. coverage: Coverage report
+#   5. security: Secret detection and security scanning
+#   6. release: Promote to :latest ONLY if all checks pass
+#
+# Docker Images:
+#   - CI Image: Contains all dev dependencies for running tests
+#   - Production Image: Optimized unified image for ASR+TTS services
+# ============================================================================
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
 
 stages:
-  - setup
+  - build-images
   - quality
   - test
   - coverage
-  - secret-detection
+  - security
+  - release
 
 variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  HATCH_CACHE_DIR: "$CI_PROJECT_DIR/.cache/.config/hatch"
+  # Docker registry configuration
+  # Note: DOCKER_REGISTRY is set in GitLab CI/CD variables
+  CI_REGISTRY_IMAGE: ${DOCKER_REGISTRY}/voice-stack
+  CI_IMAGE: ${DOCKER_REGISTRY}/voice-stack/ci:latest
+  CI_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack/ci:$CI_COMMIT_SHA
+  PROD_IMAGE: ${DOCKER_REGISTRY}/voice-stack:latest
+  PROD_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack:$CI_COMMIT_SHA
+
+  # Enable Docker BuildKit
+  DOCKER_BUILDKIT: 1
+  BUILDKIT_PROGRESS: plain
+
+  # Connect to runner's dind daemon via Docker bridge gateway
+  # 172.17.0.1 is the Docker bridge network gateway (allows containers to reach the host)
+  # The dind container listens on host port 2375
+  DOCKER_HOST: "tcp://172.17.0.1:2375"
+  DOCKER_TLS_CERTDIR: ""
+
+  # Docker client timeout for large image pushes (in seconds)
+  # Default is 60s which causes timeouts on large layers
+  DOCKER_CLIENT_TIMEOUT: "600"
+  COMPOSE_HTTP_TIMEOUT: "600"
+
+  # Secret detection
   SECRET_DETECTION_ENABLED: "true"
 
-# Setup job - creates environment once and pushes to cache
-setup:env:
-  stage: setup
-  cache:
-    key: "$CI_PROJECT_NAME-$CI_COMMIT_REF_SLUG"
-    policy: pull-push  # Download and upload cache
-    paths:
-      - .cache/pip
-      - .cache/.config/hatch
-      - .venv
-      - .pytest_cache
-      - .ruff_cache
-      - .mypy_cache
+# ============================================================================
+# Build Stage - Create Docker Images
+# ============================================================================
+
+# Build CI image (for running tests, linting, etc.)
+build:ci-image:
+  stage: build-images
+  image: docker:24
+  # No services needed - using runner's dind daemon directly
+
+  rules:
+    # Always run on main branch
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    # Run on other branches only when dependencies change
+    - if: '$CI_COMMIT_BRANCH != "main"'
+      changes:
+        - pyproject.toml
+        - Dockerfile.ci
+        - scripts/install_system_deps.sh
+        - scripts/install_torch.sh
+        - scripts/accept_coqui_license.sh
+
+  before_script:
+    - echo "DOCKER_REGISTRY=${DOCKER_REGISTRY:-not set}"
+    - echo "CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE:-not set}"
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "Logging into Docker registry..."
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      else
+        echo "Skipping docker login - registry variables not configured"
+      fi
+
   script:
-    - hatch env create
-    - echo "Environment created and cached successfully"
+    - echo "Building CI image with all dependencies..."
+    - docker build --file Dockerfile.ci --tag $CI_IMAGE --tag $CI_IMAGE_SHA --cache-from $CI_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
+    - docker push $CI_IMAGE_SHA
+    - docker push $CI_IMAGE
+    - echo "CI image pushed successfully"
+
+  tags:
+    - docker
+    - nuc
+
+# Build production image (unified ASR+TTS)
+build:prod-image:
+  stage: build-images
+  image: docker:24
+  # No services needed - using runner's dind daemon directly
+
+  rules:
+    # Only run on main branch (for release)
+    # Feature branches don't need prod image - tests run on CI image
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+  before_script:
+    - echo "DOCKER_REGISTRY=${DOCKER_REGISTRY:-not set}"
+    - echo "CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE:-not set}"
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      else
+        echo "Skipping docker login - registry variables not configured"
+      fi
+
+  script:
+    - echo "Building production image (unified ASR+TTS)..."
+    - docker build --file Dockerfile --tag $PROD_IMAGE_SHA --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
+    - docker push $PROD_IMAGE_SHA
+    - echo "Production image built and pushed with SHA tag"
+    - echo "Image will be promoted to latest in release stage after all checks pass"
+
+  tags:
+    - docker
+    - nuc
+
+# ============================================================================
+# Quality Stage - Formatting and Linting
+# ============================================================================
+
+default:
+  # Use pre-built CI image for all jobs (unless overridden)
+  image: $CI_IMAGE
+  before_script:
+    - cd /workspace
+    # Copy current code into the workspace
+    - cp -r $CI_PROJECT_DIR/. /workspace/
+    - cd /workspace
 
 quality:fmt:
   stage: quality
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Checking code formatting..."
+    - git config core.fileMode false
     - hatch run fmt
     - git diff --stat || true
     - git diff --exit-code
 
 quality:lint:
   stage: quality
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Running linter..."
     - hatch run lint
+
+# ============================================================================
+# Test Stage - Unit and Integration Tests
+# ============================================================================
 
 unit:asr:
   stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Running ASR unit tests..."
     - mkdir -p reports
     - hatch run test-asr -- --disable-warnings --maxfail=1 --junitxml=reports/unit-asr.xml
+
   artifacts:
     when: always
     reports:
@@ -70,9 +199,16 @@ unit:asr:
 
 unit:tts:
   stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Running TTS unit tests..."
     - mkdir -p reports
     - hatch run test-tts -- --disable-warnings --maxfail=1 --junitxml=reports/unit-tts.xml
+
   artifacts:
     when: always
     reports:
@@ -83,9 +219,16 @@ unit:tts:
 
 unit:core:
   stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Running core unit tests..."
     - mkdir -p reports
     - hatch run test-core -- --disable-warnings --maxfail=1 --junitxml=reports/unit-core.xml
+
   artifacts:
     when: always
     reports:
@@ -96,9 +239,16 @@ unit:core:
 
 unit:utils:
   stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Running utils unit tests..."
     - mkdir -p reports
     - hatch run test-utils -- --disable-warnings --maxfail=1 --junitxml=reports/unit-utils.xml
+
   artifacts:
     when: always
     reports:
@@ -109,9 +259,16 @@ unit:utils:
 
 integration:
   stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Running integration tests..."
     - mkdir -p reports
     - hatch run test-integration -- --disable-warnings --maxfail=1 --junitxml=reports/integration.xml
+
   artifacts:
     when: always
     reports:
@@ -119,6 +276,10 @@ integration:
     paths:
       - reports/integration.xml
     expire_in: 1 week
+
+# ============================================================================
+# Coverage Stage - Generate Coverage Report
+# ============================================================================
 
 coverage:report:
   stage: coverage
@@ -128,10 +289,19 @@ coverage:report:
     - unit:core
     - unit:utils
     - integration
+
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
   script:
+    - echo "Generating coverage report..."
     - mkdir -p reports
     - hatch run cov -- --disable-warnings --maxfail=1 --junitxml=reports/unit-all.xml
+
   coverage: '/^TOTAL\s+\d+\s+\d+\s+(\d+\%)$/'
+
   artifacts:
     when: always
     reports:
@@ -146,9 +316,98 @@ coverage:report:
       - reports/unit-all.xml
     expire_in: 1 week
 
+# ============================================================================
+# Security Stage - Secret Detection and Security Scanning
+# ============================================================================
+
 secret_detection:
-  stage: secret-detection
+  stage: security
   before_script: []
+  allow_failure: false
+
+  # Use GitLab's template
+  variables:
+    SECRET_DETECTION_ENABLED: "true"
+
+# ============================================================================
+# Release Stage - Promote to :latest (ONLY if all checks pass)
+# ============================================================================
+
+# Automatic release on main branch (after successful tests AND security checks)
+release:latest:
+  stage: release
+  image: docker:24
+  # No services needed - using runner's dind daemon directly
+
+  needs:
+    - build:prod-image
+    - coverage:report
+    - secret_detection
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+  before_script:
+    - echo "DOCKER_REGISTRY=${DOCKER_REGISTRY:-not set}"
+    - echo "CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE:-not set}"
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      else
+        echo "Skipping docker login - registry variables not configured"
+      fi
+
+  script:
+    - echo "Promoting production image to :latest tag..."
+    - docker pull $PROD_IMAGE_SHA
+    - docker tag $PROD_IMAGE_SHA $PROD_IMAGE
+    - docker push $PROD_IMAGE
+    - echo "Production image available at $PROD_IMAGE"
+
+  tags:
+    - docker
+
+# Manual release with semantic versioning (for git tags)
+release:version:
+  stage: release
+  image: docker:24
+  # No services needed - using runner's dind daemon directly
+
+  needs:
+    - build:prod-image
+    - secret_detection
+
+  rules:
+    - if: '$CI_COMMIT_TAG'
+
+  before_script:
+    - echo "DOCKER_REGISTRY=${DOCKER_REGISTRY:-not set}"
+    - echo "CI_REGISTRY_IMAGE=${CI_REGISTRY_IMAGE:-not set}"
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      else
+        echo "Skipping docker login - registry variables not configured"
+      fi
+
+  script:
+    - echo "Releasing version $CI_COMMIT_TAG..."
+    - docker pull $PROD_IMAGE_SHA
+    - docker tag $PROD_IMAGE_SHA $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+    - docker tag $PROD_IMAGE_SHA $PROD_IMAGE
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+    - docker push $PROD_IMAGE
+    - echo "Released version $CI_COMMIT_TAG"
+    - echo "Image available at:"
+    - echo "  - $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+    - echo "  - $PROD_IMAGE"
+
+  tags:
+    - docker
+
+# ============================================================================
+# Include GitLab Security Templates
+# ============================================================================
 
 include:
   - template: Security/Secret-Detection.gitlab-ci.yml

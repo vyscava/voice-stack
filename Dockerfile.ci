@@ -1,0 +1,78 @@
+# ============================================================================
+# Voice Stack CI/CD Docker Image
+# ============================================================================
+# This image contains ALL dependencies (dev, ASR, TTS) for running CI/CD jobs
+# Built from your existing scripts to ensure consistency with local development
+#
+# Usage in GitLab CI:
+#   image: $CI_REGISTRY_IMAGE/ci:latest
+#
+# Rebuild when: pyproject.toml or scripts/* change
+# ============================================================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="vyscava@gmail.com"
+LABEL description="Voice Stack CI/CD image with all dependencies"
+
+# Prevent Python from writing pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
+# Using Debian-based approach from install_system_deps.sh
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        # Core system dependencies
+        ffmpeg \
+        libsndfile1 \
+        libportaudio2 \
+        python3-dev \
+        build-essential \
+        # Additional tools for CI
+        git \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy dependency specification and README (required by pyproject.toml)
+COPY pyproject.toml README.md ./
+
+# Install hatch and nox
+RUN pip install --no-cache-dir hatch nox
+
+# Copy scripts directory (needed for install_torch.sh)
+COPY scripts/ ./scripts/
+
+# Make scripts executable
+RUN chmod +x scripts/*.sh
+
+# Create hatch default environment with all dependencies
+# This installs: dev, server, tts, asr features from pyproject.toml
+RUN hatch env create
+
+# Install PyTorch with CUDA support (auto-detection)
+# The script checks for nvidia-smi; in CI it will install CPU version
+RUN bash scripts/install_torch.sh
+
+# Pre-accept Coqui TTS license to prevent interactive prompts
+# This creates the tos_agreed.txt file that Coqui checks for
+RUN bash scripts/accept_coqui_license.sh
+
+# Set environment variables for hatch
+ENV HATCH_ENV_TYPE_VIRTUAL_PATH=.venv \
+    PATH="/workspace/.venv/bin:$PATH"
+
+# Verify installation
+RUN python --version && \
+    pip --version && \
+    hatch --version && \
+    python -c "import torch; print(f'PyTorch {torch.__version__}')"
+
+# Default command
+CMD ["/bin/bash"]
