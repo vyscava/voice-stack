@@ -281,6 +281,7 @@ See `tests/` for cURL, SDK, and integration test coverage whenever you need conc
 ## Acknowledgements
 
 - Shout out to [SubGen](https://github.com/McCloudS/subgen), the Bazarr FastAPI project whose subtitle-friendly routing and schema design heavily influenced the Bazarr endpoints in this stack.
+- Shout out to [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) for the early inspiration around OpenAI-compatible ASR workflows and deployment ergonomics.
 
 ---
 

@@ -12,7 +12,7 @@ def test_bazarr_asr_json_format(asr_client: TestClient, sample_audio_bytes: byte
     """Test POST /v1/bazarr/asr with JSON output format using query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=json&language=en",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -31,7 +31,7 @@ def test_bazarr_asr_srt_format(asr_client: TestClient, sample_audio_bytes: bytes
     """Test POST /v1/bazarr/asr with SRT output format using query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=srt&language=en",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -45,7 +45,7 @@ def test_bazarr_asr_vtt_format(asr_client: TestClient, sample_audio_bytes: bytes
     """Test POST /v1/bazarr/asr with VTT output format using query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=vtt&language=en",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -61,7 +61,7 @@ def test_bazarr_asr_txt_format(asr_client: TestClient, sample_audio_bytes: bytes
     """Test POST /v1/bazarr/asr with TXT output format using query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=txt&language=en",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -75,7 +75,7 @@ def test_bazarr_asr_tsv_format(asr_client: TestClient, sample_audio_bytes: bytes
     """Test POST /v1/bazarr/asr with TSV output format using query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=tsv&language=en",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -89,7 +89,7 @@ def test_bazarr_asr_jsonl_format(asr_client: TestClient, sample_audio_bytes: byt
     """Test POST /v1/bazarr/asr with JSONL output format using query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=jsonl&language=en",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -103,7 +103,7 @@ def test_bazarr_asr_without_language(asr_client: TestClient, sample_audio_bytes:
     """Test that language parameter is optional with query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=json",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -118,7 +118,7 @@ def test_bazarr_asr_default_output_format(asr_client: TestClient, sample_audio_b
     """Test that default output format is TXT with query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr",  # No output parameter specified
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -132,7 +132,7 @@ def test_bazarr_detect_language(asr_client: TestClient, sample_audio_bytes: byte
     """Test POST /v1/bazarr/detect-language endpoint with query parameters."""
     response = asr_client.post(
         "/v1/bazarr/detect-language",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -151,7 +151,7 @@ def test_bazarr_detect_language_with_params(asr_client: TestClient, sample_audio
     """Test language detection with offset and length query parameters."""
     response = asr_client.post(
         "/v1/bazarr/detect-language?detect_lang_offset=0&detect_lang_length=5&video_file=/data/Movies/test.mp4",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -191,7 +191,7 @@ def test_bazarr_asr_segments_structure(asr_client: TestClient, sample_audio_byte
     """Test that segments have correct structure in JSON format with query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=json",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -214,7 +214,7 @@ def test_bazarr_asr_response_headers(asr_client: TestClient, sample_audio_bytes:
     """Test that response includes custom headers with query parameters."""
     response = asr_client.post(
         "/v1/bazarr/asr?output=json",
-        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+        files={"audio_file": ("test.wav", sample_audio_bytes, "audio/wav")},
     )
 
     assert response.status_code == 200
@@ -229,7 +229,7 @@ def test_bazarr_asr_with_different_audio_formats(asr_client: TestClient, sample_
     for ext in ["wav", "mp3", "ogg", "flac"]:
         response = asr_client.post(
             "/v1/bazarr/asr?output=json",
-            files={"file": (f"test.{ext}", sample_audio_bytes, f"audio/{ext}")},
+            files={"audio_file": (f"test.{ext}", sample_audio_bytes, f"audio/{ext}")},
         )
 
         # Should either succeed or fail gracefully
