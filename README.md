@@ -1,659 +1,311 @@
+# Voice Stack
 
-# 🗣️ Voice Stack — ASR + TTS Microservices
-
-Production-ready **speech services** with **Automatic Speech Recognition (ASR)** and **Text-to-Speech (TTS)** featuring OpenAI-compatible APIs.
-
-Designed for **local development** on macOS and **production deployment** on Linux (Debian 12 + NVIDIA GPU).
+Voice Stack is the speech stack I built for my own homelab so I could keep ASR and TTS workloads close to the data I care about—mostly Bazarr in my media server and my OpenWebUI containers so I can literally talk to my AI. It now doubles as a practical portfolio piece: a pair of FastAPI microservices, tuned for Debian 12 on bare metal with NVIDIA GPUs, but still easy to iterate on from a laptop. This README is the canonical entry point—installation, container builds, development workflow, and deep links to every supporting document all live here.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Key Features](#-key-features)
-- [Prerequisites](#-prerequisites)
-- [Development Setup](#-development-setup)
-- [Production Deployment (Systemd Services)](#-production-deployment-systemd-services)
-- [Configuration](#-configuration)
-- [Build & Packaging](#-build--packaging)
-- [Project Structure](#-project-structure)
-- [Common Commands](#-common-commands)
-- [API Endpoints](#-api-endpoints)
-- [Advanced Usage](#-advanced-usage)
-- [Testing](#-testing)
-- [Troubleshooting](#-troubleshooting)
-- [Documentation](#-documentation)
-- [Contributing](#-contributing)
-- [Performance](#-performance)
-- [Roadmap](#-roadmap)
-- [Technical Notes](#-technical-notes)
-- [License](#-license)
+- [Install as Debian Service (systemd)](#install-as-debian-service-systemd)
+- [Build the Production Container Image](#build-the-production-container-image)
+- [Development Environment and Workflow](#development-environment-and-workflow)
+- [Configuration Overview](#configuration-overview)
+- [Environment Variables (Services and Containers)](#environment-variables-services-and-containers)
+- [API Surface (OpenAI-Compatible Highlights)](#api-surface-openai-compatible-highlights)
+- [Reference Materials](#reference-materials)
+- [Repository Structure](#repository-structure)
+- [Licensing](#licensing)
 
 ---
 
-## 🚀 Key Features
+## Install as Debian Service (systemd)
 
-### ASR (Automatic Speech Recognition)
-- **OpenAI-compatible API**: Drop-in replacement for OpenAI's Whisper API
-- **Multiple engines**: Faster-Whisper and OpenAI Whisper
-- **Advanced features**:
-  - Voice Activity Detection (VAD) with Silero
-  - Language auto-detection
-  - Translation to English
-  - Word-level timestamps
-  - Verbose output mode with segments
-- **Supported formats**: WAV, MP3, M4A, FLAC, OGG (via FFmpeg)
+The project ships with scripted installers that provision isolated Hatch environments, accept the Coqui license, configure `.env`, and register long-running services. Use them whenever you want hands-free setup on Debian 11+/Ubuntu 20.04+.
 
-### TTS (Text-to-Speech)
-- **OpenAI-compatible API**: Compatible with OpenAI's TTS endpoint
-- **Coqui XTTS-v2**: Multi-lingual neural TTS
-- **Voice cloning**: Load custom `.wav` voice samples
-- **Streaming support**: Real-time audio generation with SSE
-- **Multiple formats**: MP3, OPUS, AAC, FLAC, WAV, PCM
+### Requirements
 
-### Infrastructure
-- **FastAPI**: High-performance async web framework
-- **Cross-platform**: macOS (Metal/CPU) and Linux (CUDA/CPU)
-- **Health checks**: Standard `/health`, `/healthz`, `/healthcheck` endpoints
-- **CORS**: Configurable cross-origin support
-- **Remote debugging**: Built-in debugpy support
-- **Hatch + Nox**: Modern Python toolchain for dev, test, and build
-- **CI/CD**: GitLab pipelines with testing and secret detection
+- Python 3.10+ with `pip`
+- `git`, `ffmpeg`, `libsndfile1`, `libportaudio2`, `build-essential`
+- Optional but recommended: CUDA 12.1+, cuDNN, and NVIDIA drivers ≥ 525 for GPU workloads
 
----
-
-## 🧰 Prerequisites
-
-### macOS (Development)
-- **Python 3.11+** (3.10 minimum)
-- **Hatch** (>=1.13) — `pip install hatch`
-- **Nox** (>=2024.4) — `pip install nox`
-- **pre-commit** (>=3.5) — `pip install pre-commit`
-- **FFmpeg** — `brew install ffmpeg`
-
-### Debian 12 (Production)
-- **Python 3.11+**
-- **FFmpeg** — `apt install ffmpeg`
-- **CUDA 12.x + cuDNN** (for GPU acceleration)
-- **NVIDIA drivers** (525+ recommended)
-- Optional: **Docker** for containerized deployment
-
----
-
-## 🧑‍💻 Development Setup
-
-1. **Clone the repository**
-   ```bash
-   git clone https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
-   cd voice-stack
-   ```
-
-2. **Install tooling (if not already)**
-   ```bash
-   pip install --upgrade hatch nox pre-commit
-   ```
-
-3. **Create and activate the dev environment**
-   ```bash
-   # 1. Install dependencies and create the virtual environment
-   hatch env create
-
-   # 2. Activate the environment
-   hatch shell
-   ```
-
-4. **Run ASR and TTS in development mode**
-   ```bash
-   # In separate terminals:
-   hatch run run_asr    # Starts on http://0.0.0.0:5001
-   hatch run run_tts    # Starts on http://0.0.0.0:5002
-   ```
-
-   Features:
-   - **Auto-reload** on code changes in `/src`
-   - **Interactive docs** at `/docs` (Swagger UI)
-   - **Health checks** at `/health`, `/healthz`, `/healthcheck`
-
-   For remote debugging:
-   ```bash
-   hatch run run_asr_dbg    # Debugpy on 0.0.0.0:5678
-   hatch run run_tts_dbg    # Debugpy on 0.0.0.0:5678
-   ```
-
-5. **Install pre-commit hooks (recommended)**
-   ```bash
-   pre-commit install
-   ```
-   Commits now run `nox -s fmt` (auto-format + import sort) and `nox -s lint` (Black check + Ruff).
-
-6. **Format, lint, and type-check code**
-   ```bash
-   hatch run fmt          # Auto-format with Black + Ruff
-   hatch run lint         # Check style and types
-   hatch run typecheck    # Run mypy
-   ```
-
-7. **Run tests**
-   ```bash
-   hatch run test         # Quick test run
-   hatch run cov          # With coverage report
-   ```
-
-8. **Deactivate environment**
-   ```bash
-   exit
-   ```
-
----
-
-## 🚀 Production Deployment (Systemd Services)
-
-For production deployment on Debian/Ubuntu Linux, Voice Stack provides automated systemd service installation scripts.
-
-### Quick Installation
+Install the prerequisites with the helper script:
 
 ```bash
-# Clone repository to your desired location
-cd /opt  # or any location you prefer
-git clone https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
+cd /opt
+git clone https://github.com/vyscava/voice-stack.git
 cd voice-stack
-
-# Install system dependencies
 sudo ./scripts/install_system_deps.sh
+```
 
-# Install ASR service
+### Install One or Both Services
+
+```bash
+# Automatic ASR installation (system service)
 sudo ./scripts/install-asr.sh
 
-# Install TTS service
+# Automatic TTS installation (system service)
 sudo ./scripts/install-tts.sh
+
+# To install as user services instead, omit sudo.
 ```
 
-### Service Management
+Each script will:
+
+1. Bootstrap Hatch if needed and create `.venv-asr`/`.venv-tts`
+2. Install PyTorch (CUDA-aware when GPUs are present)
+3. Render `.env` from the template and prompt for overrides when missing
+4. Register and start the systemd unit (`voice-stack-asr` or `voice-stack-tts`)
+
+### Manage, Inspect, Update
 
 ```bash
-# Start/Stop/Restart services
-sudo systemctl start voice-stack-asr
-sudo systemctl stop voice-stack-asr
-sudo systemctl restart voice-stack-asr
+# Health
+curl http://localhost:5001/health    # ASR
+curl http://localhost:5002/health    # TTS
 
-# View logs
+# Service lifecycle
+sudo systemctl status voice-stack-asr
+sudo systemctl restart voice-stack-tts
+
+# Logs
 sudo journalctl -u voice-stack-asr -f
 
-# Check service status
-sudo systemctl status voice-stack-asr
-```
-
-### Updating Services
-
-After pulling code changes:
-
-```bash
-cd /path/to/voice-stack
+# Updating after pulling new code
 git pull --rebase
 sudo ./scripts/update-asr.sh
 sudo ./scripts/update-tts.sh
 ```
 
-### Full Documentation
-
-For complete installation, configuration, and troubleshooting guides:
-
-📖 **[Service Installation Guide](scripts/SERVICE_INSTALLATION.md)**
-
-Topics covered:
-- Installation (system-wide or user-specific)
-- Configuration (.env setup)
-- GPU/CUDA configuration
-- Service management and monitoring
-- Updating and uninstalling services
-- Troubleshooting common issues
-- Advanced topics (Nginx proxy, custom paths, etc.)
+Troubleshooting, environment variable details, and uninstall steps are fully documented in `scripts/SERVICE_INSTALLATION.md`. Refer to that guide whenever you need to override the unit files, relocate model caches, or run behind a reverse proxy.
 
 ---
 
-## ⚙️ Configuration
+## Build the Production Container Image
 
-### Environment Variables
+The repository maintains a single production image (`Dockerfile`) that switches between ASR and TTS via `SERVICE_MODE`. CUDA runtimes are detected automatically when the container is launched with `--gpus`.
 
-Create a `.env` file or export variables:
+### Build
 
 ```bash
-# Service Configuration
-PROJECT_NAME="Voice Stack ASR"           # API title
-API_V1_STR="/v1"                        # API prefix
-CORS_ORIGINS="http://localhost:3000"    # Comma-separated origins
-
-# ASR Settings
-ASR_DEVICE="cpu"                        # "cuda" or "cpu"
-ASR_MODEL="base"                        # Whisper model: tiny/base/small/medium/large
-ASR_ENGINE="faster-whisper"             # "faster-whisper" or "whisper"
-ASR_VAD_ENABLED="true"                  # Enable Voice Activity Detection
-ASR_LANGUAGE=""                         # Force language (empty = auto-detect)
-
-# TTS Settings
-TTS_DEVICE="cpu"                        # "cuda" or "cpu"
-TTS_MODEL="tts_models/multilingual/multi-dataset/xtts_v2"
-TTS_VOICE_DIR="./voices"                # Directory for voice samples
-TTS_AUTO_LANG="true"                    # Auto language detection
-TTS_MAX_CHARS="180"                     # Max chars per TTS chunk
-TTS_SAMPLE_RATE="24000"                 # Output sample rate
-
-# Logging
-LOG_LEVEL="INFO"                        # DEBUG, INFO, WARNING, ERROR
-
-# Remote Debugging (optional)
-DEBUGPY_ENABLE="false"
-DEBUGPY_HOST="0.0.0.0"
-DEBUGPY_PORT="5678"
-DEBUGPY_WAIT_FOR_CLIENT="false"
+docker build -t voice-stack:latest .
 ```
 
-### Voice Samples for TTS
+### Run with CUDA
 
-Place `.wav` files in the `voices/` directory:
-```
-voices/
-  ├── speaker_en.wav    # English voice sample
-  ├── speaker_pt.wav    # Portuguese voice sample
-  └── speaker_es.wav    # Spanish voice sample
-```
-
-Reference voices in API calls using the filename (without extension).
-
----
-
-## 🧪 Build & Packaging
-
-### Build the project
 ```bash
-hatch build
-```
-This creates a wheel and source distribution under `dist/`.
+# ASR on GPU
+docker run --rm -d \
+  --gpus all \
+  -p 5001:5001 \
+  -e SERVICE_MODE=asr \
+  -e ASR_DEVICE=cuda \
+  voice-stack:latest
 
-### Run tests in isolation
+# TTS on GPU, mounting custom voices
+docker run --rm -d \
+  --gpus all \
+  -p 5002:5002 \
+  -e SERVICE_MODE=tts \
+  -e TTS_DEVICE=cuda \
+  -v $(pwd)/voices:/app/voices \
+  voice-stack:latest
+```
+
+### Quick Verification
+
 ```bash
-nox -s tests
-```
-This executes the full suite across the supported Python versions. For targeted runs (matching the CI split) you can use:
-```bash
-hatch run test-asr         # Unit tests for ASR
-hatch run test-tts         # Unit tests for TTS
-hatch run test-core        # Core-only tests
-hatch run test-utils       # Utility tests
-hatch run test-integration # Integration tests
-```
-
-### Format and lint with Nox
-```bash
-nox -s fmt lint
-```
-`fmt` mutates files using Black and Ruff fixes for import order; `lint` performs the non-mutating checks.
-
-### Nox sessions at a glance
-- `nox -s fmt` — auto-format via Black and Ruff import fixes
-- `nox -s lint` — format check + Ruff lint (read-only)
-- `nox -s typecheck` — run MyPy with the project configuration
-- `nox -s tests` — pytest suite under each configured Python interpreter
-- `nox -s ci` — convenience bundle (Black check, Ruff, MyPy, pytest)
-
-### Pre-commit hooks (recap)
-Hooks are installed in the development setup (step 5). Re-run `pre-commit install` if the repo’s hook configuration changes.
-
----
-
-## 📁 Project Structure
-
-```
-voice-stack/
-├── pyproject.toml              # Hatch project config + dependencies
-├── noxfile.py                  # Nox sessions for CI/test automation
-├── .gitlab-ci.yml              # GitLab CI/CD pipeline
-├── .clinerules/                # AI agent coding guidelines
-│   ├── 01-coding.md
-│   ├── 02-documentation.md
-│   ├── 03-infra-available.md
-│   └── 04-repo-mapping.md
-├── scripts/
-│   ├── build_repo_map.py       # Generate code base index
-│   └── repo_tokens.py          # Token analysis tool
-├── src/
-│   ├── asr/                    # ASR microservice
-│   │   ├── app.py             # FastAPI application
-│   │   ├── engine_factory.py  # Engine initialization
-│   │   ├── api/api_v1/        # API routes
-│   │   │   └── endpoints/
-│   │   │       ├── openai.py  # OpenAI-compatible endpoints
-│   │   │       └── bazarr.py  # Bazarr subtitle integration
-│   │   ├── engine/            # ASR engines
-│   │   │   ├── base.py
-│   │   │   ├── whisper.py
-│   │   │   └── fasterwhisper.py
-│   │   └── schemas/           # Pydantic models
-│   ├── tts/                    # TTS microservice
-│   │   ├── app.py
-│   │   ├── engine_factory.py
-│   │   ├── api/api_v1/
-│   │   │   └── endpoints/
-│   │   │       └── openai.py  # OpenAI-compatible endpoints
-│   │   ├── engine/
-│   │   │   ├── base.py
-│   │   │   └── coqui.py       # Coqui XTTS engine
-│   │   └── schemas/
-│   ├── core/                   # Shared core logic
-│   │   ├── settings.py        # Pydantic settings
-│   │   └── logging.py         # Structured logging
-│   └── utils/                  # Shared utilities
-│       ├── audio/             # FFmpeg, resampling, VAD
-│       ├── language/          # Language detection
-│       ├── queue_manager.py   # Task queueing
-│       └── text.py            # Text normalization
-├── tests/                      # Test suite (pytest)
-├── voices/                     # TTS voice samples (.wav)
-├── .docs/                      # Generated documentation
-│   ├── README.md
-│   └── repo_map.json          # Code base index
-└── README.md
-```
-
-## 📚 Documentation
-
-- [Architecture Overview](docs/ARCHITECTURE.md)
-- [Whisper Cheat Sheet](docs/WHISPER_CHEAT_SHEET.md)
-- [Generated Code Index](.docs/README.md)
-
----
-
-## 🧩 Common Commands
-
-| Task | Command |
-|------|----------|
-| **Development** |
-| Activate environment | `hatch shell` |
-| Start ASR service | `hatch run run_asr` |
-| Start TTS service | `hatch run run_tts` |
-| Start with debugger | `hatch run run_asr_dbg` / `run_tts_dbg` |
-| **Code Quality** |
-| Format code | `hatch run fmt` |
-| Lint code | `hatch run lint` |
-| Type check | `hatch run typecheck` |
-| Run tests | `hatch run test` |
-| Coverage report | `hatch run cov` |
-| **Build & Deploy** |
-| Build package | `hatch build` |
-| Generate code map | `python scripts/build_repo_map.py` |
-| **Nox (CI/Test)** |
-| Run all tests | `nox` |
-| Specific session | `nox -s tests` / `nox -s lint` |
-
----
-
-## 🔌 API Endpoints
-
-### ASR Service (Port 5001)
-
-**OpenAI-compatible:**
-- `POST /v1/audio/transcriptions` — Transcribe audio (minimal response)
-- `POST /v1/audio/transcriptions/verbose` — Transcribe with full metadata
-- `POST /v1/audio/translations` — Translate to English
-- `GET /v1/models` — List available models
-
-**Bazarr Integration:**
-- `POST /bazarr/asr` — Transcribe for subtitle generation (supports JSON, SRT, VTT, TXT, TSV, JSONL)
-- `POST /bazarr/detect-language` — Detect language from audio
-- `GET /bazarr/models` — List available models
-
-**Health:**
-- `GET /health`, `/healthz`, `/healthcheck` — Health check endpoints
-
-**Example (cURL):**
-```bash
-# OpenAI-compatible transcription
-curl -X POST "http://localhost:5001/v1/audio/transcriptions" \
+# Minimal ASR transcription
+curl -X POST http://localhost:5001/v1/audio/transcriptions \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@audio.mp3" \
-  -F "model=base" \
-  -F "language=en"
+  -F "file=@sample.mp3" \
+  -F "model=base"
 
-# Bazarr subtitle generation (JSON format)
-curl -X POST "http://localhost:5001/bazarr/asr?language=en&output=json" \
-  -F "file=@audio.mp3"
-
-# Bazarr subtitle generation (SRT format)
-curl -X POST "http://localhost:5001/bazarr/asr?language=en&output=srt" \
-  -F "file=@audio.mp3" \
-  --output subtitles.srt
-
-# Bazarr subtitle generation with all parameters
-curl -X POST "http://localhost:5001/bazarr/asr?language=en&output=srt&task=transcribe&video_file=/data/Movies/example.mp4" \
-  -F "file=@audio.mp3" \
-  --output subtitles.srt
-
-# Bazarr language detection (basic)
-curl -X POST "http://localhost:5001/bazarr/detect-language" \
-  -F "file=@audio.mp3"
-
-# Bazarr language detection with parameters
-curl -X POST "http://localhost:5001/bazarr/detect-language?encode=false&detect_lang_length=30&detect_lang_offset=0&video_file=/data/Movies/example.mp4" \
-  -F "file=@audio.mp3"
-```
-
-### TTS Service (Port 5002)
-
-**OpenAI-compatible:**
-- `POST /v1/audio/speech` — Generate speech from text
-- `GET /v1/models` — List available models
-- `GET /v1/models/{model_id}` — Get specific model info
-- `GET /v1/audio/voices` — List available voices
-
-**Example (cURL):**
-```bash
-curl -X POST "http://localhost:5002/v1/audio/speech" \
+# Minimal TTS generation
+curl -X POST http://localhost:5002/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{
-    "input": "Hello, world!",
-    "voice": "speaker_en",
-    "response_format": "mp3",
-    "speed": 1.0
-  }' \
+  -d '{"input": "Hello from Voice Stack", "voice": "speaker_en", "response_format": "mp3"}' \
   --output speech.mp3
 ```
 
-## 🔧 Advanced Usage
-
-### ASR with OpenAI SDK
-
-```python
-from openai import OpenAI
-
-# Point to local ASR service
-client = OpenAI(
-    api_key="not-needed",
-    base_url="http://localhost:5001/v1"
-)
-
-# Transcribe audio
-with open("audio.mp3", "rb") as f:
-    transcript = client.audio.transcriptions.create(
-        model="base",
-        file=f
-    )
-print(transcript.text)
-```
-
-### ASR with Bazarr Integration
-
-```python
-import requests
-
-# Transcribe for subtitles (JSON format with segments)
-url = "http://localhost:5001/bazarr/asr"
-params = {
-    "language": "en",
-    "output": "json",  # Options: json, srt, vtt, txt, tsv, jsonl
-    "task": "transcribe",  # or "translate"
-    "video_file": "/data/Movies/example.mp4"  # Optional, for logging
-}
-files = {"file": open("movie.mkv", "rb")}
-
-response = requests.post(url, params=params, files=files)
-subtitle_data = response.json()
-
-print(f"Detected language: {subtitle_data['language']}")
-for segment in subtitle_data['segments']:
-    print(f"[{segment['start']:.2f}s - {segment['end']:.2f}s] {segment['text']}")
-
-# Detect language only (basic)
-url = "http://localhost:5001/bazarr/detect-language"
-files = {"file": open("audio.mp3", "rb")}
-
-response = requests.post(url, files=files)
-lang_info = response.json()
-print(f"Language: {lang_info['language_code']} (confidence: {lang_info['confidence']})")
-
-# Detect language with parameters
-url = "http://localhost:5001/bazarr/detect-language"
-params = {
-    "encode": False,
-    "detect_lang_length": 30,
-    "detect_lang_offset": 0,
-    "video_file": "/data/Movies/example.mp4"
-}
-files = {"file": open("audio.mp3", "rb")}
-
-response = requests.post(url, params=params, files=files)
-lang_info = response.json()
-print(f"Language: {lang_info['language_code']} (confidence: {lang_info['confidence']})")
-```
-
-### TTS with OpenAI SDK
-
-```python
-from openai import OpenAI
-
-# TTS with local service
-client = OpenAI(
-    api_key="not-needed",
-    base_url="http://localhost:5002/v1"
-)
-
-response = client.audio.speech.create(
-    model="xtts_v2",
-    voice="speaker_en",
-    input="Hello from Voice Stack!"
-)
-response.stream_to_file("output.mp3")
-```
-
-### Docker Deployment
-
-```bash
-# Build services
-docker build -t voice-stack-asr -f Dockerfile.asr .
-docker build -t voice-stack-tts -f Dockerfile.tts .
-
-# Run with GPU support
-docker run -d --gpus all \
-  -p 5001:5001 \
-  -e ASR_DEVICE=cuda \
-  voice-stack-asr
-
-docker run -d --gpus all \
-  -p 5002:5002 \
-  -e TTS_DEVICE=cuda \
-  -v ./voices:/app/voices \
-  voice-stack-tts
-```
-
-## 🧪 Testing
-
-Run the test suite:
-```bash
-# All tests with coverage
-hatch run cov
-
-# Specific test file
-hatch run test tests/test_asr.py
-
-# With Nox (isolated environments)
-nox -s tests
-```
-
-## 🐛 Troubleshooting
-
-### CUDA Out of Memory
-- Reduce batch size in settings
-- Use smaller Whisper model (tiny/base instead of large)
-- Enable model offloading: `ASR_DEVICE=cpu`
-
-### Audio Format Not Supported
-- Ensure FFmpeg is installed: `ffmpeg -version`
-- Check supported formats: WAV, MP3, M4A, FLAC, OGG
-
-### Voice Clone Quality Issues
-- Use high-quality `.wav` samples (16kHz+, mono)
-- Sample should be 6-10 seconds long
-- Clear speech without background noise
-
-### Remote Debugging Not Working
-```bash
-# Enable debugpy in .env
-DEBUGPY_ENABLE=true
-DEBUGPY_HOST=0.0.0.0
-DEBUGPY_PORT=5678
-DEBUGPY_WAIT_FOR_CLIENT=true
-
-# Run service
-hatch run run_asr_dbg
-
-# Connect from VS Code (see .vscode/launch.json)
-```
-
-## 📚 Documentation
-
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — System design and architecture
-- **[WHISPER_CHEAT_SHEET.md](./WHISPER_CHEAT_SHEET.md)** — Whisper model guide
-- **[SERVICE_INSTALLATION.md](./scripts/SERVICE_INSTALLATION.md)** — Production deployment with systemd
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Follow coding standards: `hatch run fmt && hatch run lint`
-4. Write tests: `hatch run test`
-5. Commit changes: `git commit -m 'Add amazing feature'`
-6. Push to branch: `git push origin feature/amazing-feature`
-7. Open a Pull Request
-
-## 📊 Performance
-
-**ASR Benchmarks** (on NVIDIA RTX 4060 Ti):
-- Faster-Whisper (base): ~10x real-time
-- Faster-Whisper (large-v2): ~3x real-time
-- OpenAI Whisper (base): ~5x real-time
-
-**TTS Benchmarks**:
-- XTTS-v2: ~0.8-1.2s latency for first chunk
-- Streaming: Near real-time with chunking
-
-## 🛣️ Roadmap
-
-- [ ] Docker Compose setup
-- [ ] WebSocket streaming for ASR
-- [ ] Speaker diarization
-- [ ] Multi-language voice cloning
-- [ ] Prometheus metrics
-- [ ] Kubernetes deployment manifests
-- [ ] Voice sample management API
-- [ ] Batch processing endpoints
-
-## 🧠 Technical Notes
-
-- **Cross-platform**: Develop on macOS (Metal/CPU) → Deploy on Linux (CUDA)
-- **Voice samples**: Place in `/voices/` with naming convention `{speaker}_{lang}.wav`
-- **Production**: Use Gunicorn/Uvicorn with multiple workers
-- **Scaling**: Deploy ASR and TTS as separate services behind load balancer
+More involved deployment patterns—Compose files, CI images, release automation, and troubleshooting—are captured in `DOCKER_DEPLOYMENT.md`.
 
 ---
 
-## 📜 License
+## Development Environment and Workflow
 
-MIT License © 2025 Vitor Bordini Garbim
+Voice Stack was designed for repeatable local development with Hatch managing environments and Nox mirroring CI. The flow below keeps both ASR and TTS services runnable with hot reload while staying aligned with the automation that publishes releases.
+
+### Tooling Prerequisites
+
+| Platform | Requirements |
+| --- | --- |
+| macOS (dev) | Python 3.11+, `brew install ffmpeg`, `pip install --upgrade hatch nox pre-commit`, optional `uv` |
+| Debian/Ubuntu (dev/prod) | Python 3.11+, `apt install ffmpeg libsndfile1 libportaudio2`, CUDA 12.1+ for GPU |
+
+### Bootstrap Steps
+
+```bash
+git clone https://github.com/vyscava/voice-stack.git
+cd voice-stack
+python -m pip install --upgrade hatch nox pre-commit
+hatch env create          # creates the default dev environment
+pre-commit install
+```
+
+Run the services in separate shells:
+
+```bash
+hatch run run_asr
+hatch run run_tts
+```
+
+Both commands expose Swagger UI under `/docs` and reload automatically when code under `src/` changes.
+
+### Hatch Command Cheat Sheet
+
+| Purpose | Command |
+| --- | --- |
+| Launch dev shell | `hatch shell` |
+| Start ASR / TTS | `hatch run run_asr` / `hatch run run_tts` |
+| Start with debugpy | `hatch run run_asr_dbg` / `hatch run run_tts_dbg` |
+| Format code | `hatch run fmt` |
+| Ruff + lint checks | `hatch run lint` |
+| MyPy type checking | `hatch run typecheck` |
+| Tests (unit mix) | `hatch run test` |
+| Coverage suite | `hatch run cov` |
+
+### Nox Sessions
+
+`nox` mirrors the CI layout and is the recommended way to validate changes against multiple Python interpreters:
+
+- `nox -s fmt` — formatting (Black + Ruff import fixes)
+- `nox -s lint` — Ruff linting plus style enforcement
+- `nox -s typecheck` — MyPy using `pyproject.toml` settings
+- `nox -s tests` — full pytest matrix across configured Python versions
+- `nox -s ci` — convenience bundle for local CI parity
+
+### Recommended Development Loop
+
+1. Create or update feature branches normally (`git checkout -b feature/...`).
+2. Keep `.env` synced with `example.env` or the service installers if you need custom defaults.
+3. Run `hatch run fmt && hatch run lint` before committing; pre-commit hooks enforce the same pair.
+4. Execute the relevant `hatch run test-*` command (ASR, TTS, core, utils, integration) or just `nox -s tests` for wider coverage.
+5. When touching Docker or deployment files, rebuild locally (`docker-compose build`) so Compose + GPU flags remain valid.
+
+### Merge Request Workflow
+
+- After staging or committing work, run `pre-commit run` so the configured Nox-backed hooks reformat and lint the files touched in your change set.
+- If you need a repo-wide sweep—for example before a major release—use `pre-commit run --all-files` to execute the same Nox checkers across the entire tree.
+- Push only after these hooks pass locally; the GitLab pipeline runs the exact same tooling, so keeping them green avoids MR churn.
+
+---
+
+## Configuration Overview
+
+All runtime configuration is expressed through environment variables; both the installers and Docker entrypoint honor `.env` values. The most commonly tuned fields are:
+
+| Category | Variables |
+| --- | --- |
+| General API | `PROJECT_NAME`, `API_V1_STR`, `CORS_ORIGINS`, `LOG_LEVEL` |
+| ASR | `ASR_DEVICE`, `ASR_MODEL`, `ASR_ENGINE`, `ASR_VAD_ENABLED`, `ASR_LANGUAGE` |
+| TTS | `TTS_DEVICE`, `TTS_MODEL`, `TTS_VOICE_DIR`, `TTS_AUTO_LANG`, `TTS_SAMPLE_RATE`, `TTS_MAX_CHARS` |
+| Debug | `DEBUGPY_ENABLE`, `DEBUGPY_HOST`, `DEBUGPY_PORT`, `DEBUGPY_WAIT_FOR_CLIENT` |
+
+The `.env` generated by the install scripts includes inline comments. For hand-crafted environments, consult `scripts/SERVICE_INSTALLATION.md#configuration`.
+
+---
+
+## Environment Variables (Services and Containers)
+
+Both the systemd installers and Docker workflows ultimately rely on the same variable surface. Use [`scripts/.env.production.asr`](scripts/.env.production.asr) and [`scripts/.env.production.tts`](scripts/.env.production.tts) as the authoritative references when promoting changes across environments.
+
+### Service Installers (`.env` next to the code)
+
+| Scope | Key Variables | Notes |
+| --- | --- | --- |
+| Server/runtime | `ENV`, `HOST`, `ASR_PORT`/`TTS_PORT`, `LOG_LEVEL`, `CORS_ORIGINS` | Mirrors FastAPI settings regardless of service mode |
+| Engines | `ASR_ENGINE`, `ASR_MODEL`, `ASR_DEVICE`, `ASR_COMPUTE_TYPE`, `ASR_CPU_THREADS`, `ASR_NUM_OF_WORKERS` | CPU/GPU tuning plus model cache paths |
+| TTS specifics | `TTS_ENGINE`, `TTS_MODEL`, `TTS_DEVICE`, `TTS_VOICES_DIR`, `TTS_SAMPLE_RATE`, `TTS_MAX_CHARS`, `TTS_MIN_CHARS` | Voice cloning, chunking, and audio format controls |
+| Language controls | `ASR_LANGUAGE`, `TTS_DEFAULT_LANG`, `TTS_AUTO_LANG`, `TTS_LANG_HINT`, `TTS_FORCE_LANG` | Force or hint language detection |
+| Diagnostics | `DEBUGPY_ENABLE`, `DEBUGPY_HOST`, `DEBUGPY_PORT`, `DEBUGPY_WAIT_FOR_CLIENT` | Switch off for production services |
+
+Install scripts will prompt for overrides when `.env` is missing, but you can also copy the production templates directly and keep per-service overrides in the same file.
+
+### Docker/Compose (`SERVICE_MODE` driven)
+
+The container image reads the same `.env` values, but Compose provides sensible defaults in `docker-compose.yml`:
+
+| Container | Key Variables | Description |
+| --- | --- | --- |
+| Shared | `SERVICE_MODE` (`asr` or `tts`), `ENV`, `LOG_LEVEL`, `HOST`, `CORS_ORIGINS` | Determines which FastAPI app boots |
+| ASR | `ASR_PORT`, `ASR_ENGINE`, `ASR_DEVICE`, `ASR_MODEL`, `ASR_COMPUTE_TYPE`, `ASR_BEAM_SIZE`, `ASR_MAX_WORKERS` | Swap `ASR_DEVICE` to `cuda` when running with `--gpus all` |
+| TTS | `TTS_PORT`, `TTS_ENGINE`, `TTS_DEVICE`, `TTS_MODEL`, `TTS_SAMPLE_RATE`, `TTS_MAX_CHARS`, `TTS_MIN_CHARS`, `TTS_RETRY_STEPS`, `TTS_DEFAULT_LANG`, `TTS_AUTO_LANG`, `TTS_VOICES_DIR` | Mount `./voices` into `/app/voices` for custom clones |
+
+You can mount a single `.env` into the container (`- ./.env:/app/.env:ro`) to avoid duplicating values. Anything not explicitly set in Compose falls back to the defaults described in the production templates.
+
+---
+
+## API Surface (OpenAI + Bazarr Compatible)
+
+Both services maintain OpenAI-compatible routes for drop-in SDK use, while the ASR side exposes native Bazarr endpoints that I rely on in my media server stack. Health instrumentation also includes `/health/detailed` for resource and model telemetry.
+
+| Service | Endpoint | Notes |
+| --- | --- | --- |
+| ASR (OpenAI) | `POST /v1/audio/transcriptions` | Multipart uploads for Whisper transcription |
+| ASR (OpenAI) | `POST /v1/audio/transcriptions/verbose` | Segment-level metadata output |
+| ASR (OpenAI) | `POST /v1/audio/translations` | Translate to English |
+| ASR (Bazarr) | `POST /bazarr/asr` | Subtitle-friendly output formats (JSON, SRT, VTT, TXT, TSV, JSONL) |
+| ASR (Bazarr) | `POST /bazarr/detect-language` | Language detection with tunable offsets |
+| TTS (OpenAI) | `POST /v1/audio/speech` | Multi-format (MP3, OPUS, AAC, FLAC, WAV, PCM) generation |
+| TTS (OpenAI) | `GET /v1/audio/voices` | Enumerate cloned voice samples |
+| Both | `GET /v1/models` | Discover loaded models |
+| Both | `/health`, `/healthz`, `/healthcheck` | Liveness probes |
+| Both | `/health/detailed` | Exposes memory/swap usage, active concurrency slots, and model load state (see `src/asr/app.py` and `src/tts/app.py`) |
+
+See `tests/` for cURL, SDK, and integration test coverage whenever you need concrete payloads.
+
+---
+
+## Reference Materials
+
+- `scripts/SERVICE_INSTALLATION.md` — full systemd guide (installation, updates, troubleshooting, advanced networking)
+- `DOCKER_DEPLOYMENT.md` — Docker/Compose builds, CI images, release automation, and operational tips
+- `docs/ARCHITECTURE.md` — component breakdowns, request flows, and diagrams; use it when explaining the platform
+- `docs/CONCURRENCY_FEATURES.md` — thread-safety and queueing notes for high-throughput workloads
+- `docs/LOAD_TESTING.md` — methodology and reference numbers for stress tests
+- `docs/WHISPER_CHEAT_SHEET.md` — practical parameters for each Whisper model size
+- `.docs/README.md` — generated repository map linking symbols to files (useful when navigating large updates)
+
+---
+
+## Acknowledgements
+
+- Shout out to [SubGen](https://github.com/McCloudS/subgen), the Bazarr FastAPI project whose subtitle-friendly routing and schema design heavily influenced the Bazarr endpoints in this stack.
+
+---
+
+## Repository Structure
+
+```
+voice-stack/
+├── src/
+│   ├── asr/               # ASR microservice
+│   ├── tts/               # TTS microservice
+│   ├── core/              # Shared settings/logging
+│   └── utils/             # Audio, language, queues, text helpers
+├── scripts/               # Installers, system helpers, tooling automation
+├── docs/                  # Architecture, concurrency, load testing, cheat sheets
+├── voices/                # Sample voice seeds for TTS cloning
+├── tests/                 # Pytest suites (unit + integration)
+├── Dockerfile             # Unified production image
+├── Dockerfile.ci          # CI automation image
+├── docker-compose.yml     # Local multi-service orchestration
+├── pyproject.toml         # Hatch project file
+└── .gitlab-ci.yml         # Pipeline configuration
+```
+
+---
+
+## Licensing
+
+Voice Stack is released under the MIT License © 2025 Vitor Bordini Garbim. Building or distributing the TTS components also implies acceptance of the Coqui Public Model License; refer to `scripts/accept_coqui_license.sh` for the automated acceptance flow bundled with the project.
