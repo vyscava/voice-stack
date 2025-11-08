@@ -9,6 +9,7 @@ User=__SERVICE_USER__
 Group=__SERVICE_GROUP__
 WorkingDirectory=__INSTALL_DIR__
 Environment="PATH=__INSTALL_DIR__/.venv-tts/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="LD_LIBRARY_PATH=__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/torch/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cublas/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cuda_cupti/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cudnn/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cufft/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/curand/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cusolver/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cusparse/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/cusparselt/lib:__INSTALL_DIR__/.venv-tts/lib/python3.11/site-packages/nvidia/nvjitlink/lib"
 EnvironmentFile=__INSTALL_DIR__/.env
 ExecStart=__INSTALL_DIR__/.venv-tts/bin/uvicorn tts.app:app --app-dir __INSTALL_DIR__/src --host 0.0.0.0 --port 5002 --log-level info --timeout-keep-alive 300 --timeout-graceful-shutdown 30
 
