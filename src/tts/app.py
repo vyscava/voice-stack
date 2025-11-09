@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from core.error_handler import register_exception_handlers
 from core.logging import logger_tts as logger
 from core.middleware import ResourceGuardMiddleware
 from core.settings import get_settings
@@ -121,6 +122,10 @@ app = FastAPI(
     license_info={"name": "MIT License"},
     lifespan=app_init,
 )
+
+# Register exception handlers for consistent error responses
+register_exception_handlers(app)
+logger.info("Exception handlers registered")
 
 # Configure CORS (Cross-Origin Resource Sharing) settings
 if settings.CORS_ORIGINS:

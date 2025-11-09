@@ -9,21 +9,89 @@ import pytest
 
 
 @pytest.mark.unit
-def test_setup_logging_configures_basic_config() -> None:
-    """Test that setup_logging configures basicConfig with correct parameters."""
+def test_setup_logging_configures_root_logger() -> None:
+    """Test that setup_logging configures root logger with handler."""
     from core.logging import setup_logging
 
-    with patch("logging.basicConfig") as mock_basic_config:
-        setup_logging("DEBUG")
+    with (
+        patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler") as mock_stream_handler,
+    ):
+        mock_root = Mock()
+        mock_root.handlers = []
+        mock_handler = Mock()
+        mock_stream_handler.return_value = mock_handler
 
-        # Verify basicConfig was called with correct parameters
-        mock_basic_config.assert_called_once()
-        call_kwargs = mock_basic_config.call_args[1]
-        assert call_kwargs["level"] == "DEBUG"
-        assert "%(asctime)s" in call_kwargs["format"]
-        assert "%(levelname)" in call_kwargs["format"]
-        assert "%(name)s" in call_kwargs["format"]
-        assert "%(message)s" in call_kwargs["format"]
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                return mock_root
+            return Mock()
+
+        mock_get_logger.side_effect = get_logger_side_effect
+
+        setup_logging("DEBUG", use_json=False)
+
+        # Verify root logger was configured
+        mock_root.setLevel.assert_called_once_with("DEBUG")
+        mock_root.addHandler.assert_called_once_with(mock_handler)
+
+
+@pytest.mark.unit
+def test_setup_logging_uses_json_formatter_when_enabled() -> None:
+    """Test that setup_logging uses StructuredFormatter when use_json=True."""
+    from core.logging import StructuredFormatter, setup_logging
+
+    with (
+        patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler") as mock_stream_handler,
+    ):
+        mock_root = Mock()
+        mock_root.handlers = []
+        mock_handler = Mock()
+        mock_stream_handler.return_value = mock_handler
+
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                return mock_root
+            return Mock()
+
+        mock_get_logger.side_effect = get_logger_side_effect
+
+        setup_logging("INFO", use_json=True)
+
+        # Verify formatter was set on handler
+        mock_handler.setFormatter.assert_called_once()
+        formatter = mock_handler.setFormatter.call_args[0][0]
+        assert isinstance(formatter, StructuredFormatter)
+
+
+@pytest.mark.unit
+def test_setup_logging_uses_human_readable_formatter_by_default() -> None:
+    """Test that setup_logging uses HumanReadableFormatter by default."""
+    from core.logging import HumanReadableFormatter, setup_logging
+
+    with (
+        patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler") as mock_stream_handler,
+    ):
+        mock_root = Mock()
+        mock_root.handlers = []
+        mock_handler = Mock()
+        mock_stream_handler.return_value = mock_handler
+
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                return mock_root
+            return Mock()
+
+        mock_get_logger.side_effect = get_logger_side_effect
+
+        setup_logging("INFO", use_json=False)
+
+        # Verify formatter was set on handler
+        mock_handler.setFormatter.assert_called_once()
+        formatter = mock_handler.setFormatter.call_args[0][0]
+        assert isinstance(formatter, HumanReadableFormatter)
 
 
 @pytest.mark.unit
@@ -32,20 +100,64 @@ def test_setup_logging_sets_uvicorn_loggers() -> None:
     from core.logging import setup_logging
 
     with (
-        patch("logging.basicConfig"),
         patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler"),
     ):
-        mock_logger = Mock()
-        mock_get_logger.return_value = mock_logger
+        logger_mocks = {}
 
-        setup_logging("INFO")
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                mock = Mock()
+                mock.handlers = []
+                return mock
+            if name not in logger_mocks:
+                logger_mocks[name] = Mock()
+            return logger_mocks[name]
+
+        mock_get_logger.side_effect = get_logger_side_effect
+
+        setup_logging("INFO", use_json=False)
 
         # Verify uvicorn loggers were configured
-        expected_calls = ["uvicorn", "uvicorn.error", "uvicorn.access"]
-        assert mock_get_logger.call_count == len(expected_calls)
+        uvicorn_loggers = ["uvicorn", "uvicorn.error", "uvicorn.access"]
+        for logger_name in uvicorn_loggers:
+            assert logger_name in logger_mocks
+            logger_mocks[logger_name].setLevel.assert_called_with("INFO")
 
-        for logger_name in expected_calls:
-            mock_get_logger.assert_any_call(logger_name)
+
+@pytest.mark.unit
+def test_setup_logging_sets_third_party_library_levels() -> None:
+    """Test that setup_logging reduces noise from third-party libraries."""
+    from core.logging import setup_logging
+
+    with (
+        patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler"),
+    ):
+        logger_mocks = {}
+
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                mock = Mock()
+                mock.handlers = []
+                return mock
+            if name not in logger_mocks:
+                logger_mocks[name] = Mock()
+            return logger_mocks[name]
+
+        mock_get_logger.side_effect = get_logger_side_effect
+
+        setup_logging("INFO", use_json=False)
+
+        # Verify third-party libraries have reduced log levels
+        assert "faster_whisper" in logger_mocks
+        logger_mocks["faster_whisper"].setLevel.assert_called_with(logging.WARNING)
+
+        assert "torch" in logger_mocks
+        logger_mocks["torch"].setLevel.assert_called_with(logging.WARNING)
+
+        assert "transformers" in logger_mocks
+        logger_mocks["transformers"].setLevel.assert_called_with(logging.ERROR)
 
 
 @pytest.mark.unit
@@ -54,21 +166,24 @@ def test_setup_logging_converts_level_to_uppercase() -> None:
     from core.logging import setup_logging
 
     with (
-        patch("logging.basicConfig") as mock_basic_config,
         patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler"),
     ):
-        mock_logger = Mock()
-        mock_get_logger.return_value = mock_logger
+        mock_root = Mock()
+        mock_root.handlers = []
+
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                return mock_root
+            return Mock()
+
+        mock_get_logger.side_effect = get_logger_side_effect
 
         # Test with lowercase level
-        setup_logging("debug")
+        setup_logging("debug", use_json=False)
 
         # Verify level was uppercased
-        call_kwargs = mock_basic_config.call_args[1]
-        assert call_kwargs["level"] == "DEBUG"
-
-        # Verify uvicorn loggers got uppercase level
-        mock_logger.setLevel.assert_called_with("DEBUG")
+        mock_root.setLevel.assert_called_with("DEBUG")
 
 
 @pytest.mark.unit
@@ -80,18 +195,23 @@ def test_setup_logging_handles_different_levels() -> None:
 
     for level in levels:
         with (
-            patch("logging.basicConfig") as mock_basic_config,
             patch("logging.getLogger") as mock_get_logger,
+            patch("logging.StreamHandler"),
         ):
-            mock_logger = Mock()
-            mock_get_logger.return_value = mock_logger
+            mock_root = Mock()
+            mock_root.handlers = []
 
-            setup_logging(level)
+            def get_logger_side_effect(name=None, root=mock_root):
+                if name is None or name == "":
+                    return root
+                return Mock()
+
+            mock_get_logger.side_effect = get_logger_side_effect
+
+            setup_logging(level, use_json=False)
 
             # Verify correct level was set
-            call_kwargs = mock_basic_config.call_args[1]
-            assert call_kwargs["level"] == level.upper()
-            mock_logger.setLevel.assert_called_with(level.upper())
+            mock_root.setLevel.assert_called_with(level.upper())
 
 
 @pytest.mark.unit
@@ -139,23 +259,184 @@ def test_module_calls_setup_logging_on_import() -> None:
 
 
 @pytest.mark.unit
-def test_setup_logging_format_includes_all_components() -> None:
-    """Test that log format includes all expected components."""
+def test_human_readable_formatter_includes_all_components() -> None:
+    """Test that HumanReadableFormatter format includes all expected components."""
+    from core.logging import HumanReadableFormatter
+
+    formatter = HumanReadableFormatter(
+        fmt="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Create a log record
+    record = logging.LogRecord(
+        name="test.logger",
+        level=logging.INFO,
+        pathname="/test/path.py",
+        lineno=42,
+        msg="Test message",
+        args=(),
+        exc_info=None,
+    )
+
+    formatted = formatter.format(record)
+
+    # Verify all format components are present
+    assert "INFO" in formatted
+    assert "test.logger" in formatted
+    assert "Test message" in formatted
+
+
+@pytest.mark.unit
+def test_human_readable_formatter_includes_extra_fields() -> None:
+    """Test that HumanReadableFormatter includes extra fields."""
+    from core.logging import HumanReadableFormatter
+
+    formatter = HumanReadableFormatter(
+        fmt="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Create a log record with extra fields
+    record = logging.LogRecord(
+        name="test.logger",
+        level=logging.INFO,
+        pathname="/test/path.py",
+        lineno=42,
+        msg="Test message",
+        args=(),
+        exc_info=None,
+    )
+    record.request_id = "req_123"
+    record.endpoint = "/test"
+
+    formatted = formatter.format(record)
+
+    # Verify extra fields are included
+    assert "request_id=req_123" in formatted
+    assert "endpoint=/test" in formatted
+
+
+@pytest.mark.unit
+def test_structured_formatter_produces_json() -> None:
+    """Test that StructuredFormatter produces valid JSON."""
+    import json
+
+    from core.logging import StructuredFormatter
+
+    formatter = StructuredFormatter()
+
+    # Create a log record
+    record = logging.LogRecord(
+        name="test.logger",
+        level=logging.ERROR,
+        pathname="/test/path.py",
+        lineno=42,
+        msg="Test error message",
+        args=(),
+        exc_info=None,
+    )
+
+    formatted = formatter.format(record)
+
+    # Verify it's valid JSON
+    log_dict = json.loads(formatted)
+
+    # Verify required fields
+    assert log_dict["level"] == "ERROR"
+    assert log_dict["logger"] == "test.logger"
+    assert log_dict["message"] == "Test error message"
+    assert "timestamp" in log_dict
+
+
+@pytest.mark.unit
+def test_structured_formatter_includes_extra_fields() -> None:
+    """Test that StructuredFormatter includes extra fields in JSON."""
+    import json
+
+    from core.logging import StructuredFormatter
+
+    formatter = StructuredFormatter()
+
+    # Create a log record with extra fields
+    record = logging.LogRecord(
+        name="test.logger",
+        level=logging.INFO,
+        pathname="/test/path.py",
+        lineno=42,
+        msg="Test message",
+        args=(),
+        exc_info=None,
+    )
+    record.request_id = "req_123"
+    record.endpoint = "/test"
+    record.file_size = 1024
+
+    formatted = formatter.format(record)
+
+    # Verify it's valid JSON
+    log_dict = json.loads(formatted)
+
+    # Verify extra fields are included
+    assert log_dict["request_id"] == "req_123"
+    assert log_dict["endpoint"] == "/test"
+    assert log_dict["file_size"] == 1024
+
+
+@pytest.mark.unit
+def test_structured_formatter_includes_source_for_warnings() -> None:
+    """Test that StructuredFormatter includes source info for warnings and errors."""
+    import json
+
+    from core.logging import StructuredFormatter
+
+    formatter = StructuredFormatter()
+
+    # Create a warning record
+    record = logging.LogRecord(
+        name="test.logger",
+        level=logging.WARNING,
+        pathname="/test/path.py",
+        lineno=42,
+        msg="Test warning",
+        args=(),
+        exc_info=None,
+        func="test_function",
+    )
+
+    formatted = formatter.format(record)
+    log_dict = json.loads(formatted)
+
+    # Verify source info is included for warnings
+    assert "source" in log_dict
+    assert log_dict["source"]["file"] == "/test/path.py"
+    assert log_dict["source"]["line"] == 42
+    assert log_dict["source"]["function"] == "test_function"
+
+
+@pytest.mark.unit
+def test_setup_logging_removes_existing_handlers() -> None:
+    """Test that setup_logging clears existing handlers from root logger."""
     from core.logging import setup_logging
 
-    with patch("logging.basicConfig") as mock_basic_config:
-        setup_logging("INFO")
+    with (
+        patch("logging.getLogger") as mock_get_logger,
+        patch("logging.StreamHandler"),
+    ):
+        mock_root = Mock()
+        mock_existing_handler1 = Mock()
+        mock_existing_handler2 = Mock()
+        mock_root.handlers = [mock_existing_handler1, mock_existing_handler2]
 
-        call_kwargs = mock_basic_config.call_args[1]
-        format_str = call_kwargs["format"]
+        def get_logger_side_effect(name=None):
+            if name is None or name == "":
+                return mock_root
+            return Mock()
 
-        # Verify all format components are present
-        required_components = [
-            "%(asctime)s",  # Timestamp
-            "%(levelname)",  # Log level
-            "%(name)s",  # Logger name
-            "%(message)s",  # Log message
-        ]
+        mock_get_logger.side_effect = get_logger_side_effect
 
-        for component in required_components:
-            assert component in format_str, f"Format missing {component}"
+        setup_logging("INFO", use_json=False)
+
+        # Verify existing handlers were removed
+        mock_root.removeHandler.assert_any_call(mock_existing_handler1)
+        mock_root.removeHandler.assert_any_call(mock_existing_handler2)

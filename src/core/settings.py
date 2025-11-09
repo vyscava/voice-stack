@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # App / HTTP server
     # -------------------
     ENV: str = Field(default="dev", description="Environment name (dev|staging|prod)")
+    DEBUG: bool = Field(default=False, description="Enable debug mode (detailed error responses)")
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
     HOST: str = Field(default="0.0.0.0", description="Bind address")
 

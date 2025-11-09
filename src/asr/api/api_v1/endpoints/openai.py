@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import PlainTextResponse
 
 from asr.engine_factory import acquire_engine, get_audio_engine, release_engine
+from asr.exceptions import AudioDecodingError, TranscriptionError
 from asr.schemas.audio_engine import ListModelsResponse
 from asr.schemas.openai import (
     OpenAITranscription,
@@ -26,6 +27,7 @@ from asr.schemas.openai import (
     OpenAITranslationsRequest,
     TranscribeVerboseResponse,
 )
+from core.error_handler import ErrorContext
 from core.logging import logger_asr as logger
 from core.settings import get_settings
 
@@ -54,12 +56,32 @@ async def transcriptions(
     request: OpenAITranscriptionRequest = Depends(OpenAITranscriptionRequest.as_form),
     file: UploadFile = File(...),
 ) -> Any:
+    # Create error context for better logging
+    ctx = ErrorContext.create(endpoint="/audio/transcriptions")
+    ctx.add_file_info(
+        filename=file.filename,
+        size_bytes=file.size if hasattr(file, "size") and file.size else None,
+        content_type=file.content_type,
+    )
+    ctx.add_params(
+        {
+            "model": request.model,
+            "language": request.language,
+            "temperature": request.temperature,
+            "response_format": request.response_format,
+        }
+    )
+    ctx.add_model_info(model=settings.ASR_MODEL, engine=settings.ASR_ENGINE)
+
     # Acquire engine with concurrency control
     engine = await acquire_engine()
 
     try:
         # Read entire uploaded audio bytes into memory
         audio = await file.read()
+
+        # Log request details
+        logger.info("Processing transcription request", extra=ctx.to_log_dict())
 
         result = engine.transcribe_file(
             file_bytes=audio, filename=file.filename, request_language=request.language, temperature=request.temperature
@@ -72,10 +94,37 @@ async def transcriptions(
         # or we default to JSON
         return OpenAITranscription(**result.to_dict())
 
+    except (OSError, ValueError) as e:
+        # File decoding or validation errors (client error)
+        logger.error(
+            "Audio decoding failed",
+            extra={**ctx.to_log_dict(), "error_type": type(e).__name__},
+            exc_info=True,
+        )
+        raise AudioDecodingError(
+            message="Failed to decode audio file",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
+
     except Exception as e:
-        msg = f"OpenAI Transcription Error: {e}"
-        logger.exception(msg)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+        # Unexpected errors (server error)
+        logger.error(
+            "Transcription processing failed",
+            extra={
+                **ctx.to_log_dict(),
+                "error_type": type(e).__name__,
+                "error_module": type(e).__module__,
+            },
+            exc_info=True,
+        )
+        raise TranscriptionError(
+            message="Transcription processing failed",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
     finally:
         # Always release the concurrency slot
         release_engine()
@@ -102,11 +151,36 @@ async def transcriptions_verbose(
     Verbose response: returns the full dict from the engine, including:
       text, segments, language, language_probability, durations, timings, vad_used, model.
     """
+    # Create error context for better logging
+    ctx = ErrorContext.create(endpoint="/audio/transcriptions/verbose")
+    ctx.add_file_info(
+        filename=file.filename,
+        size_bytes=file.size if hasattr(file, "size") and file.size else None,
+        content_type=file.content_type,
+    )
+    ctx.add_params(
+        {
+            "model": request.model,
+            "language": request.language,
+            "task": request.task,
+            "beam_size": request.beam_size,
+            "temperature": request.temperature,
+            "best_of": request.best_of,
+            "word_timestamps": request.word_timestamps,
+            "vad": request.vad,
+            "response_format": request.response_format,
+        }
+    )
+    ctx.add_model_info(model=settings.ASR_MODEL, engine=settings.ASR_ENGINE)
+
     # Acquire engine with concurrency control
     engine = await acquire_engine()
 
     try:
         audio = await file.read()
+
+        # Log request details
+        logger.info("Processing verbose transcription request", extra=ctx.to_log_dict())
 
         result = engine.transcribe_file(
             file_bytes=audio,
@@ -127,10 +201,37 @@ async def transcriptions_verbose(
         # Full JSON payload for debugging/analytics.
         return TranscribeVerboseResponse(**result.to_dict())
 
+    except (OSError, ValueError) as e:
+        # File decoding or validation errors (client error)
+        logger.error(
+            "Audio decoding failed (verbose endpoint)",
+            extra={**ctx.to_log_dict(), "error_type": type(e).__name__},
+            exc_info=True,
+        )
+        raise AudioDecodingError(
+            message="Failed to decode audio file",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
+
     except Exception as e:
-        msg = f"OpenAI Transcription (Verbose) Error: {e}"
-        logger.exception(msg)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+        # Unexpected errors (server error)
+        logger.error(
+            "Verbose transcription processing failed",
+            extra={
+                **ctx.to_log_dict(),
+                "error_type": type(e).__name__,
+                "error_module": type(e).__module__,
+            },
+            exc_info=True,
+        )
+        raise TranscriptionError(
+            message="Verbose transcription processing failed",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
     finally:
         # Always release the concurrency slot
         release_engine()
@@ -161,11 +262,31 @@ async def translations(
       - Returns OpenAI minimal shape for JSON: {"text": "..."}.
       - If response_format="text", returns plain text instead of JSON.
     """
+    # Create error context for better logging
+    ctx = ErrorContext.create(endpoint="/audio/translations")
+    ctx.add_file_info(
+        filename=file.filename,
+        size_bytes=file.size if hasattr(file, "size") and file.size else None,
+        content_type=file.content_type,
+    )
+    ctx.add_params(
+        {
+            "model": request.model,
+            "task": "translate",
+            "temperature": request.temperature,
+            "response_format": request.response_format,
+        }
+    )
+    ctx.add_model_info(model=settings.ASR_MODEL, engine=settings.ASR_ENGINE)
+
     # Acquire engine with concurrency control
     engine = await acquire_engine()
 
     try:
         audio = await file.read()
+
+        # Log request details
+        logger.info("Processing translation request", extra=ctx.to_log_dict())
 
         result = engine.transcribe_file(
             file_bytes=audio,
@@ -181,10 +302,37 @@ async def translations(
 
         return OpenAITranscription(**result.to_dict())
 
+    except (OSError, ValueError) as e:
+        # File decoding or validation errors (client error)
+        logger.error(
+            "Audio decoding failed (translation endpoint)",
+            extra={**ctx.to_log_dict(), "error_type": type(e).__name__},
+            exc_info=True,
+        )
+        raise AudioDecodingError(
+            message="Failed to decode audio file",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
+
     except Exception as e:
-        msg = f"OpenAI Translation Error: {e}"
-        logger.exception(msg)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg) from e
+        # Unexpected errors (server error)
+        logger.error(
+            "Translation processing failed",
+            extra={
+                **ctx.to_log_dict(),
+                "error_type": type(e).__name__,
+                "error_module": type(e).__module__,
+            },
+            exc_info=True,
+        )
+        raise TranscriptionError(
+            message="Translation processing failed",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
     finally:
         # Always release the concurrency slot
         release_engine()

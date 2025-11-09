@@ -4,11 +4,13 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, Query, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from asr.engine_factory import acquire_engine, get_audio_engine, release_engine
+from asr.exceptions import AudioDecodingError, LanguageDetectionError, TranscriptionError
 from asr.schemas.audio_engine import DetectedLanguage, ListModelsResponse, Output
+from core.error_handler import ErrorContext
 from core.logging import logger_asr as logger
 from core.settings import get_settings
 
@@ -74,6 +76,12 @@ async def bazarr_asr(
      JSON shape (when output=json):
       { "language": "en", "segments": [ { "start": 0.0, "end": 1.2, "text": "..." }, ... ] }
     """
+    # default to TXT if output is None (defensive)
+    output_format: Output = output or Output.TXT
+
+    # Create error context for better logging
+    ctx = ErrorContext.create(endpoint="/bazarr/asr")
+
     # Acquire engine with concurrency control
     engine = await acquire_engine()
 
@@ -82,18 +90,24 @@ async def bazarr_asr(
         audio = await audio_file.read()
         size_b = len(audio)
 
-        # default to TXT if output is None (defensive)
-        output_format: Output = output or Output.TXT
-
-        logger.info(
-            "ASR/Bazarr request: filename=%s video_file=%s size=%dB lang_hint=%s output=%s task=%s",
-            audio_file.filename,
-            video_file,
-            size_b,
-            language,
-            output_format,
-            task,
+        ctx.add_file_info(
+            filename=audio_file.filename,
+            size_bytes=size_b,
+            content_type=audio_file.content_type,
         )
+        ctx.add_params(
+            {
+                "task": task,
+                "language": language,
+                "output_format": str(output_format),
+                "video_file": video_file,
+                "beam_size": 5,
+                "temperature": 0.0,
+            }
+        )
+        ctx.add_model_info(model=settings.ASR_MODEL, engine=settings.ASR_ENGINE)
+
+        logger.info("Bazarr ASR request", extra=ctx.to_log_dict())
 
         result = engine.transcribe_file(
             file_bytes=audio,
@@ -107,9 +121,39 @@ async def bazarr_asr(
         _track_request("/asr", 200)
         return engine.helper_write_output(file=audio_file, result=result, output=output_format)
 
+    except (OSError, ValueError) as e:
+        # File decoding or validation errors (client error)
+        _track_request("/asr", 422)
+        logger.error(
+            "Audio decoding failed (Bazarr endpoint)",
+            extra={**ctx.to_log_dict(), "error_type": type(e).__name__},
+            exc_info=True,
+        )
+        raise AudioDecodingError(
+            message="Failed to decode audio file",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
+
     except Exception as e:
+        # Unexpected errors (server error)
         _track_request("/asr", 500)
-        raise HTTPException(status_code=500, detail=f"Bazarr ASR error: {e}") from e
+        logger.error(
+            "Bazarr ASR processing failed",
+            extra={
+                **ctx.to_log_dict(),
+                "error_type": type(e).__name__,
+                "error_module": type(e).__module__,
+            },
+            exc_info=True,
+        )
+        raise TranscriptionError(
+            message="Bazarr ASR processing failed",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
     finally:
         # Always release the concurrency slot
         release_engine()
@@ -137,19 +181,31 @@ async def detect_language(
     """
     Detect the Language of Audio for Bazarr
     """
+    # Create error context for better logging
+    ctx = ErrorContext.create(endpoint="/bazarr/detect-language")
+
     # Acquire engine with concurrency control
     engine = await acquire_engine()
 
     try:
         audio = await audio_file.read()
+        size_b = len(audio)
 
-        logger.info(
-            "Detect Language request: filename=%s video_file=%s detect_lang_length=%s detect_lang_offset=%s",
-            audio_file.filename,
-            video_file,
-            detect_lang_length,
-            detect_lang_offset,
+        ctx.add_file_info(
+            filename=audio_file.filename,
+            size_bytes=size_b,
+            content_type=audio_file.content_type,
         )
+        ctx.add_params(
+            {
+                "detect_lang_length": detect_lang_length,
+                "detect_lang_offset": detect_lang_offset,
+                "video_file": video_file,
+            }
+        )
+        ctx.add_model_info(model=settings.ASR_MODEL, engine=settings.ASR_ENGINE)
+
+        logger.info("Bazarr language detection request", extra=ctx.to_log_dict())
 
         result = engine.detect_language_file(
             file_bytes=audio,
@@ -160,9 +216,40 @@ async def detect_language(
 
         _track_request("/detect-language", 200)
         return DetectedLanguage(**result.to_dict())
+
+    except (OSError, ValueError) as e:
+        # File decoding or validation errors (client error)
+        _track_request("/detect-language", 422)
+        logger.error(
+            "Audio decoding failed (language detection endpoint)",
+            extra={**ctx.to_log_dict(), "error_type": type(e).__name__},
+            exc_info=True,
+        )
+        raise AudioDecodingError(
+            message="Failed to decode audio file",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
+
     except Exception as e:
+        # Unexpected errors (server error)
         _track_request("/detect-language", 500)
-        raise HTTPException(status_code=500, detail=f"ASR error: {e}") from e
+        logger.error(
+            "Language detection failed",
+            extra={
+                **ctx.to_log_dict(),
+                "error_type": type(e).__name__,
+                "error_module": type(e).__module__,
+            },
+            exc_info=True,
+        )
+        raise LanguageDetectionError(
+            message="Language detection failed",
+            details=f"{type(e).__name__}: {str(e)}",
+            context=ctx.to_dict(),
+            original_exception=e,
+        ) from e
     finally:
         # Always release the concurrency slot
         release_engine()
