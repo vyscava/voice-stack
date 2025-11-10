@@ -1,3 +1,4 @@
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -6,6 +7,8 @@ from typing import Any, cast
 import ffmpeg
 import numpy as np
 import numpy.typing as npt
+
+logger = logging.getLogger(__name__)
 
 # Known audio file extensions (lowercase)
 AUDIO_EXTENSIONS: tuple[str, ...] = (
@@ -153,14 +156,26 @@ def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_ou
     # Run FFmpeg pipeline:
     #   - Feed raw_bytes to stdin
     #   - Capture stdout (decoded PCM bytes)
-    #   - Capture stderr (logs, ignored here)
-    pcm_bytes, _ = ffmpeg.run(
-        stream,
-        capture_stdout=True,
-        capture_stderr=True,
-        input=raw_bytes,
-        cmd="ffmpeg",
-    )
+    #   - Capture stderr (logs for debugging)
+    try:
+        pcm_bytes, stderr_bytes = ffmpeg.run(
+            stream,
+            capture_stdout=True,
+            capture_stderr=True,
+            input=raw_bytes,
+            cmd="ffmpeg",
+        )
+    except ffmpeg.Error as e:
+        # Extract stderr for detailed error logging
+        stderr_output = e.stderr.decode("utf-8", "ignore") if e.stderr else "No stderr output"
+        logger.warning(
+            "ffmpeg-python decode failed: input_format=%s, use_alt_output=%s, stderr:\n%s",
+            input_format,
+            use_alt_output,
+            stderr_output,
+        )
+        # Re-raise with enhanced error message
+        raise RuntimeError(f"ffmpeg-python decode failed (format={input_format}): {stderr_output}") from e
 
     # Interpret the returned PCM bytes as 16-bit signed integers.
     audio_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -202,8 +217,14 @@ def _ffmpeg_cli_decode(raw_bytes: bytes) -> npt.NDArray[np.int16]:
         ]
         proc = subprocess.run(cmd, capture_output=True)
         if proc.returncode != 0:
-            err = proc.stderr.decode("utf-8", "ignore")
-            raise RuntimeError(f"ffmpeg CLI decode failed:\n{err}")
+            stderr_output = proc.stderr.decode("utf-8", "ignore")
+            logger.error(
+                "ffmpeg CLI decode failed (return code %d). Command: %s\nStderr:\n%s",
+                proc.returncode,
+                " ".join(cmd),
+                stderr_output,
+            )
+            raise RuntimeError(f"ffmpeg CLI decode failed (return code {proc.returncode}):\n{stderr_output}")
 
         pcm_bytes = fout.read()
         audio_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -249,6 +270,16 @@ def decode_with_ffmpeg(
     # Checking if we can normalize the file format hint
     norm = _resolve_input_format(fmt_hint)
 
+    # Log the attempt being made
+    attempt_desc = [
+        "ffmpeg-python (no format)",
+        f"ffmpeg-python (format={norm})",
+        f"ffmpeg-python alt (format={norm})",
+        "ffmpeg CLI",
+    ]
+    if _attempt < len(attempt_desc):
+        logger.debug("Audio decode attempt %d/%d: %s", _attempt + 1, _max_attempts, attempt_desc[_attempt])
+
     # Determine strategy for this attempt
     try:
         if _attempt == 0:
@@ -268,15 +299,30 @@ def decode_with_ffmpeg(
         # Dividing by 32768.0 maps:
         #   -32768 → -1.0
         #   +32767 → +0.99997
+        logger.debug("Audio decode successful on attempt %d/%d", _attempt + 1, _max_attempts)
         return (audio_i16.astype(np.float32) / 32768.0, 16000)
 
     except ffmpeg.Error:
         # Recursive step: advance attempt
+        logger.debug("Attempt %d failed with ffmpeg.Error, trying next method", _attempt + 1)
         return decode_with_ffmpeg(
             raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
         )
-    except Exception:
+    except RuntimeError as e:
+        # RuntimeError from our decode functions - log and re-raise if last attempt
+        if _attempt >= _max_attempts - 1:
+            logger.error("All audio decode attempts failed. Last error: %s", str(e))
+            raise
+        logger.debug("Attempt %d failed with RuntimeError, trying next method", _attempt + 1)
+        return decode_with_ffmpeg(
+            raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
+        )
+    except Exception as e:
         # If a non-ffmpeg error happens, still advance attempts (keeps behavior consistent)
+        if _attempt >= _max_attempts - 1:
+            logger.error("All audio decode attempts failed. Last error: %s", str(e))
+            raise
+        logger.debug("Attempt %d failed with %s, trying next method", _attempt + 1, type(e).__name__)
         return decode_with_ffmpeg(
             raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
         )
