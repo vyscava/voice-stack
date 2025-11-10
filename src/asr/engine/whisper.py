@@ -148,10 +148,11 @@ class ASRWhisperTorch(ASRBase):
         audio_f32, _ = resample_to_16k_mono(audio_f32=audio_f32, sr=sr)
         duration_input = float(audio_f32.size) / 16000.0
 
-        # Optional VAD (your helper uses Silero and returns float32 @ 16k)
+        # Optional VAD (your helper uses Silero and returns float32 @ 16k) and capture timestamps
         vad_used = False
+        vad_segments: list[dict[str, float]] = []
         if props.use_vad:
-            audio_f32, vad_used = self.helper_apply_vad(audio_f32=audio_f32)
+            audio_f32, vad_used, vad_segments = self.helper_apply_vad(audio_f32=audio_f32)
 
         # Ensure 1-D contiguous float32 for Whisper
         audio_f32 = np.ascontiguousarray(audio_f32.astype(np.float32).reshape(-1))
@@ -184,10 +185,18 @@ class ASRWhisperTorch(ASRBase):
             if not text_piece:
                 continue
             parts.append(text_piece)
+
+            # Map timestamps back to original timeline if VAD was applied
+            start_time = float(s.get("start", 0.0))
+            end_time = float(s.get("end", 0.0))
+            if vad_used and vad_segments:
+                start_time = self.helper_map_compressed_to_original_timeline(start_time, vad_segments)
+                end_time = self.helper_map_compressed_to_original_timeline(end_time, vad_segments)
+
             segments.append(
                 {
-                    "start": float(s.get("start", 0.0)),
-                    "end": float(s.get("end", 0.0)),
+                    "start": start_time,
+                    "end": end_time,
                     "text": text_piece,
                 }
             )
@@ -211,6 +220,7 @@ class ASRWhisperTorch(ASRBase):
             vad_used=vad_used,
             engine=getattr(settings, "ASR_ENGINE", "whisper"),
             model=getattr(settings, "ASR_MODEL", "base"),
+            vad_segments=vad_segments,
         )
 
         # Save in cache
@@ -267,16 +277,18 @@ class ASRWhisperTorch(ASRBase):
 
         duration_input = float(n) / sr_hz
 
-        # Optional VAD
+        # Optional VAD and capture timestamps
         vad_used = False
+        vad_segments: list[dict[str, float]] = []
         pre_vad = audio_f32
         if props.use_vad:
-            audio_f32, vad_used = self.helper_apply_vad(audio_f32=audio_f32)
+            audio_f32, vad_used, vad_segments = self.helper_apply_vad(audio_f32=audio_f32)
 
         # Ensure minimum duration for stability; else revert pre-VAD
         if audio_f32.shape[0] < int(0.5 * sr_hz):
             audio_f32 = pre_vad
             vad_used = False
+            vad_segments = []
 
         # 1-D contiguous float32
         audio_f32 = np.ascontiguousarray(audio_f32.astype(np.float32).reshape(-1))
@@ -285,7 +297,7 @@ class ASRWhisperTorch(ASRBase):
         # Whisper language detection needs a log-mel spectrogram
         t_asr = time.time()
         mel = whisper.log_mel_spectrogram(audio_f32, padding=0)
-        mel = mel.to(self.device) if hasattr(mel, "to") else mel  # make sure it’s on the model device
+        mel = mel.to(self.device) if hasattr(mel, "to") else mel  # make sure it's on the model device
 
         # detect_language returns (lang, prob)
         lang_code, lang_prob = self.model.detect_language(mel)
@@ -304,6 +316,7 @@ class ASRWhisperTorch(ASRBase):
             vad_used=vad_used,
             engine=getattr(settings, "ASR_ENGINE", "whisper-torch"),
             model=getattr(settings, "ASR_MODEL", "base"),
+            vad_segments=vad_segments,
         )
 
         # Cache save
