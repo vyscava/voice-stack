@@ -402,14 +402,14 @@ def apply_vad_silero(
     silero_model: Any,
     get_speech_timestamps_fn: Any,
     log: logging.Logger,
-) -> npt.NDArray[np.int16]:
+) -> tuple[npt.NDArray[np.int16], list[dict[str, float]]]:
     """
-    Apply Silero VAD to PCM16 mono audio and return speech-only PCM16.
+    Apply Silero VAD to PCM16 mono audio and return speech-only PCM16 with timestamps.
 
     Contract
     --------
     - Input: PCM16 mono, sample rate `sr` (any). If `sr != 16000`, we resample to 16 kHz.
-    - Output: PCM16 mono with non-speech removed (concatenated back-to-back).
+    - Output: Tuple of (PCM16 mono with non-speech removed, list of speech segment timestamps)
 
     Device selection and fallbacks
     ------------------------------
@@ -429,7 +429,8 @@ def apply_vad_silero(
 
     Fail-safe behavior
     ------------------
-    - If the model/timestamps function is None, or any error occurs, we return the original `pcm16`.
+    - If the model/timestamps function is None, or any error occurs, we return the original `pcm16`
+      with empty timestamps list.
 
     Parameters
     ----------
@@ -446,11 +447,14 @@ def apply_vad_silero(
 
     Returns
     -------
-    np.ndarray (int16, (M,))
-        Speech-only PCM16. If VAD unavailable/failed, returns input unchanged.
+    tuple[np.ndarray, list[dict]]
+        - Speech-only PCM16 (int16, (M,)). If VAD unavailable/failed, returns input unchanged.
+        - List of speech segments with timestamps in seconds: [{"start": float, "end": float}, ...]
+          These timestamps are relative to the original audio (before VAD processing).
+          Empty list if VAD was not applied or failed.
     """
     if silero_model is None or get_speech_timestamps_fn is None:
-        return pcm16
+        return pcm16, []
 
     try:
         import torch
@@ -504,7 +508,7 @@ def apply_vad_silero(
             # If it's a torch.device object or similar, stringify may have returned 'device(type=\'cpu\')'
             exec_device = "cpu"
 
-        def _run_on_device(device: str) -> npt.NDArray[np.int16]:
+        def _run_on_device(device: str) -> tuple[npt.NDArray[np.int16], list[dict[str, float]]]:
             """
             Attempt the full pipeline on the requested device.
             Falls back to CPU at the caller if any op fails here.
@@ -535,14 +539,18 @@ def apply_vad_silero(
                     x = torch.from_numpy(y).to(device=device)
                     _sr = 16000
 
-            # 3) Run Silero to get speech timestamps
+            # 3) Run Silero to get speech timestamps (returns sample indices)
             with torch.no_grad():
                 ts = get_speech_timestamps_fn(x, silero_model, sampling_rate=_sr)
 
-            # 4) Stitch speech segments and convert back to PCM16
+            # 4) Convert timestamps from sample indices to seconds (for original timeline reference)
+            #    These timestamps are relative to the 16kHz resampled audio, which matches the original timeline
+            timestamps_sec = [{"start": float(t["start"]) / 16000.0, "end": float(t["end"]) / 16000.0} for t in ts]
+
+            # 5) Stitch speech segments and convert back to PCM16
             speech_np_f32 = _concat_chunks_numpy(x.detach().to("cpu").numpy(), ts)
             speech_i16 = (np.clip(speech_np_f32, -1.0, 1.0) * 32767.0).astype(np.int16)
-            return speech_i16
+            return speech_i16, timestamps_sec
 
         # Try on the model's device; if it fails (unsupported op), retry on CPU.
         try:
@@ -559,9 +567,9 @@ def apply_vad_silero(
             raise  # will be caught by outer except
 
     except Exception as e:
-        # Any failure should not break the ASR pipeline; just return original audio.
+        # Any failure should not break the ASR pipeline; just return original audio with no timestamps.
         log.warning("[VAD:silero] error, returning original audio: %s", e)
-        return pcm16
+        return pcm16, []
 
 
 def wav_bytes_to_pcm16le_bytes(wav_bytes: bytes) -> bytes:

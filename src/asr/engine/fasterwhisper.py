@@ -99,13 +99,14 @@ class ASRFasterWhisper(ASRBase):
         audio_f32, _ = resample_to_16k_mono(audio_f32=audio_f32, sr=sr)
         duration_input = float(audio_f32.size) / 16000.0
 
-        # Apply VAD if requested
+        # Apply VAD if requested and capture speech segment timestamps
         vad_used = False
+        vad_segments: list[dict[str, float]] = []
         if props.use_vad:
-            audio_f32, vad_used = self.helper_apply_vad(audio_f32=audio_f32)
+            audio_f32, vad_used, vad_segments = self.helper_apply_vad(audio_f32=audio_f32)
 
         # Now lets make sure the audio is in a single dimmension and is stored
-        # contiguously in memory (no gaps or “strides”).
+        # contiguously in memory (no gaps or "strides").
         audio_f32 = np.ascontiguousarray(audio_f32.astype(np.float32).reshape(-1))
         duration_after_vad = float(audio_f32.size) / 16000.0
 
@@ -136,10 +137,18 @@ class ASRFasterWhisper(ASRBase):
 
         # Putting together what the model returned
         for seg in segments_iter:
-            # Each seg has .start, .end, .text
+            # Each seg has .start, .end, .text from Whisper (relative to compressed audio if VAD was used)
             text_piece = (seg.text or "").strip()
             parts.append(text_piece)
-            segments.append({"start": float(seg.start), "end": float(seg.end), "text": text_piece})
+
+            # Map timestamps back to original timeline if VAD was applied
+            start_time = float(seg.start)
+            end_time = float(seg.end)
+            if vad_used and vad_segments:
+                start_time = self.helper_map_compressed_to_original_timeline(start_time, vad_segments)
+                end_time = self.helper_map_compressed_to_original_timeline(end_time, vad_segments)
+
+            segments.append({"start": start_time, "end": end_time, "text": text_piece})
 
         # Joining all text pieces to have a single string
         full_text = " ".join(parts).strip()
@@ -161,6 +170,7 @@ class ASRFasterWhisper(ASRBase):
             vad_used=vad_used,
             engine=getattr(settings, "ASR_ENGINE", "UNKNOWN"),
             model=getattr(settings, "ASR_MODEL", "base"),
+            vad_segments=vad_segments,
         )
 
         if self.cache_enabled and raw_bytes is not None:
@@ -223,14 +233,16 @@ class ASRFasterWhisper(ASRBase):
 
         # Apply VAD if requested
         vad_used = False
+        vad_segments: list[dict[str, float]] = []
         pre_vad_audio = audio_f32
         if props.use_vad:
-            audio_f32, vad_used = self.helper_apply_vad(audio_f32=audio_f32)
+            audio_f32, vad_used, vad_segments = self.helper_apply_vad(audio_f32=audio_f32)
 
         # Enforce a tiny minimum duration to keep the detector robust (skip VAD if too short)
         if audio_f32.shape[0] < int(0.5 * sr_hz):  # < 0.5s
             audio_f32 = pre_vad_audio  # revert to pre-VAD if that helps
             vad_used = False
+            vad_segments = []
 
         # Now lets make sure the audio is in a single dimmension and is stored
         # contiguously in memory (no gaps or “strides”).
@@ -266,6 +278,7 @@ class ASRFasterWhisper(ASRBase):
             vad_used=vad_used,
             engine=getattr(settings, "ASR_ENGINE", "UNKNOWN"),
             model=getattr(settings, "ASR_MODEL", "base"),
+            vad_segments=vad_segments,
         )
 
         if self.cache_enabled and raw_bytes is not None:

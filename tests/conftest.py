@@ -229,6 +229,7 @@ def mock_asr_engine(mock_asr_result: dict[str, Any]) -> Mock:
         vad_used=True,
         engine="faster-whisper",
         model="base",
+        vad_segments=[],
     )
 
     # Create proper DetectLanguageResult object
@@ -244,6 +245,7 @@ def mock_asr_engine(mock_asr_result: dict[str, Any]) -> Mock:
         vad_used=True,
         engine="faster-whisper",
         model="base",
+        vad_segments=[],
     )
 
     # Create a mock that inherits helper methods from ASRBase

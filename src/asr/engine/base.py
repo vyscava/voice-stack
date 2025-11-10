@@ -64,6 +64,7 @@ class _BaseReturn:
     vad_used: bool
     engine: str
     model: str
+    vad_segments: list[dict[str, float]]  # Speech segments from VAD: [{"start": float, "end": float}, ...]
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.__dict__)
@@ -486,14 +487,27 @@ class ASRBase(ABC):
         )
         return h.hexdigest()
 
-    def helper_apply_vad(self, *, audio_f32: npt.NDArray[np.float32]) -> tuple[npt.NDArray[np.float32], bool]:
+    def helper_apply_vad(
+        self, *, audio_f32: npt.NDArray[np.float32]
+    ) -> tuple[npt.NDArray[np.float32], bool, list[dict[str, float]]]:
+        """
+        Apply VAD to audio and return processed audio, flag, and timestamps.
+
+        Returns
+        -------
+        tuple[np.ndarray, bool, list[dict]]
+            - Processed audio (float32)
+            - Whether VAD was applied
+            - List of speech segments with original timeline timestamps: [{"start": float, "end": float}, ...]
+              Empty list if VAD was not applied.
+        """
         # Check if model was loaded and is available
         if self.silero_model is not None and self.silero_ts_fn is not None:
             # Lets convert the narray to integer as SILERO needs a PCM16 Integer
             # Clip between -1 and 1 to avoid integer overflow
             pcm16 = (np.clip(audio_f32, -1.0, 1.0) * 32767.0).astype(np.int16)
 
-            pcm16_vad = apply_vad_silero(
+            pcm16_vad, vad_segments = apply_vad_silero(
                 pcm16=pcm16,
                 sr=16000,  # Yes we expect it is in 16000
                 silero_model=self.silero_model,
@@ -504,10 +518,71 @@ class ASRBase(ABC):
             # Now lets convert it back to float
             audio_f32 = (pcm16_vad.astype(np.float32) / 32768.0) if pcm16_vad.size else audio_f32
             vad_used = True
+            return audio_f32, vad_used, vad_segments
         else:
-            vad_used = False
+            return audio_f32, False, []
 
-        return audio_f32, vad_used
+    @staticmethod
+    def helper_map_compressed_to_original_timeline(
+        compressed_time: float, vad_segments: list[dict[str, float]]
+    ) -> float:
+        """
+        Map a timestamp from VAD-compressed audio back to the original timeline.
+
+        When VAD removes silence, the audio is compressed by concatenating speech segments.
+        This function maps a timestamp in the compressed audio to its position in the original.
+
+        Parameters
+        ----------
+        compressed_time : float
+            Timestamp in seconds from the compressed (VAD-processed) audio.
+        vad_segments : list[dict[str, float]]
+            Speech segments from VAD with original timeline positions.
+            Format: [{"start": float, "end": float}, ...]
+
+        Returns
+        -------
+        float
+            Timestamp in the original (uncompressed) timeline.
+
+        Examples
+        --------
+        If VAD found speech at: [{start: 1.0, end: 2.0}, {start: 5.0, end: 6.0}]
+        - Compressed audio is 2 seconds long (1s + 1s of speech)
+        - compressed_time=0.5 → maps to 1.5 (within first segment)
+        - compressed_time=1.5 → maps to 5.5 (within second segment)
+        """
+        if not vad_segments:
+            # No VAD was applied, timestamps are already correct
+            return compressed_time
+
+        # Calculate cumulative duration of each segment in compressed audio
+        cumulative_duration = 0.0
+
+        for seg in vad_segments:
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+            seg_duration = seg_end - seg_start
+
+            # Check if compressed_time falls within this segment
+            if compressed_time <= cumulative_duration + seg_duration:
+                # Time is within this segment
+                # Calculate offset within segment
+                offset_in_segment = compressed_time - cumulative_duration
+                # Map to original timeline
+                return seg_start + offset_in_segment
+
+            cumulative_duration += seg_duration
+
+        # If we've gone past all segments, assume it's at the end of the last segment
+        if vad_segments:
+            last_seg = vad_segments[-1]
+            # Extrapolate beyond last segment (shouldn't happen in practice)
+            overflow = compressed_time - cumulative_duration
+            return last_seg["end"] + overflow
+
+        # Fallback (should never reach here if vad_segments is not empty)
+        return compressed_time
 
     def _write_output_body(
         self, *, result: TranscribeResult, output: Output, max_line_len: int = 42

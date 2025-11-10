@@ -70,11 +70,23 @@ async def bazarr_asr(
     encode: bool = Query(default=True, description="IGNORED: Encode audio first through ffmpeg"),
     output: Output | None = Query(default=Output.TXT, description="Output formats: txt|vtt|srt|tsv|json|jsonl"),
     video_file: str | None = Query(default=None, description="Original video file path for logging purposes"),
+    vad: bool = Query(
+        default=False,
+        description=(
+            "Enable Voice Activity Detection (VAD) to remove silence. Disabled by default for subtitles "
+            "to ensure accurate timing and capture all audio including music/songs."
+        ),
+    ),
 ) -> Any:
     """
     Returns segments suitable for creating subtitles in Bazarr workflows.
      JSON shape (when output=json):
       { "language": "en", "segments": [ { "start": 0.0, "end": 1.2, "text": "..." }, ... ] }
+
+    Note: VAD is disabled by default for subtitle generation because:
+    - It ensures timestamps stay synchronized with the original video
+    - Music and songs are not incorrectly classified as non-voice
+    - All audio content is transcribed, not just detected speech
     """
     # default to TXT if output is None (defensive)
     output_format: Output = output or Output.TXT
@@ -103,6 +115,7 @@ async def bazarr_asr(
                 "video_file": video_file,
                 "beam_size": 5,
                 "temperature": 0.0,
+                "vad": vad,
             }
         )
         ctx.add_model_info(model=settings.ASR_MODEL, engine=settings.ASR_ENGINE)
@@ -116,6 +129,7 @@ async def bazarr_asr(
             beam_size=5,
             temperature=0.0,
             best_of=1,
+            vad=vad,
         )
 
         _track_request("/asr", 200)
