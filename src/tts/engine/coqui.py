@@ -40,12 +40,15 @@ add_safe_globals([BaseAudioConfig, BaseDatasetConfig, XttsConfig, XttsArgs, Xtts
 class TTSCoqui(TTSBase):
     def __init__(self) -> None:
         super().__init__()
+        self._load_model()
 
+    def _load_model(self) -> None:
+        """Load or reload the Coqui TTS model."""
         logger.info("Loading Coqui TTS")
         logger.info("Loading model_id=%s on %s", self.model_id, self.model_device)
         self.tts = TTS(model_name=self.model_id, progress_bar=False).to(self.model_device)
 
-        # Loading Available Models in memoery
+        # Loading Available Models in memory
         self.available_models = self.tts.list_models()
 
         # Builtin speakers (if the model exposes them)
@@ -222,6 +225,9 @@ class TTSCoqui(TTSBase):
 
         # Update last used timestamp for idle timeout tracking
         self._touch()
+
+        # Ensure model is loaded (reload if it was unloaded due to idle timeout)
+        self.ensure_model_loaded()
 
         if (props.speed) != 1.0:
             logger.warning(

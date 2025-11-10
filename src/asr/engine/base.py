@@ -319,6 +319,19 @@ class ASRBase(ABC):
         self._model_loaded = True
 
     @abstractmethod
+    def _load_model(self) -> None:
+        """
+        Subclass-specific model loading/initialization.
+
+        This method should load the model into memory. It will be called:
+        1. During __init__() (initial load)
+        2. After the model has been unloaded due to idle timeout (reload)
+
+        The implementation should set self.model to the loaded model instance.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def _unload_model(self) -> None:
         """
         Subclass-specific model cleanup.
@@ -333,6 +346,19 @@ class ASRBase(ABC):
         sharing the GPU.
         """
         raise NotImplementedError
+
+    def ensure_model_loaded(self) -> None:
+        """
+        Ensure the model is loaded before inference.
+
+        If the model was unloaded due to idle timeout, this method reloads it.
+        This should be called at the beginning of every inference operation.
+        """
+        if not self._model_loaded:
+            logger.info("Model was unloaded, reloading...")
+            self._load_model()
+            self._model_loaded = True
+            logger.info("Model successfully reloaded")
 
     def check_and_unload_if_idle(self) -> bool:
         """

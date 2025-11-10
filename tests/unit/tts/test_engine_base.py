@@ -319,6 +319,9 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _load_model(self):
+                pass
+
             def _unload_model(self):
                 pass
 
@@ -359,6 +362,9 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _load_model(self):
+                pass
+
             def _unload_model(self):
                 pass
 
@@ -397,6 +403,9 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _load_model(self):
+                pass
+
             def _unload_model(self):
                 pass
 
@@ -429,6 +438,9 @@ class TestTTSBase:
 
         class ConcreteTTS(TTSBase):
             def speech(self, **kwargs):
+                pass
+
+            def _load_model(self):
                 pass
 
             def _unload_model(self):
@@ -490,6 +502,9 @@ class TestTTSBase:
             def speech(self, **kwargs):
                 pass
 
+            def _load_model(self):
+                pass
+
             def _unload_model(self):
                 pass
 
@@ -528,6 +543,9 @@ class TestTTSBase:
 
         class ConcreteTTS(TTSBase):
             def speech(self, **kwargs):
+                pass
+
+            def _load_model(self):
                 pass
 
             def _unload_model(self):
