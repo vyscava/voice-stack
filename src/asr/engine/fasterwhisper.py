@@ -23,7 +23,10 @@ settings = get_settings()
 class ASRFasterWhisper(ASRBase):
     def __init__(self) -> None:
         super().__init__()
+        self._load_model()
 
+    def _load_model(self) -> None:
+        """Load or reload the Faster-Whisper model."""
         logger.info("Loading Faster-Whisper")
         logger.info(f"Model={settings.ASR_MODEL} Device={settings.ASR_DEVICE} Compute_Type={settings.ASR_COMPUTE_TYPE}")
         logger.info(f"CPU_Threads={settings.ASR_CPU_THREADS} Num_Workers={settings.ASR_NUM_OF_WORKERS}")
@@ -75,6 +78,9 @@ class ASRFasterWhisper(ASRBase):
         word_timestamps: bool | None,
         vad: bool | None,
     ) -> TranscribeResult:
+        # Ensure model is loaded (reload if it was unloaded due to idle timeout)
+        self.ensure_model_loaded()
+
         t0 = time.time()
         props = transcribe_effective_options(
             request_language=request_language,
@@ -188,6 +194,9 @@ class ASRFasterWhisper(ASRBase):
         detect_lang_length: float | None = None,
         detect_lang_offset: float | None = None,
     ) -> DetectLanguageResult:
+        # Ensure model is loaded (reload if it was unloaded due to idle timeout)
+        self.ensure_model_loaded()
+
         t0 = time.time()
         props = transcribe_effective_options(
             request_language=request_language,

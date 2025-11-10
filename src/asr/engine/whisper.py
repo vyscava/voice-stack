@@ -56,6 +56,10 @@ class ASRWhisperTorch(ASRBase):
         # fp16 on CUDA tends to be faster; MPS & CPU prefer fp32
         self.fp16 = True if self.device == "cuda" else False
 
+        self._load_model()
+
+    def _load_model(self) -> None:
+        """Load or reload the PyTorch Whisper model."""
         model_id = getattr(settings, "ASR_MODEL", "base") or "base"
         logger.info(f"Loading Whisper (PyTorch): model={model_id} device={self.device} fp16={self.fp16}")
 
@@ -127,6 +131,9 @@ class ASRWhisperTorch(ASRBase):
         word_timestamps: bool | None,
         vad: bool | None,
     ) -> TranscribeResult:
+        # Ensure model is loaded (reload if it was unloaded due to idle timeout)
+        self.ensure_model_loaded()
+
         t0 = time.time()
         props = transcribe_effective_options(
             request_language=request_language,
@@ -239,6 +246,9 @@ class ASRWhisperTorch(ASRBase):
         detect_lang_length: float | None = None,
         detect_lang_offset: float | None = None,
     ) -> DetectLanguageResult:
+        # Ensure model is loaded (reload if it was unloaded due to idle timeout)
+        self.ensure_model_loaded()
+
         t0 = time.time()
         # Re-use your transcribe options builder for consistency
         props = transcribe_effective_options(
