@@ -16,3 +16,4 @@ __pycache__
 .claude
 reports
 *.avi
+debug**

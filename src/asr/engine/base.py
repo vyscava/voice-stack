@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -32,6 +33,15 @@ OUTPUT_HEADERS = {
     Output.TSV: ("text/tab-separated-values; charset=utf-8", "tsv"),
     Output.JSONL: ("application/jsonl; charset=utf-8", "jsonl"),
 }
+
+
+def _ext_from_filename(filename: str | None) -> str | None:
+    if not filename:
+        return None
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        return None
+    return suffix.lstrip(".") or None
 
 
 @dataclass
@@ -407,6 +417,7 @@ class ASRBase(ABC):
         *,
         file_bytes: bytes,
         filename: str | None = None,
+        content_type: str | None = None,
         request_language: str | None = None,
         task: str | None = None,
         beam_size: int | None = None,
@@ -423,8 +434,8 @@ class ASRBase(ABC):
             audio_f32, sr = decode_with_soundfile(raw_bytes=file_bytes)
             source = "libsndfile"
         except Exception:
-            ext = (filename or "").split(".")[-1].lower() or None
-            audio_f32, sr = decode_with_ffmpeg(raw_bytes=file_bytes, fmt_hint=ext)
+            ext = _ext_from_filename(filename)
+            audio_f32, sr = decode_with_ffmpeg(raw_bytes=file_bytes, fmt_hint=ext, content_type=content_type)
             source = "ffmpeg"
 
         # Cleaning some bad inputs
@@ -468,6 +479,7 @@ class ASRBase(ABC):
         *,
         file_bytes: bytes,
         filename: str | None = None,
+        content_type: str | None = None,
         request_language: str | None = None,
         detect_lang_length: float | None = None,
         detect_lang_offset: float | None = None,
@@ -480,8 +492,8 @@ class ASRBase(ABC):
             audio_f32, sr = decode_with_soundfile(raw_bytes=file_bytes)
             source = "libsndfile"
         except Exception:
-            ext = (filename or "").split(".")[-1].lower() or None
-            audio_f32, sr = decode_with_ffmpeg(raw_bytes=file_bytes, fmt_hint=ext)
+            ext = _ext_from_filename(filename)
+            audio_f32, sr = decode_with_ffmpeg(raw_bytes=file_bytes, fmt_hint=ext, content_type=content_type)
             source = "ffmpeg"
 
         logger.info("Decoded via %s: sr=%d samples=%d", source, sr, int(audio_f32.shape[0]))

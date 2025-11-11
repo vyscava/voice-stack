@@ -84,7 +84,11 @@ async def transcriptions(
         logger.info("Processing transcription request", extra=ctx.to_log_dict())
 
         result = engine.transcribe_file(
-            file_bytes=audio, filename=file.filename, request_language=request.language, temperature=request.temperature
+            file_bytes=audio,
+            filename=file.filename,
+            content_type=file.content_type,
+            request_language=request.language,
+            temperature=request.temperature,
         )
 
         # If return  is text lets give it a plan text
@@ -185,6 +189,7 @@ async def transcriptions_verbose(
         result = engine.transcribe_file(
             file_bytes=audio,
             filename=file.filename,
+            content_type=file.content_type,
             request_language=request.language,
             task=request.task,
             beam_size=request.beam_size,
@@ -291,6 +296,7 @@ async def translations(
         result = engine.transcribe_file(
             file_bytes=audio,
             filename=file.filename,
+            content_type=file.content_type,
             # Let the engine auto-detect source language; translation target is English.
             task="translate",
             temperature=request.temperature,
