@@ -66,7 +66,7 @@ variables:
 # Build CI image (for running tests, linting, etc.)
 build:ci-image:
   stage: build-images
-  image: docker:24
+  image: docker:29
   # No services needed - using runner's dind daemon directly
 
   rules:
@@ -107,7 +107,7 @@ build:ci-image:
 # Build production image (unified ASR+TTS)
 build:prod-image:
   stage: build-images
-  image: docker:24
+  image: docker:29
   # No services needed - using runner's dind daemon directly
 
   rules:
@@ -337,7 +337,7 @@ secret_detection:
 # Automatic release on main branch (after successful tests AND security checks)
 release:latest:
   stage: release
-  image: docker:24
+  image: docker:29
   # No services needed - using runner's dind daemon directly
 
   needs:
@@ -371,7 +371,7 @@ release:latest:
 # Manual release with semantic versioning (for git tags)
 release:version:
   stage: release
-  image: docker:24
+  image: docker:29
   # No services needed - using runner's dind daemon directly
 
   needs:
