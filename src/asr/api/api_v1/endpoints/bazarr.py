@@ -125,6 +125,7 @@ async def bazarr_asr(
         result = engine.transcribe_file(
             file_bytes=audio,
             filename=audio_file.filename,
+            content_type=audio_file.content_type,
             request_language=language,
             beam_size=5,
             temperature=0.0,
@@ -224,6 +225,7 @@ async def detect_language(
         result = engine.detect_language_file(
             file_bytes=audio,
             filename=audio_file.filename,
+            content_type=audio_file.content_type,
             detect_lang_length=detect_lang_length,
             detect_lang_offset=detect_lang_offset,
         )

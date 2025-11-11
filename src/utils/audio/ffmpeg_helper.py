@@ -38,6 +38,38 @@ AUDIO_EXTENSIONS: tuple[str, ...] = (
     ".mka",
 )
 
+# Hints that an upload may already be raw PCM16 data
+RAW_PCM_EXTENSIONS: set[str] = {"pcm", "raw", "s16le", "l16", "bin"}
+RAW_PCM_CONTENT_TYPES: set[str] = {
+    "audio/l16",
+    "audio/raw",
+    "audio/x-raw",
+    "application/octet-stream",
+    "application/x-binary",
+}
+
+_MAGIC_CONTAINER_SIGNATURES: tuple[bytes, ...] = (
+    b"RIFF",
+    b"RIFX",
+    b"OggS",
+    b"fLaC",
+    b"ID3",
+    b"ftyp",
+    b"\x1a\x45\xdf\xa3",  # Matroska/WebM
+    b"\x30\x26\xb2\x75",  # ASF/WMA/WMV
+    b"\x00\x00\x01\xba",  # MPEG-PS
+    b"FORM",  # AIFF
+    b"MThd",  # MIDI
+    b"#\x21AMR",  # AMR
+    b"\xff\xf1",
+    b"\xff\xf3",
+    b"\xff\xfb",  # MP3 sync words
+    b"BM",  # BMP (common false positive for raw dumps)
+    b"\x89PNG",
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF8",
+)
+
 # Map extension → FFmpeg input *container* format
 # (NEVER map to codec like "opus"—only containers like "ogg")
 EXT_TO_INPUT_FORMAT: dict[str, str | None] = {
@@ -101,6 +133,62 @@ def _resolve_input_format(fmt_hint: str | None) -> str | None:
     if not fmt_hint:
         return None
     return EXT_TO_INPUT_FORMAT.get(fmt_hint.lower().lstrip("."), None)
+
+
+def _decode_headerless_pcm(raw_bytes: bytes, channels: int = 1) -> npt.NDArray[np.int16]:
+    """
+    Interpret bytes as raw little-endian PCM16 samples.
+    """
+    if len(raw_bytes) < 2 or (len(raw_bytes) % 2) != 0:
+        raise ValueError("Raw PCM buffer must have an even byte length.")
+
+    audio_i16 = np.frombuffer(raw_bytes, dtype="<i2")
+    if channels > 1:
+        if audio_i16.size % channels != 0:
+            raise ValueError("Raw PCM buffer size not divisible by channel count.")
+        audio_i16 = audio_i16.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    return audio_i16
+
+
+def _looks_like_headerless_pcm(raw_bytes: bytes) -> bool:
+    """
+    Heuristically decide if bytes resemble already-decoded PCM16 audio.
+    """
+    if len(raw_bytes) < 4096 or (len(raw_bytes) % 2) != 0:
+        return False
+
+    header = raw_bytes[:16]
+    if any(header.startswith(sig) for sig in _MAGIC_CONTAINER_SIGNATURES):
+        return False
+
+    # Headerless PCM tends to look like noise rather than ASCII text
+    head = raw_bytes[:64]
+    ascii_like = sum(32 <= b <= 126 for b in head)
+    return (ascii_like / max(len(head), 1)) < 0.4
+
+
+def _raw_pcm_hint_reason(
+    *,
+    fmt_hint: str | None,
+    content_type: str | None,
+    raw_bytes: bytes,
+) -> str | None:
+    """
+    Return a human-readable reason if we should try treating the payload as raw PCM.
+    """
+    if fmt_hint and fmt_hint.lower() in RAW_PCM_EXTENSIONS:
+        return f"extension={fmt_hint.lower()}"
+
+    if content_type:
+        lowered = content_type.lower()
+        if lowered in RAW_PCM_CONTENT_TYPES:
+            return f"content_type={lowered}"
+
+    if (not fmt_hint) and (not content_type or content_type.lower() in RAW_PCM_CONTENT_TYPES):
+        if _looks_like_headerless_pcm(raw_bytes):
+            return "no container signature detected"
+
+    return None
 
 
 def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_output: bool) -> npt.NDArray[np.int16]:
@@ -168,6 +256,29 @@ def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_ou
     except ffmpeg.Error as e:
         # Extract stderr for detailed error logging
         stderr_output = e.stderr.decode("utf-8", "ignore") if e.stderr else "No stderr output"
+
+        # Preserve failed upload for debugging if enabled
+        import os
+        from datetime import datetime
+
+        from core.settings import get_settings
+
+        settings = get_settings()
+        if settings.DEBUG_PRESERVE_FAILED_UPLOADS:
+            try:
+                os.makedirs(settings.DEBUG_PRESERVE_DIR, exist_ok=True)
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                failed_file = os.path.join(settings.DEBUG_PRESERVE_DIR, f"failed_upload_{timestamp}.bin")
+                with open(failed_file, "wb") as f:
+                    f.write(raw_bytes)
+                logger.warning(
+                    "Failed upload preserved for debugging: %s (size: %d bytes)",
+                    failed_file,
+                    len(raw_bytes),
+                )
+            except Exception as preserve_error:
+                logger.error("Failed to preserve failed upload: %s", preserve_error)
+
         logger.warning(
             "ffmpeg-python decode failed: input_format=%s, use_alt_output=%s, stderr:\n%s",
             input_format,
@@ -184,11 +295,24 @@ def _ffmpeg_python_decode(raw_bytes: bytes, input_format: str | None, use_alt_ou
     return audio_i16
 
 
-def _ffmpeg_cli_decode(raw_bytes: bytes) -> npt.NDArray[np.int16]:
+def _ffmpeg_cli_decode(
+    raw_bytes: bytes,
+    *,
+    fmt_hint: str | None = None,
+    content_type: str | None = None,
+) -> npt.NDArray[np.int16]:
     """
     Last-resort CLI fallback: write input to a temp file, run `ffmpeg -i` to raw PCM,
-    read stdout. We don’t pass `-f` for input — we let FFmpeg fully probe.
+    read stdout. We don't pass `-f` for input — we let FFmpeg fully probe.
     """
+    import os
+    import shutil
+    from datetime import datetime
+
+    from core.settings import get_settings
+
+    settings = get_settings()
+
     with (
         tempfile.NamedTemporaryFile(suffix=".bin", delete=True) as fin,
         tempfile.NamedTemporaryFile(suffix=".s16le", delete=True) as fout,
@@ -218,6 +342,35 @@ def _ffmpeg_cli_decode(raw_bytes: bytes) -> npt.NDArray[np.int16]:
         proc = subprocess.run(cmd, capture_output=True)
         if proc.returncode != 0:
             stderr_output = proc.stderr.decode("utf-8", "ignore")
+
+            raw_reason = _raw_pcm_hint_reason(fmt_hint=fmt_hint, content_type=content_type, raw_bytes=raw_bytes)
+            if raw_reason:
+                try:
+                    audio_i16 = _decode_headerless_pcm(raw_bytes)
+                    logger.warning(
+                        "FFmpeg CLI probing failed (%s); falling back to raw PCM (%s).",
+                        (stderr_output or "no stderr").strip(),
+                        raw_reason,
+                    )
+                    return audio_i16
+                except Exception as raw_exc:
+                    logger.debug("Raw PCM fallback failed (%s): %s", raw_reason, raw_exc)
+
+            # Preserve failed upload for debugging if enabled
+            if settings.DEBUG_PRESERVE_FAILED_UPLOADS:
+                try:
+                    os.makedirs(settings.DEBUG_PRESERVE_DIR, exist_ok=True)
+                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    failed_file = os.path.join(settings.DEBUG_PRESERVE_DIR, f"failed_upload_{timestamp}.bin")
+                    shutil.copy2(fin.name, failed_file)
+                    logger.warning(
+                        "Failed upload preserved for debugging: %s (size: %d bytes)",
+                        failed_file,
+                        len(raw_bytes),
+                    )
+                except Exception as e:
+                    logger.error("Failed to preserve failed upload: %s", e)
+
             logger.error(
                 "ffmpeg CLI decode failed (return code %d). Command: %s\nStderr:\n%s",
                 proc.returncode,
@@ -237,6 +390,7 @@ def decode_with_ffmpeg(
     *,
     raw_bytes: bytes,
     fmt_hint: str | None = None,
+    content_type: str | None = None,
     _attempt: int = 0,
     _max_attempts: int = 4,
 ) -> tuple[npt.NDArray[np.float32], int]:
@@ -264,7 +418,7 @@ def decode_with_ffmpeg(
 
     # Base case: exceeded attempts → last resort CLI fallback
     if _attempt >= _max_attempts - 1:
-        audio_i16 = _ffmpeg_cli_decode(raw_bytes)
+        audio_i16 = _ffmpeg_cli_decode(raw_bytes, fmt_hint=fmt_hint, content_type=content_type)
         return (audio_i16.astype(np.float32) / 32768.0, 16000)
 
     # Checking if we can normalize the file format hint
@@ -306,7 +460,11 @@ def decode_with_ffmpeg(
         # Recursive step: advance attempt
         logger.debug("Attempt %d failed with ffmpeg.Error, trying next method", _attempt + 1)
         return decode_with_ffmpeg(
-            raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
+            raw_bytes=raw_bytes,
+            fmt_hint=fmt_hint,
+            content_type=content_type,
+            _attempt=_attempt + 1,
+            _max_attempts=_max_attempts,
         )
     except RuntimeError as e:
         # RuntimeError from our decode functions - log and re-raise if last attempt
@@ -315,7 +473,11 @@ def decode_with_ffmpeg(
             raise
         logger.debug("Attempt %d failed with RuntimeError, trying next method", _attempt + 1)
         return decode_with_ffmpeg(
-            raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
+            raw_bytes=raw_bytes,
+            fmt_hint=fmt_hint,
+            content_type=content_type,
+            _attempt=_attempt + 1,
+            _max_attempts=_max_attempts,
         )
     except Exception as e:
         # If a non-ffmpeg error happens, still advance attempts (keeps behavior consistent)
@@ -324,7 +486,11 @@ def decode_with_ffmpeg(
             raise
         logger.debug("Attempt %d failed with %s, trying next method", _attempt + 1, type(e).__name__)
         return decode_with_ffmpeg(
-            raw_bytes=raw_bytes, fmt_hint=fmt_hint, _attempt=_attempt + 1, _max_attempts=_max_attempts
+            raw_bytes=raw_bytes,
+            fmt_hint=fmt_hint,
+            content_type=content_type,
+            _attempt=_attempt + 1,
+            _max_attempts=_max_attempts,
         )
 
 

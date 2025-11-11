@@ -107,6 +107,12 @@ class Settings(BaseSettings):
         default=80, description="Reject requests when swap usage exceeds this percentage"
     )
 
+    # Debug settings
+    DEBUG_PRESERVE_FAILED_UPLOADS: bool = Field(
+        default=False, description="Save failed audio uploads to /tmp for debugging"
+    )
+    DEBUG_PRESERVE_DIR: str = Field(default="/tmp/voice-stack-debug", description="Directory to save failed uploads")
+
     # Debugpy
     DEBUGPY_ENABLE: bool = Field(default=False)
     DEBUGPY_HOST: str = Field(default="0.0.0.0")
