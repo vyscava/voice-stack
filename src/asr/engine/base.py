@@ -412,6 +412,60 @@ class ASRBase(ABC):
     ) -> TranscribeResult:
         raise NotImplementedError
 
+    def _decode_audio_bytes(
+        self,
+        *,
+        file_bytes: bytes,
+        filename: str | None = None,
+        content_type: str | None = None,
+        expect_raw_pcm: bool = False,
+    ) -> tuple[npt.NDArray[np.float32], int, str]:
+        """
+        Decode audio bytes to float32 mono 16kHz.
+
+        Parameters
+        ----------
+        file_bytes : bytes
+            Raw audio file bytes
+        filename : str | None
+            Original filename (for extension hint)
+        content_type : str | None
+            MIME type (e.g., "audio/l16" for raw PCM)
+        expect_raw_pcm : bool
+            If True, skip libsndfile and try raw PCM first (for Bazarr).
+            Fallback to ffmpeg if raw PCM fails.
+
+        Returns
+        -------
+        tuple[np.ndarray, int, str]
+            (audio_f32, sample_rate, source)
+            source = "raw_pcm" | "libsndfile" | "ffmpeg"
+        """
+        if expect_raw_pcm:
+            # Bazarr path: Try raw PCM first (no ffmpeg needed!)
+            ext = _ext_from_filename(filename)
+            audio_f32, sr = decode_with_ffmpeg(
+                raw_bytes=file_bytes,
+                fmt_hint=ext,
+                content_type=content_type,
+                expect_raw_pcm=True,
+            )
+            return audio_f32, sr, "raw_pcm"
+
+        # Standard path: Try libsndfile first, then ffmpeg
+        try:
+            audio_f32, sr = decode_with_soundfile(raw_bytes=file_bytes)
+            return audio_f32, sr, "libsndfile"
+        except Exception:
+            ext = _ext_from_filename(filename)
+            audio_f32, sr = decode_with_ffmpeg(
+                raw_bytes=file_bytes,
+                fmt_hint=ext,
+                content_type=content_type,
+                expect_raw_pcm=False,
+            )
+            return audio_f32, sr, "ffmpeg"
+
     def transcribe_file(
         self,
         *,
@@ -425,18 +479,23 @@ class ASRBase(ABC):
         best_of: int | None = None,
         word_timestamps: bool | None = None,
         vad: bool | None = None,
+        expect_raw_pcm: bool = False,
     ) -> TranscribeResult:
         """
         Decode from `file_bytes` (using soundfile fast-path, then ffmpeg fallback).
+
+        Parameters
+        ----------
+        expect_raw_pcm : bool
+            If True, skip libsndfile and interpret bytes as raw PCM16 first.
+            Use this for Bazarr uploads (always sends headerless PCM).
         """
-        # Try libsndfile first
-        try:
-            audio_f32, sr = decode_with_soundfile(raw_bytes=file_bytes)
-            source = "libsndfile"
-        except Exception:
-            ext = _ext_from_filename(filename)
-            audio_f32, sr = decode_with_ffmpeg(raw_bytes=file_bytes, fmt_hint=ext, content_type=content_type)
-            source = "ffmpeg"
+        audio_f32, sr, source = self._decode_audio_bytes(
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+            expect_raw_pcm=expect_raw_pcm,
+        )
 
         # Cleaning some bad inputs
         request_language = request_language if request_language is not LanguageCode.UNKNOWN else None
@@ -483,18 +542,23 @@ class ASRBase(ABC):
         request_language: str | None = None,
         detect_lang_length: float | None = None,
         detect_lang_offset: float | None = None,
+        expect_raw_pcm: bool = False,
     ) -> DetectLanguageResult:
         """
         Detect Language from `file_bytes` (using soundfile fast-path, then ffmpeg fallback).
+
+        Parameters
+        ----------
+        expect_raw_pcm : bool
+            If True, skip libsndfile and interpret bytes as raw PCM16 first.
+            Use this for Bazarr uploads (always sends headerless PCM).
         """
-        # Try libsndfile first
-        try:
-            audio_f32, sr = decode_with_soundfile(raw_bytes=file_bytes)
-            source = "libsndfile"
-        except Exception:
-            ext = _ext_from_filename(filename)
-            audio_f32, sr = decode_with_ffmpeg(raw_bytes=file_bytes, fmt_hint=ext, content_type=content_type)
-            source = "ffmpeg"
+        audio_f32, sr, source = self._decode_audio_bytes(
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=content_type,
+            expect_raw_pcm=expect_raw_pcm,
+        )
 
         logger.info("Decoded via %s: sr=%d samples=%d", source, sr, int(audio_f32.shape[0]))
 

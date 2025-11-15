@@ -161,9 +161,9 @@ def mock_settings() -> Mock:
     settings.TTS_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
     settings.TTS_MAX_CONCURRENT_REQUESTS = 2
 
-    # Resource management settings
-    settings.MEMORY_THRESHOLD_PERCENT = 90
-    settings.SWAP_THRESHOLD_PERCENT = 80
+    # Resource management settings - set high for tests to avoid 503 errors
+    settings.MEMORY_THRESHOLD_PERCENT = 99
+    settings.SWAP_THRESHOLD_PERCENT = 99
     settings.MAX_UPLOAD_SIZE_MB = 100
 
     return settings
@@ -367,6 +367,14 @@ def mock_tts_engine() -> Mock:
 @pytest.fixture
 def asr_client(mock_asr_engine: Mock, mock_settings: Mock, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Return FastAPI test client for ASR service."""
+    # Mock psutil to report low memory usage (prevents 503 errors in tests)
+    mock_mem = Mock()
+    mock_mem.percent = 50.0  # 50% memory usage
+    mock_swap = Mock()
+    mock_swap.percent = 10.0  # 10% swap usage
+    monkeypatch.setattr("psutil.virtual_memory", lambda: mock_mem)
+    monkeypatch.setattr("psutil.swap_memory", lambda: mock_swap)
+
     # Mock the engine factory to return our mock engine
     monkeypatch.setattr("asr.engine_factory._engine", mock_asr_engine)
     monkeypatch.setattr("asr.engine_factory.get_audio_engine", lambda: mock_asr_engine)
@@ -405,6 +413,14 @@ def asr_client(mock_asr_engine: Mock, mock_settings: Mock, monkeypatch: pytest.M
 @pytest.fixture
 def tts_client(mock_tts_engine: Mock, mock_settings: Mock, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Return FastAPI test client for TTS service."""
+    # Mock psutil to report low memory usage (prevents 503 errors in tests)
+    mock_mem = Mock()
+    mock_mem.percent = 50.0  # 50% memory usage
+    mock_swap = Mock()
+    mock_swap.percent = 10.0  # 10% swap usage
+    monkeypatch.setattr("psutil.virtual_memory", lambda: mock_mem)
+    monkeypatch.setattr("psutil.swap_memory", lambda: mock_swap)
+
     # Mock the engine factory to return our mock engine
     monkeypatch.setattr("tts.engine_factory._engine", mock_tts_engine)
     monkeypatch.setattr("tts.engine_factory.get_audio_engine", lambda: mock_tts_engine)

@@ -300,9 +300,17 @@ def asr_integration_client(mock_asr_engine: Mock, monkeypatch: pytest.MonkeyPatc
     - Allows the app to go through its full lifespan initialization
     - Ensures routes are properly registered during startup
     """
-    # Mock settings to use test values
+    # Mock psutil to report low memory usage (prevents 503 errors in tests)
     from unittest.mock import Mock as MockClass
 
+    mock_mem = MockClass()
+    mock_mem.percent = 50.0  # 50% memory usage
+    mock_swap = MockClass()
+    mock_swap.percent = 10.0  # 10% swap usage
+    monkeypatch.setattr("psutil.virtual_memory", lambda: mock_mem)
+    monkeypatch.setattr("psutil.swap_memory", lambda: mock_swap)
+
+    # Mock settings to use test values
     mock_settings = MockClass()
     mock_settings.PROJECT_NAME = "Voice Stack Test"
     mock_settings.API_V1_STR = "/v1"
@@ -319,9 +327,9 @@ def asr_integration_client(mock_asr_engine: Mock, monkeypatch: pytest.MonkeyPatc
     mock_settings.ASR_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
     mock_settings.ASR_MAX_CONCURRENT_REQUESTS = 2
 
-    # Resource management settings
-    mock_settings.MEMORY_THRESHOLD_PERCENT = 90
-    mock_settings.SWAP_THRESHOLD_PERCENT = 80
+    # Resource management settings - set high for tests
+    mock_settings.MEMORY_THRESHOLD_PERCENT = 99
+    mock_settings.SWAP_THRESHOLD_PERCENT = 99
     mock_settings.MAX_UPLOAD_SIZE_MB = 100
 
     monkeypatch.setattr("asr.app.settings", mock_settings)
@@ -355,9 +363,17 @@ def tts_integration_client(mock_tts_engine: Mock, monkeypatch: pytest.MonkeyPatc
     - Allows the app to go through its full lifespan initialization
     - Ensures routes are properly registered during startup
     """
-    # Mock settings to use test values
+    # Mock psutil to report low memory usage (prevents 503 errors in tests)
     from unittest.mock import Mock as MockClass
 
+    mock_mem = MockClass()
+    mock_mem.percent = 50.0  # 50% memory usage
+    mock_swap = MockClass()
+    mock_swap.percent = 10.0  # 10% swap usage
+    monkeypatch.setattr("psutil.virtual_memory", lambda: mock_mem)
+    monkeypatch.setattr("psutil.swap_memory", lambda: mock_swap)
+
+    # Mock settings to use test values
     mock_settings = MockClass()
     mock_settings.PROJECT_NAME = "Voice Stack Test"
     mock_settings.API_V1_STR = "/v1"
@@ -375,9 +391,9 @@ def tts_integration_client(mock_tts_engine: Mock, monkeypatch: pytest.MonkeyPatc
     mock_settings.TTS_IDLE_TIMEOUT_MINUTES = 0  # Disable for tests
     mock_settings.TTS_MAX_CONCURRENT_REQUESTS = 2
 
-    # Resource management settings
-    mock_settings.MEMORY_THRESHOLD_PERCENT = 90
-    mock_settings.SWAP_THRESHOLD_PERCENT = 80
+    # Resource management settings - set high for tests
+    mock_settings.MEMORY_THRESHOLD_PERCENT = 99
+    mock_settings.SWAP_THRESHOLD_PERCENT = 99
     mock_settings.MAX_UPLOAD_SIZE_MB = 100
 
     monkeypatch.setattr("tts.app.settings", mock_settings)
