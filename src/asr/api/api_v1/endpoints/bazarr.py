@@ -21,7 +21,7 @@ settings = get_settings()
 _engine_for_listing = get_audio_engine()
 
 # Simple in-memory stats tracking
-_stats = {
+_stats: dict[str, Any] = {
     "started_at": datetime.now().isoformat(),
     "endpoints": {
         "/asr": defaultdict(int),
@@ -113,7 +113,7 @@ async def bazarr_asr(
                 "language": language,
                 "output_format": str(output_format),
                 "video_file": video_file,
-                "beam_size": 5,
+                "beam_size": 10,
                 "temperature": 0.0,
                 "vad": vad,
             }
@@ -131,6 +131,7 @@ async def bazarr_asr(
             temperature=0.0,
             best_of=1,
             vad=vad,
+            expect_raw_pcm=True,  # Bazarr always sends headerless PCM
         )
 
         _track_request("/asr", 200)
@@ -228,6 +229,7 @@ async def detect_language(
             content_type=audio_file.content_type,
             detect_lang_length=detect_lang_length,
             detect_lang_offset=detect_lang_offset,
+            expect_raw_pcm=True,  # Bazarr always sends headerless PCM
         )
 
         _track_request("/detect-language", 200)

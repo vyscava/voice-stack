@@ -307,7 +307,7 @@ def _ffmpeg_cli_decode(
     """
     import os
     import shutil
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from core.settings import get_settings
 
@@ -348,7 +348,7 @@ def _ffmpeg_cli_decode(
                 try:
                     audio_i16 = _decode_headerless_pcm(raw_bytes)
                     logger.warning(
-                        "FFmpeg CLI probing failed (%s); falling back to raw PCM (%s).",
+                        "FFMPEG CLI probing failed (%s); falling back to raw PCM (%s).",
                         (stderr_output or "no stderr").strip(),
                         raw_reason,
                     )
@@ -360,7 +360,7 @@ def _ffmpeg_cli_decode(
             if settings.DEBUG_PRESERVE_FAILED_UPLOADS:
                 try:
                     os.makedirs(settings.DEBUG_PRESERVE_DIR, exist_ok=True)
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
                     failed_file = os.path.join(settings.DEBUG_PRESERVE_DIR, f"failed_upload_{timestamp}.bin")
                     shutil.copy2(fin.name, failed_file)
                     logger.warning(
@@ -372,17 +372,17 @@ def _ffmpeg_cli_decode(
                     logger.error("Failed to preserve failed upload: %s", e)
 
             logger.error(
-                "ffmpeg CLI decode failed (return code %d). Command: %s\nStderr:\n%s",
+                "FFMPEG CLI decode failed (return code %d). Command: %s\nStderr:\n%s",
                 proc.returncode,
                 " ".join(cmd),
                 stderr_output,
             )
-            raise RuntimeError(f"ffmpeg CLI decode failed (return code {proc.returncode}):\n{stderr_output}")
+            raise RuntimeError(f"FFMPEG CLI decode failed (return code {proc.returncode}):\n{stderr_output}")
 
         pcm_bytes = fout.read()
         audio_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
         if audio_i16.size == 0:
-            raise RuntimeError("ffmpeg CLI produced no samples")
+            raise RuntimeError("FFMPEG CLI produced no samples")
         return audio_i16
 
 
@@ -391,16 +391,30 @@ def decode_with_ffmpeg(
     raw_bytes: bytes,
     fmt_hint: str | None = None,
     content_type: str | None = None,
+    expect_raw_pcm: bool = False,
     _attempt: int = 0,
-    _max_attempts: int = 4,
+    _max_attempts: int = 2,
 ) -> tuple[npt.NDArray[np.float32], int]:
     """
-    Decode arbitrary audio bytes to mono 16 kHz float32 via a recursive fallback chain:
+    Decode arbitrary audio bytes to mono 16 kHz float32.
 
-      Attempt 0: ffmpeg-python (probe, no input format hint)
-      Attempt 1: ffmpeg-python (normalized input format hint, e.g. opus→ogg, alac→mov)
-      Attempt 2: ffmpeg-python (alt graph: -vn + larger probe/analyze)
-      Attempt 3: ffmpeg CLI fallback (temp files, full probing)
+    Simplified fallback chain:
+      - If expect_raw_pcm=True: Try raw PCM interpretation first, then ffmpeg fallback
+      - Otherwise:
+        Attempt 0: ffmpeg-python (auto-probe)
+        Attempt 1: ffmpeg CLI fallback (temp files, full probing)
+
+    Parameters
+    ----------
+    raw_bytes : bytes
+        Audio file bytes
+    fmt_hint : str | None
+        File extension hint (e.g., "mp3", "opus")
+    content_type : str | None
+        MIME type (e.g., "audio/l16" for raw PCM)
+    expect_raw_pcm : bool
+        If True, try raw PCM interpretation first (for Bazarr).
+        Skips ffmpeg entirely if raw PCM succeeds.
 
     Returns
     -------
@@ -409,26 +423,32 @@ def decode_with_ffmpeg(
     Notes
     -----
     - Requires a working `ffmpeg` binary on PATH.
-    - Normalization uses `resolve_input_format(fmt_hint)` if available; pass None to skip.
     """
     if not raw_bytes:
         raise ValueError("Empty audio buffer")
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg CLI not found on PATH. Install it (e.g., `brew install ffmpeg`).")
 
+    # Fast path: If we expect raw PCM, try interpreting directly first
+    if expect_raw_pcm and _attempt == 0:
+        raw_reason = _raw_pcm_hint_reason(fmt_hint=fmt_hint, content_type=content_type, raw_bytes=raw_bytes)
+        if raw_reason:
+            try:
+                audio_i16 = _decode_headerless_pcm(raw_bytes)
+                logger.debug("Raw PCM decode successful (%s)", raw_reason)
+                return (audio_i16.astype(np.float32) / 32768.0, 16000)
+            except Exception as raw_exc:
+                logger.debug("Raw PCM decode failed (%s): %s, falling back to ffmpeg", raw_reason, raw_exc)
+                # Continue to ffmpeg fallback
+
     # Base case: exceeded attempts → last resort CLI fallback
     if _attempt >= _max_attempts - 1:
         audio_i16 = _ffmpeg_cli_decode(raw_bytes, fmt_hint=fmt_hint, content_type=content_type)
         return (audio_i16.astype(np.float32) / 32768.0, 16000)
 
-    # Checking if we can normalize the file format hint
-    norm = _resolve_input_format(fmt_hint)
-
     # Log the attempt being made
     attempt_desc = [
-        "ffmpeg-python (no format)",
-        f"ffmpeg-python (format={norm})",
-        f"ffmpeg-python alt (format={norm})",
+        "ffmpeg-python (auto-probe)",
         "ffmpeg CLI",
     ]
     if _attempt < len(attempt_desc):
@@ -437,15 +457,11 @@ def decode_with_ffmpeg(
     # Determine strategy for this attempt
     try:
         if _attempt == 0:
-            # No input format hint, let ffmpeg probe
+            # Let ffmpeg auto-probe (no format hint)
             audio_i16 = _ffmpeg_python_decode(raw_bytes, input_format=None, use_alt_output=False)
-        elif _attempt == 1:
-            audio_i16 = _ffmpeg_python_decode(raw_bytes, input_format=norm, use_alt_output=False)
-        elif _attempt == 2:
-            audio_i16 = _ffmpeg_python_decode(raw_bytes, input_format=norm, use_alt_output=True)
         else:
             # Shouldn't hit due to the base case, but keep safe.
-            audio_i16 = _ffmpeg_cli_decode(raw_bytes)
+            audio_i16 = _ffmpeg_cli_decode(raw_bytes, fmt_hint=fmt_hint, content_type=content_type)
 
         # Success → return float32
         # Convert to float32 in [-1.0, 1.0]:
@@ -463,6 +479,7 @@ def decode_with_ffmpeg(
             raw_bytes=raw_bytes,
             fmt_hint=fmt_hint,
             content_type=content_type,
+            expect_raw_pcm=expect_raw_pcm,
             _attempt=_attempt + 1,
             _max_attempts=_max_attempts,
         )
@@ -476,6 +493,7 @@ def decode_with_ffmpeg(
             raw_bytes=raw_bytes,
             fmt_hint=fmt_hint,
             content_type=content_type,
+            expect_raw_pcm=expect_raw_pcm,
             _attempt=_attempt + 1,
             _max_attempts=_max_attempts,
         )
@@ -489,6 +507,7 @@ def decode_with_ffmpeg(
             raw_bytes=raw_bytes,
             fmt_hint=fmt_hint,
             content_type=content_type,
+            expect_raw_pcm=expect_raw_pcm,
             _attempt=_attempt + 1,
             _max_attempts=_max_attempts,
         )
