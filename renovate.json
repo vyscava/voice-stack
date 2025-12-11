@@ -1,7 +1,46 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "platform": "gitlab",
+  "endpoint": "https://gitlab.vitorgarbim.me/api/v4",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommitType(chore)",
+    ":semanticCommitScope(deps)"
   ],
-  "assignees": ["vitorgarbim"]
+  "assignees": ["vitorgarbim"],
+  "labels": ["dependencies", "renovate"],
+  "dependencyDashboardTitle": "Dependency Dashboard",
+  "prConcurrentLimit": 5,
+  "rebaseWhen": "behind-base-branch",
+  "timezone": "UTC",
+  "schedule": ["after 2am on monday"],
+  "packageRules": [
+    {
+      "matchManagers": ["pep621"],
+      "groupName": "python dependencies",
+      "separateMajorMinor": true,
+      "stabilityDays": 3,
+      "excludePackageNames": ["torch", "torchaudio", "faster-whisper", "coqui-tts", "openai-whisper"]
+    },
+    {
+      "matchManagers": ["pep621"],
+      "matchPackageNames": ["torch", "torchaudio", "faster-whisper", "coqui-tts", "openai-whisper"],
+      "groupName": "ml/audio stack",
+      "enabled": true,
+      "automerge": false,
+      "prPriority": -1
+    },
+    {
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "groupName": "docker images",
+      "separateMajorMinor": true,
+      "rangeStrategy": "bump"
+    },
+    {
+      "matchManagers": ["gitlabci"],
+      "groupName": "gitlab ci templates",
+      "enabled": true
+    }
+  ]
 }
