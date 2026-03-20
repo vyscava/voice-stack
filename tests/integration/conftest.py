@@ -313,7 +313,7 @@ def asr_integration_client(mock_asr_engine: Mock, monkeypatch: pytest.MonkeyPatc
     # Mock settings to use test values
     mock_settings = MockClass()
     mock_settings.PROJECT_NAME = "Voice Stack Test"
-    mock_settings.API_V1_STR = "/v1"
+    mock_settings.API_V1_STR = ""
     mock_settings.CORS_ORIGINS = ""
     mock_settings.LOG_LEVEL = "INFO"
     mock_settings.DEBUGPY_ENABLE = False
@@ -376,7 +376,7 @@ def tts_integration_client(mock_tts_engine: Mock, monkeypatch: pytest.MonkeyPatc
     # Mock settings to use test values
     mock_settings = MockClass()
     mock_settings.PROJECT_NAME = "Voice Stack Test"
-    mock_settings.API_V1_STR = "/v1"
+    mock_settings.API_V1_STR = ""
     mock_settings.CORS_ORIGINS = ""
     mock_settings.LOG_LEVEL = "INFO"
     mock_settings.DEBUGPY_ENABLE = False

@@ -137,7 +137,7 @@ def mock_settings() -> Mock:
     """Return mock settings object."""
     settings = Mock()
     settings.PROJECT_NAME = "Voice Stack Test"
-    settings.API_V1_STR = "/v1"
+    settings.API_V1_STR = ""
     settings.CORS_ORIGINS = ""
     settings.LOG_LEVEL = "INFO"
     settings.DEBUGPY_ENABLE = False
