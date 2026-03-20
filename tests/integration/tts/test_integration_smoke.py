@@ -20,9 +20,9 @@ def test_tts_routes_are_registered(tts_integration_client: TestClient) -> None:
     """Test that TTS API routes are registered during lifespan startup."""
     routes = [route.path for route in tts_integration_client.app.routes]
 
-    # Check for OpenAI-compatible routes (double /v1 prefix)
-    assert any("/v1/v1/models" in route for route in routes)
-    assert any("/v1/v1/audio/speech" in route for route in routes)
+    # Check for OpenAI-compatible routes
+    assert any("/v1/models" in route for route in routes)
+    assert any("/v1/audio/speech" in route for route in routes)
 
 
 @pytest.mark.integration
@@ -45,6 +45,5 @@ def test_tts_openapi_schema_includes_all_routes(tts_integration_client: TestClie
     assert "paths" in schema
 
     # Verify key routes are in the schema
-    # Note: Routes have double /v1 prefix (API_V1_STR + router prefix)
-    assert "/v1/v1/models" in schema["paths"]
-    assert "/v1/v1/audio/speech" in schema["paths"]
+    assert "/v1/models" in schema["paths"]
+    assert "/v1/audio/speech" in schema["paths"]
