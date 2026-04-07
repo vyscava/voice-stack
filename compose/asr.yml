@@ -1,0 +1,76 @@
+# Voice Stack ASR — Portainer Production Stack
+# Deployed on openwebui host (192.168.50.15) with RTX 3060 GPU
+#
+# Portainer config:
+#   Repository: https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
+#   Compose path: compose/asr.yml
+#   Environment: openwebui (192.168.50.15)
+
+services:
+  asr:
+    image: registry.local.vitorgarbim.me/voice-stack:latest
+    container_name: voice-stack-asr
+    restart: unless-stopped
+    runtime: nvidia
+
+    environment:
+      SERVICE_MODE: asr
+      NVIDIA_VISIBLE_DEVICES: all
+      ENV: ${ENV}
+      LOG_LEVEL: ${LOG_LEVEL}
+      HOST: ${HOST}
+      ASR_PORT: ${ASR_PORT}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DEBUGPY_ENABLE: ${DEBUGPY_ENABLE}
+      ASR_ENGINE: ${ASR_ENGINE}
+      ASR_DEVICE: ${ASR_DEVICE}
+      ASR_MODEL: ${ASR_MODEL}
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE}
+      ASR_CPU_THREADS: ${ASR_CPU_THREADS}
+      ASR_NUM_OF_WORKERS: ${ASR_NUM_OF_WORKERS}
+      ASR_CACHE_ENABLED: ${ASR_CACHE_ENABLED}
+      ASR_CACHE_MAX_ITEMS: ${ASR_CACHE_MAX_ITEMS}
+      ASR_TRANSCRIBE_BEAM_SIZE: ${ASR_TRANSCRIBE_BEAM_SIZE}
+      ASR_TRANSCRIBE_TEMPERATURE: ${ASR_TRANSCRIBE_TEMPERATURE}
+      ASR_TRANSCRIBE_BEST_OF: ${ASR_TRANSCRIBE_BEST_OF}
+      ASR_VAD_ENABLED: ${ASR_VAD_ENABLED}
+      ASR_VAD_THRESHOLD: ${ASR_VAD_THRESHOLD}
+      ASR_IDLE_TIMEOUT_MINUTES: ${ASR_IDLE_TIMEOUT_MINUTES}
+      ASR_MAX_CONCURRENT_REQUESTS: ${ASR_MAX_CONCURRENT_REQUESTS}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB}
+
+    ports:
+      - "5001:5001"
+
+    volumes:
+      - asr-models:/home/voicestack/.cache/huggingface/hub
+
+    dns:
+      - 192.168.50.4
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  asr-models:
+    driver: local
