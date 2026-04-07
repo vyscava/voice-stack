@@ -28,7 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 # Split by feature so you can `pip install .[tts]` on lightweight machines, etc.
 tts = [
-  "coqui-tts",
+  "coqui-tts[codec]",
   "transformers<5",
   "torch",
   "numpy",
