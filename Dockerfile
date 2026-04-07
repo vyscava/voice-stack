@@ -19,27 +19,18 @@
 # ============================================================================
 
 # -----------------------------------------------------------------------------
-# Stage 1: Base - System Dependencies
+# Stage 1: Builder - Install all dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS base
+FROM python:3.11-slim AS builder
 
-# Install system dependencies using our script approach
+# Install build-time system dependencies (not needed at runtime)
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libsndfile1 \
-        libportaudio2 \
         python3-dev \
         build-essential \
         git \
         curl \
-        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# -----------------------------------------------------------------------------
-# Stage 2: Builder - Python Dependencies
-# -----------------------------------------------------------------------------
-FROM base AS builder
 
 WORKDIR /build
 
@@ -58,25 +49,51 @@ RUN pip install --no-cache-dir hatch
 COPY scripts/install_torch.sh scripts/accept_coqui_license.sh ./scripts/
 RUN chmod +x scripts/*.sh
 
-# Create production environment with BOTH ASR and TTS
-# This creates a unified venv with all production dependencies
-RUN hatch env create default
+# Create production environment with ASR + TTS + server (NO dev deps)
+RUN hatch env create prod-asr && \
+    hatch env create prod-tts
+
+# Merge both prod venvs into a single unified venv
+# prod-asr has: server + asr deps, prod-tts has: server + tts deps
+# We install everything into one venv for the unified image
+RUN python -m venv /build/.venv && \
+    /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts]"
 
 # Install PyTorch (auto-detects CPU/CUDA)
 RUN bash scripts/install_torch.sh
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
-# This creates the tos_agreed.txt file that Coqui checks for
 RUN bash scripts/accept_coqui_license.sh
 
+# Fix shebangs to match production path
+RUN sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' /build/.venv/bin/* && \
+    # Clean up unnecessary files to reduce image size
+    find /build/.venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true && \
+    find /build/.venv -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true && \
+    find /build/.venv -name '*.pyc' -delete 2>/dev/null || true && \
+    find /build/.venv -name '*.pyo' -delete 2>/dev/null || true
+
+# Remove the intermediate hatch envs (not needed)
+RUN rm -rf /build/.venv-asr /build/.venv-tts
+
 # -----------------------------------------------------------------------------
-# Stage 3: Production - Minimal Runtime
+# Stage 2: Production - Minimal Runtime
 # -----------------------------------------------------------------------------
-FROM base AS production
+FROM python:3.11-slim AS production
 
 LABEL maintainer="vyscava@gmail.com"
 LABEL description="Voice Stack unified ASR + TTS service"
 LABEL version="0.1.0"
+
+# Install only runtime system dependencies (no build tools)
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        libportaudio2 \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN useradd -m -u 1000 -s /bin/bash voicestack
@@ -84,9 +101,8 @@ RUN useradd -m -u 1000 -s /bin/bash voicestack
 # Set working directory
 WORKDIR /app
 
-# Copy Python environment from builder and fix shebangs
+# Copy Python environment from builder (--chown sets ownership, no extra chown needed)
 COPY --from=builder --chown=voicestack:voicestack /build/.venv /app/.venv
-RUN sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' /app/.venv/bin/*
 
 # Copy application source
 COPY --chown=voicestack:voicestack src/ /app/src/
@@ -99,11 +115,13 @@ COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
 # Create directories for runtime data and pre-accept Coqui license
-RUN mkdir -p /app/voices /app/models \
-        /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2 && \
+# NOTE: Do NOT chown -R /app here — it duplicates the entire .venv layer
+RUN mkdir -p /app/voices /app/models && \
+    chown voicestack:voicestack /app/voices /app/models && \
+    mkdir -p /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2 && \
     echo "1" > /home/voicestack/.local/share/tts/tos_agreed.txt && \
     echo "1" > /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2/tos_agreed.txt && \
-    chown -R voicestack:voicestack /app /home/voicestack/.local
+    chown -R voicestack:voicestack /home/voicestack/.local
 
 # Switch to non-root user
 USER voicestack

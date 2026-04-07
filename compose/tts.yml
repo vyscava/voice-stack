@@ -13,12 +13,28 @@ services:
     restart: unless-stopped
     runtime: nvidia
 
-    env_file:
-      - /opt/voice-stack-tts/.env
-
     environment:
       SERVICE_MODE: tts
       NVIDIA_VISIBLE_DEVICES: all
+      ENV: ${ENV}
+      LOG_LEVEL: ${LOG_LEVEL}
+      HOST: ${HOST}
+      TTS_PORT: ${TTS_PORT}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DEBUGPY_ENABLE: ${DEBUGPY_ENABLE}
+      TTS_ENGINE: ${TTS_ENGINE}
+      TTS_DEVICE: ${TTS_DEVICE}
+      TTS_MODEL: ${TTS_MODEL}
+      TTS_VOICES_DIR: ${TTS_VOICES_DIR}
+      TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE}
+      TTS_MAX_CHARS: ${TTS_MAX_CHARS}
+      TTS_MIN_CHARS: ${TTS_MIN_CHARS}
+      TTS_RETRY_STEPS: ${TTS_RETRY_STEPS}
+      TTS_DEFAULT_LANG: ${TTS_DEFAULT_LANG}
+      TTS_AUTO_LANG: ${TTS_AUTO_LANG}
+      TTS_IDLE_TIMEOUT_MINUTES: ${TTS_IDLE_TIMEOUT_MINUTES}
+      TTS_MAX_CONCURRENT_REQUESTS: ${TTS_MAX_CONCURRENT_REQUESTS}
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB}
 
     ports:
       - "5002:5002"
