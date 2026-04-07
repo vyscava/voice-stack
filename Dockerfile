@@ -84,8 +84,9 @@ RUN useradd -m -u 1000 -s /bin/bash voicestack
 # Set working directory
 WORKDIR /app
 
-# Copy Python environment from builder
+# Copy Python environment from builder and fix shebangs
 COPY --from=builder --chown=voicestack:voicestack /build/.venv /app/.venv
+RUN sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' /app/.venv/bin/*
 
 # Copy application source
 COPY --chown=voicestack:voicestack src/ /app/src/
@@ -97,9 +98,12 @@ COPY --chown=voicestack:voicestack scripts/.env.production.* /app/config/
 COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 
-# Create directories for runtime data
-RUN mkdir -p /app/voices /app/models && \
-    chown -R voicestack:voicestack /app
+# Create directories for runtime data and pre-accept Coqui license
+RUN mkdir -p /app/voices /app/models \
+        /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2 && \
+    echo "1" > /home/voicestack/.local/share/tts/tos_agreed.txt && \
+    echo "1" > /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2/tos_agreed.txt && \
+    chown -R voicestack:voicestack /app /home/voicestack/.local
 
 # Switch to non-root user
 USER voicestack

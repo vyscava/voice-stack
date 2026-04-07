@@ -1,0 +1,60 @@
+# Voice Stack TTS — Portainer Production Stack
+# Deployed on openwebui host (192.168.50.15) with RTX 3060 GPU
+#
+# Portainer config:
+#   Repository: https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
+#   Compose path: compose/tts.yml
+#   Environment: openwebui (192.168.50.15)
+
+services:
+  tts:
+    image: registry.local.vitorgarbim.me/voice-stack:latest
+    container_name: voice-stack-tts
+    restart: unless-stopped
+    runtime: nvidia
+
+    env_file:
+      - /opt/voice-stack-tts/.env
+
+    environment:
+      SERVICE_MODE: tts
+      NVIDIA_VISIBLE_DEVICES: all
+
+    ports:
+      - "5002:5002"
+
+    volumes:
+      - tts-models:/home/voicestack/.local/share/tts
+      - tts-voices:/app/voices
+
+    dns:
+      - 192.168.50.4
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  tts-models:
+    driver: local
+  tts-voices:
+    driver: local
