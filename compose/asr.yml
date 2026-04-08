@@ -38,12 +38,13 @@ services:
       ASR_IDLE_TIMEOUT_MINUTES: ${ASR_IDLE_TIMEOUT_MINUTES}
       ASR_MAX_CONCURRENT_REQUESTS: ${ASR_MAX_CONCURRENT_REQUESTS}
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB}
+      HF_HOME: /app/models
 
     ports:
       - "5001:5001"
 
     volumes:
-      - asr-models:/home/voicestack/.cache/huggingface/hub
+      - asr-models:/app/models
 
     dns:
       - 192.168.50.4
