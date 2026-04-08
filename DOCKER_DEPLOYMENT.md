@@ -255,7 +255,7 @@ scp docker-compose.yml user@server:/opt/voice-stack/
 
 2. **Pull latest image**:
 ```bash
-docker pull registry.gitlab.com/your-group/voice-stack:latest
+docker pull your-registry/voice-stack:latest
 ```
 
 3. **Start services**:
@@ -281,7 +281,7 @@ docker run -d \
   -e ASR_MODEL=base \
   -p 5001:5001 \
   -v asr-models:/app/models \
-  registry.gitlab.com/your-group/voice-stack:latest
+  your-registry/voice-stack:latest
 ```
 
 **TTS Service**:
@@ -295,8 +295,32 @@ docker run -d \
   -p 5002:5002 \
   -v tts-models:/app/models \
   -v ./voices:/app/voices:ro \
-  registry.gitlab.com/your-group/voice-stack:latest
+  your-registry/voice-stack:latest
 ```
+
+### Using Portainer (Homelab Production)
+
+The `compose/` directory contains Portainer-ready stack files:
+
+| File | Service | Port |
+|------|---------|------|
+| `compose/asr.yml` | ASR (Faster-Whisper) | 5001 |
+| `compose/tts.yml` | TTS (Coqui XTTS-v2) | 5002 |
+
+Both compose files use `${VAR}` syntax — configure everything through Portainer's stack environment variables.
+
+**Setup in Portainer:**
+1. Create a new stack, point it at this Git repository
+2. Set the compose path to `compose/asr.yml` or `compose/tts.yml`
+3. Fill in environment variables (use `scripts/.env.production.*` as reference)
+4. Deploy
+
+Both stacks include `runtime: nvidia` with GPU reservations, health checks, DNS config, log rotation, and memory limits.
+
+**Redeploying after a new image:**
+1. Push the new image to your registry
+2. Pull on the target host: `docker pull your-registry/voice-stack:latest`
+3. Redeploy the stack in Portainer
 
 ### GPU Support
 
@@ -381,7 +405,7 @@ docker volume create tts-models
 Every push to `main` that passes tests automatically:
 1. Runs full test suite
 2. Promotes production image to `:latest` tag
-3. Available immediately: `registry.gitlab.com/your-group/voice-stack:latest`
+3. Available immediately: `your-registry/voice-stack:latest`
 
 ### Versioned Release (git tags)
 
@@ -408,7 +432,7 @@ git push origin main --tags
 
 4. **Pull specific version**:
 ```bash
-docker pull registry.gitlab.com/your-group/voice-stack:v1.2.3
+docker pull your-registry/voice-stack:v1.2.3
 ```
 
 ### Semantic Versioning
