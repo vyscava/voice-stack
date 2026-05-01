@@ -79,13 +79,16 @@ RUN rm -rf /build/.venv-asr /build/.venv-tts
 # -----------------------------------------------------------------------------
 # Stage 2: Production - Minimal Runtime
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS production
+# Using nvidia/cuda base image which includes libcublas, libcublas.so.12, and cuDNN
+# This fixes the "Library libcublas.so.12 is not found" error for ASR GPU inference
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS production
 
 LABEL maintainer="vyscava@gmail.com"
 LABEL description="Voice Stack unified ASR + TTS service"
 LABEL version="0.1.0"
 
 # Install only runtime system dependencies (no build tools)
+# Note: CUDA and cuDNN are already included in the base image
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -93,6 +96,8 @@ RUN apt-get update -y && \
         libportaudio2 \
         curl \
         ca-certificates \
+        python3.11 \
+        python3.11-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
