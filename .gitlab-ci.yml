@@ -111,6 +111,9 @@ build:prod-image:
   image: docker:29
   # No services needed - using runner's dind daemon directly
 
+  # Large image builds need more time for push operation
+  timeout: 2 hours
+
   rules:
     # Only run on main branch (for release)
     # Feature branches don't need prod image - tests run on CI image
