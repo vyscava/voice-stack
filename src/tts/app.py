@@ -153,9 +153,18 @@ async def index() -> Any:
     return "/docs"
 
 
+@app.head("/", include_in_schema=False)
+async def index_head() -> JSONResponse:
+    """HEAD handler for root - returns 200 to indicate service is alive."""
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/health")
+@app.head("/health")
 @app.get("/healthz")
+@app.head("/healthz")
 @app.get("/healthcheck")
+@app.head("/healthcheck")
 async def healthcheck() -> JSONResponse:
     """
     Healthcheck endpoint to verify that the server is running.
