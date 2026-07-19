@@ -17,12 +17,18 @@ def test_tts_app_starts_with_lifespan(tts_integration_client: TestClient) -> Non
 @pytest.mark.integration
 @pytest.mark.tts
 def test_tts_routes_are_registered(tts_integration_client: TestClient) -> None:
-    """Test that TTS API routes are registered during lifespan startup."""
-    routes = [route.path for route in tts_integration_client.app.routes]
+    """Test that TTS API routes are registered during lifespan startup.
 
-    # Check for OpenAI-compatible routes
-    assert any("/v1/models" in route for route in routes)
-    assert any("/v1/audio/speech" in route for route in routes)
+    Probes each expected route and asserts it is reachable (not 404). A method
+    mismatch returns 405, which still confirms the path is registered. This is
+    robust to FastAPI's internal route representation: since 0.139, included
+    routers are attached lazily as ``_IncludedRouter`` objects (which have no
+    ``.path``) and are not flattened into ``app.routes``, so iterating
+    ``route.path`` over ``app.routes`` no longer surfaces included routes.
+    """
+    for path in ("/v1/models", "/v1/audio/speech"):
+        status_code = tts_integration_client.get(path).status_code
+        assert status_code != 404, f"expected route {path} to be registered, got 404"
 
 
 @pytest.mark.integration

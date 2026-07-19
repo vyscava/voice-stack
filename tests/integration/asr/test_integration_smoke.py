@@ -17,13 +17,18 @@ def test_asr_app_starts_with_lifespan(asr_integration_client: TestClient) -> Non
 @pytest.mark.integration
 @pytest.mark.asr
 def test_asr_routes_are_registered(asr_integration_client: TestClient) -> None:
-    """Test that ASR API routes are registered during lifespan startup."""
-    routes = [route.path for route in asr_integration_client.app.routes]
+    """Test that ASR API routes are registered during lifespan startup.
 
-    # Check for OpenAI-compatible routes
-    assert any("/v1/audio/transcriptions" in route for route in routes)
-    assert any("/v1/audio/translations" in route for route in routes)
-    assert any("/v1/models" in route for route in routes)
+    Probes each expected route and asserts it is reachable (not 404). A method
+    mismatch returns 405, which still confirms the path is registered. This is
+    robust to FastAPI's internal route representation: since 0.139, included
+    routers are attached lazily as ``_IncludedRouter`` objects (which have no
+    ``.path``) and are not flattened into ``app.routes``, so iterating
+    ``route.path`` over ``app.routes`` no longer surfaces included routes.
+    """
+    for path in ("/v1/audio/transcriptions", "/v1/audio/translations", "/v1/models"):
+        status_code = asr_integration_client.get(path).status_code
+        assert status_code != 404, f"expected route {path} to be registered, got 404"
 
 
 @pytest.mark.integration
