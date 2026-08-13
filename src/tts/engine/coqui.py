@@ -4,6 +4,7 @@ import base64
 import io
 import math
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ from TTS.tts.models.xtts import XttsArgs, XttsAudioConfig
 from core.logging import logger_tts as logger
 from core.settings import get_settings
 from tts.engine.base import TTSBase, languange_canonical_str, speech_effective_options
+from tts.exceptions import ModelLoadError
 from tts.schemas.audio_engine import (
     AudioFormat,
     ModelResponse,
@@ -46,7 +48,16 @@ class TTSCoqui(TTSBase):
         """Load or reload the Coqui TTS model."""
         logger.info("Loading Coqui TTS")
         logger.info("Loading model_id=%s on %s", self.model_id, self.model_device)
-        self.tts = TTS(model_name=self.model_id, progress_bar=False).to(self.model_device)
+
+        local = self._resolve_local_model(self.model_id)
+        if local is not None:
+            model_path, config_path = local
+            logger.info("Loading local checkpoint model_path=%s config_path=%s", model_path, config_path)
+            self.tts = TTS(model_path=str(model_path), config_path=str(config_path), progress_bar=False).to(
+                self.model_device
+            )
+        else:
+            self.tts = TTS(model_name=self.model_id, progress_bar=False).to(self.model_device)
 
         # Loading Available Models in memory
         self.available_models = self.tts.list_models()
@@ -54,8 +65,45 @@ class TTSCoqui(TTSBase):
         # Builtin speakers (if the model exposes them)
         self._load_voices_presets()
 
+        # Custom voices cloned from reference audio in TTS_VOICES_DIR
+        self._load_custom_voices()
+
         # Supported languages reported by the model (preferred)
         self._load_supported_languages()
+
+    @staticmethod
+    def _resolve_local_model(model_id: str) -> tuple[Path, Path] | None:
+        """Resolve a local fine-tuned checkpoint, or None for a Coqui model id.
+
+        A fine-tuned XTTS model is served by pointing TTS_MODEL at either the
+        checkpoint file or the directory holding it; anything else (the default
+        `tts_models/...` form) falls through to Coqui's model manager.
+
+        Both a model file and a config are required -- Coqui cannot infer the
+        architecture from weights alone, and passing model_path without
+        config_path fails deep inside the loader with a much less obvious error.
+        """
+        if not model_id or model_id.startswith(("tts_models/", "voice_conversion_models/")):
+            return None
+
+        p = Path(model_id)
+        if not p.exists():
+            return None
+
+        model_path = p if p.is_file() else p / "model.pth"
+        config_path = model_path.parent / "config.json"
+
+        if not model_path.is_file():
+            raise ModelLoadError(
+                message="Local TTS model not found",
+                details=f"Expected a checkpoint at {model_path}",
+            )
+        if not config_path.is_file():
+            raise ModelLoadError(
+                message="Local TTS model config not found",
+                details=f"Expected config.json next to the checkpoint at {config_path}",
+            )
+        return model_path, config_path
 
     def _unload_model(self) -> None:
         """
@@ -110,6 +158,50 @@ class TTSCoqui(TTSBase):
         if hasattr(self.tts, "speakers") and isinstance(self.tts.speakers, list):
             for name in self.tts.speakers:
                 self.voice_to_preset[name] = name
+
+    def _load_custom_voices(self) -> None:
+        """Map custom voice ids to the reference audio that clones them.
+
+        TTS_VOICES_DIR was read into settings and never used, so the documented
+        "drop a .wav in voices/ and get a new voice" feature did not exist: the
+        engine only ever offered the model's builtin speakers.
+
+        Two layouts are supported:
+          voices/alice.wav          -> voice "alice",  one reference clip
+          voices/alice/*.wav        -> voice "alice",  several reference clips
+
+        Several clips are worth supporting because XTTS averages the speaker
+        embedding over them, which is more stable than a single sample. More is
+        not automatically better though -- 3 good clips beat 6 mixed ones.
+        """
+        self.voice_to_wavs: dict[str, list[str]] = {}
+
+        root = Path(self.voices_dir)
+        if not root.is_dir():
+            logger.info("No voices dir at %s; only builtin speakers available", root)
+            return
+
+        for entry in sorted(root.iterdir()):
+            if entry.is_file() and entry.suffix.lower() == ".wav":
+                self.voice_to_wavs[entry.stem] = [str(entry)]
+            elif entry.is_dir():
+                wavs = sorted(str(w) for w in entry.glob("*.wav"))
+                if wavs:
+                    self.voice_to_wavs[entry.name] = wavs
+
+        overlap = set(self.voice_to_wavs) & set(self.voice_to_preset)
+        if overlap:
+            # A custom voice shadowing a builtin one is almost certainly a
+            # mistake, and a silent win for either side is worse than saying so.
+            logger.warning("Custom voices shadow builtin speakers: %s", sorted(overlap))
+
+        if self.voice_to_wavs:
+            logger.info(
+                "Loaded %d custom voice(s) from %s: %s",
+                len(self.voice_to_wavs),
+                root,
+                sorted(self.voice_to_wavs),
+            )
 
     def _load_supported_languages(self) -> None:
         """
@@ -190,17 +282,40 @@ class TTSCoqui(TTSBase):
     def list_models(self) -> ModelsResponse:
         return ModelsResponse(data=[ModelResponse(id=model) for model in self.available_models])
 
+    def resolve_voice(self, voice: str) -> list[str] | None:
+        """Resolve a requested voice id.
+
+        Returns None for a builtin speaker (selected by name), or the list of
+        reference clips for a custom voice (cloned via speaker_wav).
+
+        Raises KeyError if the voice is unknown. That matters: this used to
+        silently substitute the first builtin speaker, so a typo -- or a voice
+        that failed to load -- returned HTTP 200 and confident audio in
+        somebody else's voice. The API layer already maps KeyError to a 404
+        VoiceNotFoundError; that branch was simply unreachable.
+
+        Kept as its own method so the behaviour is testable without loading a
+        model. Inlining it in speech() is what let the bug hide.
+        """
+        if not self.voice_to_preset and not self.voice_to_wavs:
+            raise RuntimeError("No builtin speakers or custom voices available for this model.")
+
+        if voice in self.voice_to_preset:
+            return None
+        if voice in self.voice_to_wavs:
+            return self.voice_to_wavs[voice]
+        raise KeyError(voice)
+
     def list_voices(self) -> VoicesResponse:
         """
         List all available voices for this TTS model.
-        Returns a VoicesResponse containing all builtin speakers.
+        Returns builtin speakers plus any custom voices cloned from TTS_VOICES_DIR.
         """
-        if not self.voice_to_preset:
-            return VoicesResponse(data=[])
-
-        return VoicesResponse(
-            data=[VoiceResponse(id=voice_id, name=voice_name) for voice_id, voice_name in self.voice_to_preset.items()]
-        )
+        data = [VoiceResponse(id=voice_id, name=voice_name) for voice_id, voice_name in self.voice_to_preset.items()]
+        data += [
+            VoiceResponse(id=name, name=name) for name in sorted(self.voice_to_wavs) if name not in self.voice_to_preset
+        ]
+        return VoicesResponse(data=data)
 
     def speech(
         self,
@@ -235,14 +350,8 @@ class TTSCoqui(TTSBase):
                 props.speed,
             )
 
-        # Voice preset selection (builtin speakers)
-        if not self.voice_to_preset:
-            raise RuntimeError("No builtin speakers exposed by this model.")
-
-        # Checking if requested voice exists in preset
-        if props.voice not in self.voice_to_preset:
-            # It does not exists lets get the first one available
-            props.voice = next(iter(self.voice_to_preset))
+        # Voice selection: builtin speaker, or a custom voice cloned from wavs.
+        speaker_wav = self.resolve_voice(props.voice)
 
         # Split long text into manageable chunks
         cur_size = max(1, int(self.max_chars))  # current chunk budget
@@ -256,12 +365,21 @@ class TTSCoqui(TTSBase):
                     chunk = normalize_text(chunk)
                     lang_for_chunk = self._choose_lang(chunk, props.requested_language)
 
-                    # Generate chunk audio
-                    wav = self.tts.tts(
-                        text=chunk,
-                        speaker=props.voice,
-                        language=lang_for_chunk,
-                    )
+                    # Generate chunk audio. A custom voice is cloned from its
+                    # reference clips (speaker_wav); a builtin one is selected
+                    # by name. Passing both would be ambiguous to Coqui.
+                    if speaker_wav is not None:
+                        wav = self.tts.tts(
+                            text=chunk,
+                            speaker_wav=speaker_wav,
+                            language=lang_for_chunk,
+                        )
+                    else:
+                        wav = self.tts.tts(
+                            text=chunk,
+                            speaker=props.voice,
+                            language=lang_for_chunk,
+                        )
                     wavs.append(np.asarray(wav, dtype=np.float32))
 
                 # Merge chunks
