@@ -37,6 +37,21 @@ for module in _tts_modules:
     if module not in sys.modules:
         sys.modules[module] = MagicMock()
 
+# torch is mocked for the same reason as TTS: it is a multi-GB dependency the
+# unit suite has no business installing. Without it `tts.engine.coqui` cannot be
+# imported at all (it needs torch.serialization.add_safe_globals at module
+# scope), so nothing in the Coqui engine was reachable by a unit test -- which
+# is how a silently-substituted voice and an unimplemented voices_dir both
+# shipped past a green suite.
+_torch_modules = [
+    "torch",
+    "torch.serialization",
+]
+
+for module in _torch_modules:
+    if module not in sys.modules:
+        sys.modules[module] = MagicMock()
+
 
 @pytest.fixture
 def mock_tts_engine():
