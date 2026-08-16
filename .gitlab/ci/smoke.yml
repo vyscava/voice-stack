@@ -70,6 +70,11 @@ smoke:image-works:
       trap cleanup EXIT
       cleanup
 
+      # A user-defined network so the gateway can reach the other two BY NAME.
+      # The default bridge has no DNS between containers, so http://smoke-tts
+      # would not resolve.
+      docker network create smoke-net >/dev/null
+
       # Fail fast and loudly on a container that dies, instead of waiting out
       # the whole budget on a health check that will never answer.
       wait_healthy() {
