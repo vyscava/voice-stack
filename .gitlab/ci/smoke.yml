@@ -1,0 +1,142 @@
+# ============================================================================
+# Smoke Stage - Does the artifact actually WORK?
+# ============================================================================
+# Included from .gitlab-ci.yml. It is the only stage that runs the PRODUCTION
+# image rather than the CI image, and the reason it exists deserves to be read
+# before anyone edits it.
+#
+# WHY: on 2026-08-13 CI was fully green on an image that could not boot, and TTS
+# stayed down for three days (#4). Every other gate runs against the CI image
+# with torch MOCKED in the TTS conftest -- so a torch that cannot be imported at
+# all passes the entire suite. Nothing in the pipeline had ever started the thing
+# we publish.
+#
+# PROVEN TO FAIL, which is the only reason to trust it. Run by hand on the
+# openwebui host before this was merged, weights mounted so timing is honest:
+#   voice-stack:broken-20260813-dynamo -> container EXITED after ~40s with
+#       "ValueError: Duplicate dispatch rule for <built-in function intern>"
+#   voice-stack:tts-torch291-cpu       -> HEALTHY after ~40s, /v1/audio/voices
+#       returned real speakers ("Claribel Dervla", "Daisy Studious")
+#
+# MODEL WEIGHTS ARE NOT OPTIONAL HERE. TTSCoqui.__init__ calls _load_model(), and
+# tts/api/api_v1/endpoints/openai.py instantiates the engine AT IMPORT
+# (`_engine_for_listing = get_audio_engine()`), so the container cannot answer
+# /health until XTTS v2 (~1.8 GB) is on disk. Production only escapes this
+# because compose mounts a models volume -- and still allows start_period: 120s.
+# The named volumes below give CI the same warm cache: the first pipeline pays
+# the download once, every later one starts warm. Without them every pipeline
+# would pull 1.8 GB inside its timeout and an HF hiccup would look like a
+# regression.
+#
+# LOG_LEVEL=info is passed explicitly. uvicorn rejects "INFO" and exits; the
+# image default was uppercase until !46 fixed it, so this keeps the gate working
+# against older images too.
+# ============================================================================
+
+smoke:image-works:
+  stage: smoke
+  image: docker:29
+  needs:
+    - build:prod-image
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - pyproject.toml
+        - Dockerfile
+        - .gitlab-ci.yml
+        - .gitlab/ci/smoke.yml
+        - scripts/entrypoint.sh
+        - scripts/assert_runtime.py
+        - scripts/accept_coqui_license.sh
+        - src/**/*
+
+  variables:
+    TTS_MODEL_CACHE: voice-stack-ci-tts-models
+    ASR_MODEL_CACHE: voice-stack-ci-asr-models
+
+  before_script:
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      fi
+
+  script:
+    - docker pull $PROD_IMAGE_SHA
+    - |
+      set -e
+      cleanup() { docker rm -f smoke-tts smoke-asr >/dev/null 2>&1 || true; }
+      trap cleanup EXIT
+      cleanup
+
+      # Fail fast and loudly on a container that dies, instead of waiting out
+      # the whole budget on a health check that will never answer.
+      wait_healthy() {
+        name=$1; port=$2
+        for _ in $(seq 1 72); do
+          if docker exec "$name" curl -fsS "http://localhost:$port/health" >/dev/null 2>&1; then
+            return 0
+          fi
+          if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != "true" ]; then
+            echo "FAIL: $name exited during startup"
+            docker logs --tail 40 "$name"
+            return 1
+          fi
+          sleep 5
+        done
+        echo "FAIL: $name never became healthy within 360s"
+        docker logs --tail 40 "$name"
+        return 1
+      }
+
+      echo "--- TTS: boots, engine is real, and it SYNTHESISES ---"
+      docker run -d --name smoke-tts \
+        -e SERVICE_MODE=tts -e TTS_DEVICE=cpu -e LOG_LEVEL=info \
+        -v "$TTS_MODEL_CACHE":/home/voicestack/.local/share/tts \
+        "$PROD_IMAGE_SHA"
+      wait_healthy smoke-tts 5002
+
+      # Assert on a KNOWN speaker, not on "the response contained letters" --
+      # {"detail":"Internal Server Error"} contains letters.
+      docker exec smoke-tts curl -fsS http://localhost:5002/v1/audio/voices -o /tmp/voices.json
+      docker exec smoke-tts grep -q 'Claribel Dervla' /tmp/voices.json \
+        || { echo "FAIL: /v1/audio/voices did not list the built-in speakers"; \
+             docker exec smoke-tts cat /tmp/voices.json || true; exit 1; }
+
+      # The real thing: bytes out of the model, not just a live process.
+      docker exec smoke-tts curl -fsS -X POST http://localhost:5002/v1/audio/speech \
+        -H 'Content-Type: application/json' \
+        -d '{"model":"tts-1","voice":"Claribel Dervla","input":"Smoke test one two three.","response_format":"opus"}' \
+        -o /tmp/speech.opus
+      docker exec smoke-tts sh -c '[ -s /tmp/speech.opus ] && [ "$(wc -c < /tmp/speech.opus)" -gt 2000 ]' \
+        || { echo "FAIL: synthesis produced no usable audio"; \
+             docker exec smoke-tts sh -c 'wc -c /tmp/speech.opus; head -c 200 /tmp/speech.opus' || true; exit 1; }
+      docker exec smoke-tts sh -c 'head -c 4 /tmp/speech.opus | grep -q OggS' \
+        || { echo "FAIL: response is not Ogg audio"; exit 1; }
+      echo "OK: TTS booted, listed speakers, and synthesised real audio."
+
+      echo "--- ASR: boots, and TRANSCRIBES the audio TTS just produced ---"
+      docker cp smoke-tts:/tmp/speech.opus /tmp/speech.opus
+      # ASR_MODEL_LOCATION is not optional: fasterwhisper.py passes
+      # download_root=settings.ASR_MODEL_LOCATION, which defaults to None, so
+      # faster-whisper writes to the HF cache under /home/voicestack/.cache and
+      # the mount below would be inert -- protection in appearance only.
+      docker run -d --name smoke-asr \
+        -e SERVICE_MODE=asr -e LOG_LEVEL=info -e ASR_MODEL_LOCATION=/app/models \
+        -v "$ASR_MODEL_CACHE":/app/models \
+        "$PROD_IMAGE_SHA"
+      wait_healthy smoke-asr 5001
+      docker cp /tmp/speech.opus smoke-asr:/tmp/speech.opus
+      docker exec smoke-asr curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions \
+        -F 'file=@/tmp/speech.opus;type=audio/ogg' -F 'model=whisper-1' -o /tmp/asr.json
+      docker exec smoke-asr grep -qi 'smoke' /tmp/asr.json \
+        || { echo "FAIL: transcript did not contain the spoken phrase"; \
+             docker exec smoke-asr cat /tmp/asr.json || true; exit 1; }
+      echo "OK: ASR booted and transcribed the synthesised clip."
+
+      echo "Round trip complete: text -> TTS -> audio -> ASR -> text."
+
+  tags:
+    - docker
+    - nuc

@@ -7,9 +7,14 @@
 #   1. build-images: Build CI and production Docker images (SHA-tagged only)
 #   2. quality: Code formatting and linting
 #   3. test: Unit and integration tests
-#   4. coverage: Coverage report
-#   5. security: Secret detection and security scanning
-#   6. release: Promote to :latest ONLY if all checks pass
+#   4. smoke: Boot the PRODUCTION image and check it answers (see .gitlab/ci/smoke.yml)
+#   5. coverage: Coverage report
+#   6. security: Secret detection and security scanning
+#   7. release: Promote to :latest ONLY if all checks pass
+#
+# The smoke stage exists because everything above it runs against the CI image
+# with torch mocked, so a production image that cannot even start passes the
+# whole suite. That happened, and cost three days of TTS downtime (#4).
 #
 # Docker Images:
 #   - CI Image: Contains all dev dependencies for running tests
@@ -28,6 +33,7 @@ stages:
   - build-images
   - quality
   - test
+  - smoke
   - coverage
   - security
   - release
@@ -80,7 +86,6 @@ build:ci-image:
         - Dockerfile
         - .gitlab-ci.yml
         - scripts/install_system_deps.sh
-        - scripts/install_torch.sh
         - scripts/accept_coqui_license.sh
 
   before_script:
@@ -115,9 +120,25 @@ build:prod-image:
   timeout: 2 hours
 
   rules:
-    # Only run on main branch (for release)
-    # Feature branches don't need prod image - tests run on CI image
+    # Always on main (for release)
     - if: '$CI_COMMIT_BRANCH == "main"'
+    # ALSO on merge requests that change what goes INTO the image, so the smoke
+    # stage can boot-test a dependency change BEFORE it is merged. Previously
+    # this was main-only, which meant a build that could not start was only
+    # discovered after it had been promoted to :latest (#4).
+    # Keep this list a SUPERSET of smoke:image-works' changes: rules. smoke
+    # `needs` this job without optional:true, so any path that creates smoke
+    # without also creating its dependency makes the pipeline invalid.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - pyproject.toml
+        - Dockerfile
+        - .gitlab-ci.yml
+        - .gitlab/ci/smoke.yml
+        - scripts/entrypoint.sh
+        - scripts/assert_runtime.py
+        - scripts/accept_coqui_license.sh
+        - src/**/*
 
   before_script:
     - echo "DOCKER_REGISTRY=${DOCKER_REGISTRY:-not set}"
@@ -346,6 +367,7 @@ release:latest:
 
   needs:
     - build:prod-image
+    - smoke:image-works
     - coverage:report
     - secret_detection
 
@@ -411,8 +433,9 @@ release:version:
     - docker
 
 # ============================================================================
-# Include GitLab Security Templates
+# Include GitLab Security Templates + local stages
 # ============================================================================
 
 include:
   - template: Security/Secret-Detection.gitlab-ci.yml
+  - local: .gitlab/ci/smoke.yml
