@@ -2,7 +2,6 @@
 # Voice Stack CI/CD Docker Image
 # ============================================================================
 # This image contains ALL dependencies (dev, ASR, TTS) for running CI/CD jobs
-# Built from your existing scripts to ensure consistency with local development
 #
 # Usage in GitLab CI:
 #   image: $CI_REGISTRY_IMAGE/ci:latest
@@ -46,7 +45,7 @@ COPY pyproject.toml README.md ./
 # Install hatch and nox
 RUN pip install --no-cache-dir hatch nox
 
-# Copy scripts directory (needed for install_torch.sh)
+# Copy scripts directory
 COPY scripts/ ./scripts/
 
 # Make scripts executable
@@ -56,23 +55,34 @@ RUN chmod +x scripts/*.sh
 # This installs: dev, server, tts, asr features from pyproject.toml
 RUN hatch env create
 
-# Install PyTorch with CUDA support (auto-detection)
-# The script checks for nvidia-smi; in CI it will install CPU version
-RUN bash scripts/install_torch.sh
+# Force the CPU build of torch/torchaudio.
+#
+# pyproject pins the VERSION (==2.9.1) but PyPI serves that version as the CUDA
+# wheel, so hatch's resolve lands ~4 GB of nvidia-*-cu12 packages and, worse, a
+# DIFFERENT artifact from the one production runs. CI testing a different wheel
+# than prod ships is the general form of voice-stack#4.
+#
+# hatch owns environment creation here, so the variant is corrected afterwards
+# rather than installed first as in the production Dockerfile. --no-deps keeps
+# pip from re-resolving; --force-reinstall is required because the installed
+# 2.9.1 already satisfies ==2.9.1 and pip would otherwise skip it.
+RUN .venv/bin/pip install --no-cache-dir --force-reinstall --no-deps \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.9.1 torchaudio==2.9.1
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
-# This creates the tos_agreed.txt file that Coqui checks for
 RUN bash scripts/accept_coqui_license.sh
 
 # Set environment variables for hatch
 ENV HATCH_ENV_TYPE_VIRTUAL_PATH=.venv \
     PATH="/workspace/.venv/bin:$PATH"
 
-# Verify installation
+# Same assertions the production image runs -- identical invariants, one file,
+# so CI and prod cannot drift.
 RUN python --version && \
     pip --version && \
     hatch --version && \
-    python -c "import torch; print(f'PyTorch {torch.__version__}')"
+    python scripts/assert_runtime.py
 
 # Default command
 CMD ["/bin/bash"]
