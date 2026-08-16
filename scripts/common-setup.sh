@@ -4,6 +4,12 @@
 
 set -e
 
+# Pinned torch build. Must match pyproject.toml and both Dockerfiles.
+# The CPU index is not optional: PyPI serves torch==2.9.1 as the CUDA wheel, and
+# these services run on CPU. See the comment block in pyproject.toml.
+TORCH_VERSION="2.9.1"
+TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -200,23 +206,64 @@ setup_hatch_environment() {
     log_success "Hatch environment created: $venv_path"
 }
 
-# Install PyTorch with appropriate backend
+# Install the pinned CPU build of PyTorch into every service venv present.
+#
+# This used to shell out to scripts/install_torch.sh behind an `if [ -f ]`
+# guard, which meant that deleting that script turned the whole step into a
+# no-op that still reported success. The script itself was also inert: pyproject
+# had already pulled the CUDA wheel, and by PEP 440 local-version ordering
+# 2.13.0+cu130 sorts ABOVE 2.13.0+cpu, so its `--upgrade` never did anything.
+#
+# The version pin lives in pyproject.toml; the CPU INDEX is what selects the
+# build variant, because PyPI serves torch==2.9.1 as the CUDA wheel. This
+# function fails loudly rather than skipping.
 install_pytorch() {
-    log_info "Installing PyTorch..."
+    log_info "Installing PyTorch ${TORCH_VERSION} (CPU build) ..."
 
     cd "$REPO_ROOT"
 
-    if [ -f "./scripts/install_torch.sh" ]; then
-        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-            sudo -u "$SUDO_USER" bash ./scripts/install_torch.sh
-        else
-            bash ./scripts/install_torch.sh
+    local venvs=()
+    for candidate in .venv-asr .venv-tts .venv; do
+        if [ -x "$REPO_ROOT/$candidate/bin/pip" ]; then
+            venvs+=("$candidate")
         fi
-        log_success "PyTorch installation completed"
-    else
-        log_warn "PyTorch installation script not found. Skipping."
-        log_warn "You may need to install PyTorch manually for GPU support."
+    done
+
+    if [ ${#venvs[@]} -eq 0 ]; then
+        log_error "No service virtualenv found (.venv-asr / .venv-tts / .venv)."
+        log_error "Create one first with setup_hatch_environment, then re-run."
+        exit 1
     fi
+
+    for venv in "${venvs[@]}"; do
+        log_info "  -> $venv"
+        local pip_bin="$REPO_ROOT/$venv/bin/pip"
+        local py_bin="$REPO_ROOT/$venv/bin/python"
+
+        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+            sudo -u "$SUDO_USER" "$pip_bin" install --force-reinstall --no-deps \
+                --index-url "$TORCH_INDEX_URL" \
+                "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}"
+        else
+            "$pip_bin" install --force-reinstall --no-deps \
+                --index-url "$TORCH_INDEX_URL" \
+                "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}"
+        fi
+
+        # Prove the variant rather than assume it: a version pin can be
+        # satisfied by the CUDA wheel, which is how this went wrong before.
+        "$py_bin" -c "
+import sys, torch, torchaudio
+print(f'    torch {torch.__version__} | torchaudio {torchaudio.__version__}')
+if not torch.__version__.endswith('+cpu') or not torchaudio.__version__.endswith('+cpu'):
+    sys.exit(f'expected +cpu builds, got torch={torch.__version__} torchaudio={torchaudio.__version__}')
+" || {
+            log_error "Wrong torch build installed in $venv -- refusing to continue."
+            exit 1
+        }
+    done
+
+    log_success "PyTorch ${TORCH_VERSION}+cpu installed and verified"
 }
 
 # Create systemd service file

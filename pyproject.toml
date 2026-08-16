@@ -25,12 +25,55 @@ dependencies = [
   "ffmpeg-python"
 ]
 
+# -----------------------------------------------------------------------------
+# torch/torchaudio: three separate mechanisms, do not confuse them.
+#
+#   1. THE PIN (here) fixes the VERSION. 2.13 cannot be imported by the TTS path
+#      at all -- coqui-TTS -> transformers -> torch.compiler.disable ->
+#      import torch._dynamo, which re-registers sys.intern and raises
+#      "Duplicate dispatch rule". That took TTS down for three days (#4).
+#
+#   2. THE INDEX (in Dockerfile / Dockerfile.ci / scripts/common-setup.sh) fixes
+#      the BUILD VARIANT. `torch==2.9.1` on PyPI is the CUDA wheel: installing it
+#      drags in ~15 nvidia-*-cu12 packages plus triton, about 4 GB, for services
+#      that run on CPU (compose/tts.yml pins TTS_DEVICE=cpu). Only
+#      --index-url https://download.pytorch.org/whl/cpu gets 2.9.1+cpu. A pin
+#      cannot express this; it is not a version, it is a different artifact.
+#
+#   3. THE ASSERTION (scripts/assert_runtime.py, run by both Dockerfiles) proves
+#      the first two actually landed, and that torchcodec's extension LOADS --
+#      transformers reports torchcodec availability with importlib.util.find_spec,
+#      which is metadata only and passes on a completely unloadable install.
+#
+# Why the pin has to be `==` rather than a floor: pip's `--upgrade` cannot walk
+# BACK from an already-installed CUDA wheel, because by PEP 440 local-version
+# ordering 2.13.0+cu130 sorts ABOVE 2.13.0+cpu. That is precisely how the old
+# scripts/install_torch.sh managed to do nothing for months -- pyproject
+# installed CUDA first, and the script's `--upgrade 'torch>=2.3' --index-url
+# .../cpu` saw something "newer" and exited happy.
+#
+# torchaudio must move WITH torch -- its compiled extension is ABI-bound, and a
+# mismatched pair fails at `import torchaudio` with
+# "Could not load this library: _torchaudio.abi3.so".
+#
+# Before changing either version: run the TTS import and the ASR VAD path, not
+# just the unit suites. The suites mock torch, so they pass on a torch that
+# cannot be imported.
+# -----------------------------------------------------------------------------
+
 [project.optional-dependencies]
 # Split by feature so you can `pip install .[tts]` on lightweight machines, etc.
 tts = [
   "coqui-tts[codec]",
   "transformers<5",
-  "torch",
+  "torch==2.9.1",
+  "torchaudio==2.9.1",
+  # coqui-tts[codec] pulls torchcodec UNPINNED, and it is an ABI-bound compiled
+  # extension exactly like torchaudio's. Measured against pinned torch 2.9.1:
+  # 0.8.0/0.8.1/0.9.0 load, 0.9.1 loads AND decodes real audio, 0.10.0 fails on
+  # libtorchcodec, and 0.16.0 -- today's unpinned resolve -- raises
+  # "Could not load this library: libtorchcodec_image.so".
+  "torchcodec==0.9.1",
   "numpy",
   "soundfile",
   "resampy",
@@ -40,8 +83,8 @@ asr = [
   "faster-whisper",
   "openai-whisper",
   "silero-vad",
-  "torch",
-  "torchaudio",
+  "torch==2.9.1",
+  "torchaudio==2.9.1",
   "numpy",
   "soundfile",
   "resampy",

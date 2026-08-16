@@ -13,9 +13,10 @@
 # Run TTS:
 #   docker run -e SERVICE_MODE=tts -p 5002:5002 voice-stack:latest
 #
-# Environment Variables:
-#   SERVICE_MODE: "asr" or "tts" (required)
-#   All other vars from .env.production.asr or .env.production.tts
+# TORCH: pinned by version in pyproject.toml AND by build variant via the CPU
+# index below -- PyPI serves `torch==2.9.1` as the CUDA wheel, and these services
+# run on CPU. scripts/assert_runtime.py then proves what actually landed. Do not
+# add a `pip install --upgrade torch` step; see the comment in pyproject.toml.
 # ============================================================================
 
 # -----------------------------------------------------------------------------
@@ -42,25 +43,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Copy dependency specification and README (required by pyproject.toml)
 COPY pyproject.toml README.md ./
 
-# Install hatch
-RUN pip install --no-cache-dir hatch
+# Copy the scripts the build needs
+COPY scripts/accept_coqui_license.sh scripts/assert_runtime.py ./scripts/
+RUN chmod +x scripts/accept_coqui_license.sh
 
-# Copy scripts for PyTorch installation and license acceptance
-COPY scripts/install_torch.sh scripts/accept_coqui_license.sh ./scripts/
-RUN chmod +x scripts/*.sh
-
-# Create production environment with ASR + TTS + server (NO dev deps)
-RUN hatch env create prod-asr && \
-    hatch env create prod-tts
-
-# Merge both prod venvs into a single unified venv
-# prod-asr has: server + asr deps, prod-tts has: server + tts deps
-# We install everything into one venv for the unified image
+# Single unified venv: torch FIRST from the CPU index, then everything else.
+#
+# Order matters. `pip install -e '.[server,asr,tts]'` on its own resolves
+# torch==2.9.1 from PyPI, which is the CUDA build (~4 GB of nvidia-*-cu12 wheels
+# this CPU-only service never uses). Installing the CPU wheels first means the
+# editable install finds 2.9.1+cpu already satisfying ==2.9.1 and leaves it.
 RUN python -m venv /build/.venv && \
+    /build/.venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.9.1 torchaudio==2.9.1 && \
     /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts]"
 
-# Install PyTorch (auto-detects CPU/CUDA)
-RUN bash scripts/install_torch.sh
+# Fail the BUILD if the environment is not one this service can run on.
+# See scripts/assert_runtime.py for what is checked and why each check exists.
+RUN /build/.venv/bin/python scripts/assert_runtime.py
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
 RUN bash scripts/accept_coqui_license.sh
@@ -72,9 +73,6 @@ RUN sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' /build/.venv/
     find /build/.venv -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true && \
     find /build/.venv -name '*.pyc' -delete 2>/dev/null || true && \
     find /build/.venv -name '*.pyo' -delete 2>/dev/null || true
-
-# Remove the intermediate hatch envs (not needed)
-RUN rm -rf /build/.venv-asr /build/.venv-tts
 
 # -----------------------------------------------------------------------------
 # Stage 2: Production - Minimal Runtime
@@ -114,6 +112,7 @@ COPY --chown=voicestack:voicestack src/ /app/src/
 
 # Copy scripts and config templates (for reference)
 COPY --chown=voicestack:voicestack scripts/.env.production.* /app/config/
+COPY --chown=voicestack:voicestack scripts/assert_runtime.py /app/scripts/
 
 # Copy entrypoint script
 COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
@@ -132,13 +131,15 @@ RUN mkdir -p /app/voices /app/models && \
 USER voicestack
 
 # Set environment variables
+# LOG_LEVEL is lowercase on purpose: uvicorn rejects 'INFO' and exits. The
+# entrypoint also normalises it, so a caller passing INFO still works.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src:$PYTHONPATH" \
     # Default to production environment
     ENV=production \
-    LOG_LEVEL=INFO \
+    LOG_LEVEL=info \
     HOST=0.0.0.0
 
 # Health check (will be service-specific via entrypoint)

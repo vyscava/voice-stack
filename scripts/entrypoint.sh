@@ -14,7 +14,7 @@
 #   HOST: Listen address (default: 0.0.0.0)
 #   ASR_PORT: ASR service port (default: 5001)
 #   TTS_PORT: TTS service port (default: 5002)
-#   LOG_LEVEL: Logging level (default: info)
+#   LOG_LEVEL: Logging level (default: info; case-insensitive)
 #   WORKERS: Number of uvicorn workers (default: 1)
 # ============================================================================
 
@@ -55,8 +55,16 @@ SERVICE_MODE=$(echo "$SERVICE_MODE" | tr '[:upper:]' '[:lower:]')
 
 # Set defaults
 HOST=${HOST:-0.0.0.0}
-LOG_LEVEL=${LOG_LEVEL:-info}
 WORKERS=${WORKERS:-1}
+
+# uvicorn only accepts lowercase log levels and EXITS on anything else:
+#   Error: Invalid value for '--log-level': 'INFO' is not one of 'critical',
+#   'error', 'warning', 'info', 'debug', 'trace'
+# The image's own ENV default was INFO, so `docker run -e SERVICE_MODE=tts` --
+# the command in the README -- died instantly, and the `${LOG_LEVEL:-info}`
+# default could never help because the variable was set, just in the wrong case.
+# Normalise instead of trusting the caller, the same way SERVICE_MODE is handled.
+LOG_LEVEL=$(echo "${LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')
 
 # Service-specific configuration
 case "$SERVICE_MODE" in
