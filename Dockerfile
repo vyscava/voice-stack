@@ -57,7 +57,7 @@ RUN python -m venv /build/.venv && \
     /build/.venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         torch==2.9.1 torchaudio==2.9.1 && \
-    /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts]"
+    /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts,gateway]"
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
 RUN bash scripts/accept_coqui_license.sh

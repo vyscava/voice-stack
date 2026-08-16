@@ -66,9 +66,14 @@ smoke:image-works:
     - docker pull $PROD_IMAGE_SHA
     - |
       set -e
-      cleanup() { docker rm -f smoke-tts smoke-asr >/dev/null 2>&1 || true; }
+      cleanup() { docker rm -f smoke-tts smoke-asr smoke-gateway >/dev/null 2>&1 || true; docker network rm smoke-net >/dev/null 2>&1 || true; }
       trap cleanup EXIT
       cleanup
+
+      # A user-defined network so the gateway can reach the other two BY NAME.
+      # The default bridge has no DNS between containers, so http://smoke-tts
+      # would not resolve.
+      docker network create smoke-net >/dev/null
 
       # Fail fast and loudly on a container that dies, instead of waiting out
       # the whole budget on a health check that will never answer.
@@ -91,7 +96,7 @@ smoke:image-works:
       }
 
       echo "--- TTS: boots, engine is real, and it SYNTHESISES ---"
-      docker run -d --name smoke-tts \
+      docker run -d --name smoke-tts --network smoke-net \
         -e SERVICE_MODE=tts -e TTS_DEVICE=cpu -e LOG_LEVEL=info \
         -v "$TTS_MODEL_CACHE":/home/voicestack/.local/share/tts \
         "$PROD_IMAGE_SHA"
@@ -122,7 +127,7 @@ smoke:image-works:
       # download_root=settings.ASR_MODEL_LOCATION, which defaults to None, so
       # faster-whisper writes to the HF cache under /home/voicestack/.cache and
       # the mount below would be inert -- protection in appearance only.
-      docker run -d --name smoke-asr \
+      docker run -d --name smoke-asr --network smoke-net \
         -e SERVICE_MODE=asr -e LOG_LEVEL=info -e ASR_MODEL_LOCATION=/app/models \
         -v "$ASR_MODEL_CACHE":/app/models \
         "$PROD_IMAGE_SHA"
@@ -136,6 +141,47 @@ smoke:image-works:
       echo "OK: ASR booted and transcribed the synthesised clip."
 
       echo "Round trip complete: text -> TTS -> audio -> ASR -> text."
+
+      echo "--- GATEWAY: boots, advertises its routes, and FAILS AUDIBLY ---"
+      # There is deliberately no NATS in CI. That is the point: this proves the
+      # designed behaviour against REAL ASR and REAL TTS with a genuinely
+      # absent bus. An utterance must come back as a spoken apology, not a
+      # hang, a stack trace or a 500.
+      #
+      # It also catches what the unit tests cannot: that gateway.app imports
+      # inside the shipped image, with the dependencies the image actually has.
+      docker run -d --name smoke-gateway --network smoke-net \
+        -e SERVICE_MODE=gateway -e LOG_LEVEL=info \
+        -e GATEWAY_ASR_URL=http://smoke-asr:5001 \
+        -e GATEWAY_TTS_URL=http://smoke-tts:5002 \
+        -e GATEWAY_NATS_URL=nats://127.0.0.1:4222 \
+        -e GATEWAY_AGENT_TIMEOUT_S=5 \
+        "$PROD_IMAGE_SHA"
+      wait_healthy smoke-gateway 5003
+
+      docker exec smoke-gateway curl -fsS http://localhost:5003/openapi.json -o /tmp/openapi.json
+      docker exec smoke-gateway grep -q '/v1/voice/exchange' /tmp/openapi.json \
+        || { echo "FAIL: gateway does not advertise /v1/voice/exchange"; exit 1; }
+
+      docker cp /tmp/speech.opus smoke-gateway:/tmp/speech.opus
+      # -D writes the headers; the outcome is reported there, not in the body.
+      docker exec smoke-gateway curl -fsS -D /tmp/head.txt \
+        -X POST http://localhost:5003/v1/voice/exchange \
+        -F 'file=@/tmp/speech.opus;type=audio/ogg' -o /tmp/reply.bin
+
+      docker exec smoke-gateway grep -qi 'X-Voice-Outcome: agent_error\|X-Voice-Outcome: agent_timeout' /tmp/head.txt \
+        || { echo "FAIL: expected an agent failure outcome with no NATS present"; \
+             docker exec smoke-gateway cat /tmp/head.txt || true; exit 1; }
+
+      # The real assertion: it SPOKE the failure. A caller holding a microphone
+      # cannot hear an HTTP status code, and silence is indistinguishable from
+      # a crash.
+      docker exec smoke-gateway test -s /tmp/reply.bin \
+        || { echo "FAIL: gateway returned no audio for a failed exchange"; exit 1; }
+      docker exec smoke-gateway sh -c 'head -c 4 /tmp/reply.bin | grep -q OggS' \
+        || { echo "FAIL: the spoken failure is not Ogg audio"; exit 1; }
+
+      echo "OK: gateway booted, advertised its routes, and spoke its failure."
 
   tags:
     - docker

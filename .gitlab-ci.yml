@@ -283,6 +283,26 @@ unit:utils:
       - reports/unit-utils.xml
     expire_in: 1 week
 
+unit:gateway:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: always
+
+  script:
+    - echo "Running gateway unit tests..."
+    - mkdir -p reports
+    - hatch run test-gateway -- --disable-warnings --maxfail=1 --junitxml=reports/unit-gateway.xml
+
+  artifacts:
+    when: always
+    reports:
+      junit: reports/unit-gateway.xml
+    paths:
+      - reports/unit-gateway.xml
+    expire_in: 1 week
+
 integration:
   stage: test
   rules:

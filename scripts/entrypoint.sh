@@ -42,11 +42,12 @@ log_error() {
 # Check required SERVICE_MODE variable
 if [ -z "$SERVICE_MODE" ]; then
     log_error "SERVICE_MODE environment variable is required"
-    log_error "Valid options: 'asr' or 'tts'"
+    log_error "Valid options: 'asr', 'tts' or 'gateway'"
     log_error ""
     log_error "Example:"
     log_error "  docker run -e SERVICE_MODE=asr voice-stack:latest"
     log_error "  docker run -e SERVICE_MODE=tts voice-stack:latest"
+    log_error "  docker run -e SERVICE_MODE=gateway voice-stack:latest"
     exit 1
 fi
 
@@ -80,9 +81,15 @@ case "$SERVICE_MODE" in
         PORT=${TTS_PORT:-5002}
         DEFAULT_ENV_TEMPLATE="/app/config/.env.production.tts"
         ;;
+    gateway)
+        SERVICE_NAME="Voice Stack Gateway (spoken exchanges with an agent)"
+        MODULE="gateway.app:app"
+        PORT=${GATEWAY_PORT:-5003}
+        DEFAULT_ENV_TEMPLATE="/app/config/.env.production.gateway"
+        ;;
     *)
         log_error "Invalid SERVICE_MODE: '$SERVICE_MODE'"
-        log_error "Valid options: 'asr' or 'tts'"
+        log_error "Valid options: 'asr', 'tts' or 'gateway'"
         exit 1
         ;;
 esac

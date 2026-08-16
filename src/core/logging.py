@@ -197,6 +197,7 @@ setup_logging(settings.LOG_LEVEL, use_json=use_json_logging)
 # Create service-specific loggers
 logger_asr = logging.getLogger(settings.ASR_LOG_NAME)
 logger_tts = logging.getLogger(settings.TTS_LOG_NAME)
+logger_gateway = logging.getLogger(settings.GATEWAY_LOG_NAME)
 
 # Log the logging configuration on startup
 if use_json_logging:
