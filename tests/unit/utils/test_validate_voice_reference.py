@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
@@ -42,7 +41,7 @@ def _write(path: Path, data: np.ndarray, rate: int = RATE, subtype: str = "PCM_2
 
 
 def _check(path: Path, **kw):
-    defaults = dict(min_rate=RATE, strict_depth=None, min_duration_s=1.0)
+    defaults = {"min_rate": RATE, "strict_depth": None, "min_duration_s": 1.0}
     defaults.update(kw)
     return check_clip(path, **defaults)
 

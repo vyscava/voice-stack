@@ -114,9 +114,7 @@ def check_clip(
         report.failures.append(f"bit depth is {info.subtype}, expected {strict_depth}")
 
     if report.duration_s < min_duration_s:
-        report.failures.append(
-            f"duration {report.duration_s:.2f}s is below the minimum {min_duration_s:.2f}s"
-        )
+        report.failures.append(f"duration {report.duration_s:.2f}s is below the minimum {min_duration_s:.2f}s")
 
     # THE DEAD-CHANNEL CHECK. A multi-channel file must carry signal on EVERY
     # channel. Checking the mono downmix would pass a file whose second channel
@@ -141,9 +139,7 @@ def check_clip(
     if peak >= CLIP_LEVEL:
         run = _max_run(np.abs(mono) >= CLIP_LEVEL)
         if run >= CLIP_RUN:
-            report.failures.append(
-                f"clipped: {run} consecutive samples at full scale (peak {peak:.4f})"
-            )
+            report.failures.append(f"clipped: {run} consecutive samples at full scale (peak {peak:.4f})")
 
     dc = float(np.mean(mono)) if mono.size else 0.0
     if abs(dc) > MAX_DC_OFFSET:
