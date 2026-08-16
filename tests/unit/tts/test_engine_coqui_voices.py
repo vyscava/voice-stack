@@ -61,14 +61,14 @@ class TestCustomVoiceDiscovery:
 
     def test_directory_of_wavs_becomes_one_voice(self, tmp_path):
         vd = tmp_path / "voices"
-        _wav(vd / "bethania" / "ref1.wav")
-        _wav(vd / "bethania" / "ref2.wav")
+        _wav(vd / "bob" / "ref1.wav")
+        _wav(vd / "bob" / "ref2.wav")
         eng = _make_engine(tmp_path, voices_dir=vd)
 
         eng._load_custom_voices()
 
-        assert sorted(eng.voice_to_wavs) == ["bethania"]
-        assert len(eng.voice_to_wavs["bethania"]) == 2
+        assert sorted(eng.voice_to_wavs) == ["bob"]
+        assert len(eng.voice_to_wavs["bob"]) == 2
 
     def test_missing_voices_dir_is_not_an_error(self, tmp_path):
         eng = _make_engine(tmp_path, voices_dir=tmp_path / "nope")
