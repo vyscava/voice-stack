@@ -59,10 +59,6 @@ RUN python -m venv /build/.venv && \
         torch==2.9.1 torchaudio==2.9.1 && \
     /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts]"
 
-# Fail the BUILD if the environment is not one this service can run on.
-# See scripts/assert_runtime.py for what is checked and why each check exists.
-RUN /build/.venv/bin/python scripts/assert_runtime.py
-
 # Pre-accept Coqui TTS license to prevent interactive prompts
 RUN bash scripts/accept_coqui_license.sh
 
@@ -113,6 +109,16 @@ COPY --chown=voicestack:voicestack src/ /app/src/
 # Copy scripts and config templates (for reference)
 COPY --chown=voicestack:voicestack scripts/.env.production.* /app/config/
 COPY --chown=voicestack:voicestack scripts/assert_runtime.py /app/scripts/
+
+# Fail the BUILD if the image that SHIPS cannot run the service.
+#
+# This deliberately runs in the production stage, not the builder. torchcodec
+# dlopen()s libtorchcodec against the system FFmpeg, and the builder
+# (python:3.11-slim) has no FFmpeg -- so asserting there fails on an image that
+# would have worked, and proves nothing about the artifact anyone runs.
+# Asserting here validates the real thing: this venv, this base image, this
+# FFmpeg. See scripts/assert_runtime.py for what is checked and why.
+RUN /app/.venv/bin/python /app/scripts/assert_runtime.py
 
 # Copy entrypoint script
 COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
