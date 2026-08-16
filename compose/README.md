@@ -15,10 +15,22 @@ deployment rather than as something to copy.
 | `192.168.50.15`, hostname `openwebui` | `asr.yml:2,11`, `tts.yml:2,11` | the host these run on |
 | `https://gitlab.vitorgarbim.me/...` | `asr.yml:9`, `tts.yml:9` | the private GitLab this mirrors from |
 | named volumes | `asr.yml:73-75`, `tts.yml:70-74` | Portainer-managed volumes |
+| `${DNS_RESOLVER}` | `gateway.yml` | an internal resolver, supplied as a stack variable rather than hardcoded |
+| external networks | `gateway.yml` | joins the ASR and TTS stacks' own networks, which must already exist |
 
 Those are private-network addresses (RFC 1918) and an internal hostname. They
 are not secrets and they are not reachable from the internet, but they are also
 not useful to you — they will simply fail to resolve.
+
+### A note on `gateway.yml`
+
+It joins `voice-stack-asr_default` and `voice-stack-tts_default` as **external** networks, so it
+only comes up if those stacks already exist under exactly those names. That is the price of
+addressing them by container name instead of by address: names survive a host renumbering and
+addresses do not.
+
+It also needs a NATS server and an agent listening on the other end. If you have neither, you do
+not want this file at all — the ASR and TTS services stand alone without it.
 
 ## What you probably want instead
 
