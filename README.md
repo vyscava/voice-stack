@@ -36,6 +36,7 @@ docker run -d --name voice-stack-asr \
   -e SERVICE_MODE=asr \
   -e ASR_DEVICE=cuda \
   -e ASR_MODEL=base \
+  -e ASR_MODEL_LOCATION=/app/models \
   -v asr-models:/app/models \
   voice-stack:latest
 
@@ -45,7 +46,7 @@ docker run -d --name voice-stack-tts \
   -p 5002:5002 \
   -e SERVICE_MODE=tts \
   -e TTS_DEVICE=cuda \
-  -v tts-models:/app/models \
+  -v tts-models:/home/voicestack/.local/share/tts \
   voice-stack:latest
 ```
 
@@ -68,7 +69,7 @@ curl -X POST http://localhost:5001/v1/audio/transcriptions \
 # Generate speech
 curl -X POST http://localhost:5002/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"input": "Hello from Voice Stack", "voice": "default", "response_format": "mp3"}' \
+  -d '{"input": "Hello from Voice Stack", "voice": "Claribel Dervla", "response_format": "mp3"}' \
   --output speech.mp3
 ```
 
@@ -138,7 +139,17 @@ sudo journalctl -u voice-stack-tts -f
 
 ## Configuration
 
-All configuration is via environment variables. Templates with full documentation:
+All configuration is via environment variables.
+
+For Docker Compose, copy the example file and edit it — `docker compose` reads
+`.env` from the project directory automatically:
+
+```bash
+cp .env.example .env
+```
+
+[`.env.example`](.env.example) documents every setting with its real default.
+Bare-metal/systemd installs use the per-service templates instead:
 
 - **ASR**: [`scripts/.env.production.asr`](scripts/.env.production.asr)
 - **TTS**: [`scripts/.env.production.tts`](scripts/.env.production.tts)
@@ -179,8 +190,8 @@ Both services expose OpenAI-compatible endpoints, plus extras for Bazarr and mon
 | `POST` | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible) |
 | `POST` | `/v1/audio/transcriptions/verbose` | Transcribe with segment metadata |
 | `POST` | `/v1/audio/translations` | Translate audio to English |
-| `POST` | `/v1/bazarr/asr` | Subtitle output (SRT, VTT, JSON, TXT, TSV, JSONL) |
-| `POST` | `/v1/bazarr/detect-language` | Detect spoken language |
+| `POST` | `/bazarr/asr` | Subtitle output (SRT, VTT, JSON, TXT, TSV, JSONL) |
+| `POST` | `/bazarr/detect-language` | Detect spoken language |
 | `GET` | `/v1/models` | List available models |
 
 ### TTS Endpoints

@@ -3,15 +3,15 @@
 # ============================================================================
 # Run both ASR and TTS services from a single unified Docker image
 #
-# Usage:
-#   docker-compose up -d              # Start both services
-#   docker-compose up -d asr          # Start only ASR
-#   docker-compose up -d tts          # Start only TTS
-#   docker-compose logs -f            # View logs
-#   docker-compose down               # Stop services
+# Requires Docker Compose v2 (any version). Usage:
+#   docker compose up -d              # Start both services
+#   docker compose up -d asr          # Start only ASR
+#   docker compose up -d tts          # Start only TTS
+#   docker compose logs -f            # View logs
+#   docker compose down               # Stop services
 #
 # Build:
-#   docker-compose build              # Build production image
+#   docker compose build              # Build production image
 # ============================================================================
 
 services:
@@ -28,34 +28,43 @@ services:
     container_name: voice-stack-asr
     restart: unless-stopped
 
+    # Tunables are ${VAR:-default}; Compose auto-loads .env from this directory
+    # for interpolation, so `cp .env.example .env` works on any Compose v2 with
+    # no env_file: directive. environment: outranks env_file:, so a bare literal
+    # here would ignore your .env -- the few literals below are deliberate and
+    # each says why. Note a variable exported in your SHELL outranks .env too.
     environment:
       # Service configuration
       SERVICE_MODE: asr
 
       # Server settings
-      ENV: production
-      LOG_LEVEL: INFO
-      HOST: 0.0.0.0
-      ASR_PORT: 5001
+      ENV: ${ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HOST: ${HOST:-0.0.0.0}
+      ASR_PORT: ${ASR_PORT:-5001}
 
       # CORS (adjust for your needs)
-      CORS_ORIGINS: "*"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
 
       # ASR Engine settings
-      ASR_ENGINE: faster-whisper
-      ASR_DEVICE: cpu  # Change to 'cuda' if you have GPU
-      ASR_MODEL: base
-      ASR_COMPUTE_TYPE: int8
+      ASR_ENGINE: ${ASR_ENGINE:-fasterwhisper}
+      ASR_DEVICE: ${ASR_DEVICE:-cpu}  # Change to 'cuda' if you have GPU
+      ASR_MODEL: ${ASR_MODEL:-base}
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
+      # NOT overridable on purpose: this must equal the asr-models volume
+      # target below. Pointing it elsewhere via .env would leave the volume
+      # empty and re-download models on every recreate.
+      ASR_MODEL_LOCATION: /app/models
 
       # Performance tuning
-      ASR_BEAM_SIZE: 5
-      ASR_MAX_WORKERS: 4
+      ASR_TRANSCRIBE_BEAM_SIZE: ${ASR_TRANSCRIBE_BEAM_SIZE:-5}
+      ASR_NUM_OF_WORKERS: ${ASR_NUM_OF_WORKERS:-1}
 
       # Debugging (disable in production)
-      DEBUGPY_ENABLE: "false"
+      DEBUGPY_ENABLE: "${DEBUGPY_ENABLE:-false}"
 
     ports:
-      - "5001:5001"
+      - "${ASR_PORT:-5001}:${ASR_PORT:-5001}"
 
     volumes:
       # Model cache (persist downloaded models)
@@ -64,7 +73,7 @@ services:
       # - ./.env:/app/.env:ro
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${ASR_PORT:-5001}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -99,53 +108,59 @@ services:
     container_name: voice-stack-tts
     restart: unless-stopped
 
+    # Tunables are ${VAR:-default}; Compose auto-loads .env from this directory
+    # for interpolation, so `cp .env.example .env` works on any Compose v2 with
+    # no env_file: directive. environment: outranks env_file:, so a bare literal
+    # here would ignore your .env -- the few literals below are deliberate and
+    # each says why. Note a variable exported in your SHELL outranks .env too.
     environment:
       # Service configuration
       SERVICE_MODE: tts
 
       # Server settings
-      ENV: production
-      LOG_LEVEL: INFO
-      HOST: 0.0.0.0
-      TTS_PORT: 5002
+      ENV: ${ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HOST: ${HOST:-0.0.0.0}
+      TTS_PORT: ${TTS_PORT:-5002}
 
       # CORS (adjust for your needs)
-      CORS_ORIGINS: "*"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
 
       # TTS Engine settings
-      TTS_ENGINE: coqui
-      TTS_DEVICE: cpu  # Change to 'cuda' if you have GPU
-      TTS_MODEL: tts_models/multilingual/multi-dataset/xtts_v2
+      TTS_ENGINE: ${TTS_ENGINE:-coqui}
+      TTS_DEVICE: ${TTS_DEVICE:-cpu}  # Change to 'cuda' if you have GPU
+      TTS_MODEL: ${TTS_MODEL:-tts_models/multilingual/multi-dataset/xtts_v2}
 
       # Audio settings
-      TTS_SAMPLE_RATE: 24000
-      TTS_MAX_CHARS: 180
-      TTS_MIN_CHARS: 70
-      TTS_RETRY_STEPS: 2
+      TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE:-24000}
+      TTS_MAX_CHARS: ${TTS_MAX_CHARS:-180}
+      TTS_MIN_CHARS: ${TTS_MIN_CHARS:-70}
+      TTS_RETRY_STEPS: ${TTS_RETRY_STEPS:-2}
 
       # Language settings
-      TTS_DEFAULT_LANG: en
-      TTS_AUTO_LANG: "true"
+      TTS_DEFAULT_LANG: ${TTS_DEFAULT_LANG:-en}
+      TTS_AUTO_LANG: "${TTS_AUTO_LANG:-true}"
 
-      # Voices directory
+      # NOT overridable on purpose: must equal the ./voices bind target below.
       TTS_VOICES_DIR: /app/voices
 
       # Debugging (disable in production)
-      DEBUGPY_ENABLE: "false"
+      DEBUGPY_ENABLE: "${DEBUGPY_ENABLE:-false}"
 
     ports:
-      - "5002:5002"
+      - "${TTS_PORT:-5002}:${TTS_PORT:-5002}"
 
     volumes:
-      # Model cache (persist downloaded models)
-      - tts-models:/app/models
+      # Model cache. XTTS writes here, NOT /app/models -- mounting the volume
+      # anywhere else means a ~1.8 GB re-download on every recreate.
+      - tts-models:/home/voicestack/.local/share/tts
       # Voice samples for cloning
       - ./voices:/app/voices:ro
       # Optional: mount custom .env file
       # - ./.env:/app/.env:ro
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${TTS_PORT:-5002}/health"]
       interval: 30s
       timeout: 10s
       retries: 3

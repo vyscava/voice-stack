@@ -207,12 +207,12 @@ Images are **only rebuilt** when relevant files change:
 - `pyproject.toml` changes
 - `Dockerfile.ci` changes
 - `scripts/install_system_deps.sh` changes
-- `scripts/install_torch.sh` changes
+- `scripts/assert_runtime.py` changes
 
 **Production Image rebuilds when**:
 - `pyproject.toml` changes
 - `Dockerfile` changes
-- `scripts/install_torch.sh` changes
+- `scripts/assert_runtime.py` changes
 - `scripts/entrypoint.sh` changes
 - Any file in `src/` changes
 
