@@ -25,8 +25,8 @@ or anything billed per token or per minute. Marginal cost of a conversation must
 | changes | unchanged |
 |---|---|
 | new `voice-gateway` service | agent code |
-| TTS moves CPU → GPU | NATS DM grammar `agents.<self>.dm.<peer>.<topic>` |
-| TTS moves CPU → GPU (engine stays XTTS) | OpenAI-compatible `/v1/audio/speech`, `/v1/audio/voices` |
+| TTS moves CPU → GPU, engine stays XTTS v2 | NATS DM grammar `agents.<self>.dm.<peer>.<topic>` |
+| | OpenAI-compatible `/v1/audio/speech`, `/v1/audio/voices` |
 | ASR engine faster-whisper → transcribe.cpp | **Bazarr endpoints** (hard requirement) |
 | the maintainer's voice added as a cloned voice | `voice_speak` MCP tool and every current caller |
 
@@ -181,10 +181,17 @@ every time.
 192 kHz, 20 Hz-20 kHz, separate Mic Level and Playback Level with zero-latency monitoring.
 Attached to the Mac that hosts the Loki agent, which is where the session happens.
 
-**The purpose of this session has changed.** Chatterbox clones zero-shot from ~8 seconds, so
-recording is no longer required for *feasibility*. It is now about **quality headroom**: a
-clean 24-bit condenser reference should beat a phone-audio reference, and a held-out set makes
-that claim testable rather than asserted.
+**Why record at all, given XTTS already clones from a short clip.** Not feasibility. XTTS v2
+conditions on a reference clip of a few seconds, so a usable voice needs no session at all.
+The session is about **quality headroom**, and the reason it is worth a session is a measured
+one: on the existing corpus the *reference clip* moved timbre roughly twice as much as
+fine-tuning did (~22 Hz of pitch shift versus ~13 Hz). The reference is the highest-leverage
+variable in the whole pipeline, which makes a clean 24-bit condenser take the cheapest
+available quality win. A held-out set makes that claim testable rather than asserted.
+
+Validate the take before it becomes a voice: `scripts/validate_voice_reference.py` checks
+per-channel signal, level drift, clipping, rate and depth. Reference defects are silent
+otherwise, and they are cheap here and expensive after training.
 
 **Capture settings**
 
@@ -251,7 +258,10 @@ LiveKit Agents); that decision is deliberately not made here.
 
 1. Does `claude-telegram-bridge` route voice notes to agents today, or can the gateway
    intercept them? Decides whether the gateway or the agent owns the voice exchange.
-2. May agents speak in the maintainer's cloned voice on outbound messages to other people? A good clone
-   is mistakable for him; the PerTh watermark is forensic, not audible. **the maintainer's call.**
-3. Chatterbox quality on the 3060, and its real RTF there. The CPU figure (3.96) is a floor and
-   must not be quoted as a deployment number.
+2. May agents speak in the maintainer's cloned voice on outbound messages to other people? A
+   good clone is mistakable for the real speaker, and a watermark is forensic, not audible, so
+   it deters misuse after the fact rather than preventing it. **The maintainer's call.**
+3. XTTS v2 real-time factor on the GPU, measured as time to FIRST audio rather than total
+   generation. The CPU figure is a floor and must not be quoted as a deployment number. This
+   sets whether the two-speed acknowledgement in the gateway is still needed once TTS moves
+   off CPU.
