@@ -56,6 +56,32 @@ green.
 to fail**, via `pytest.raises` against the same zeroed input. It also installs `espeak-ng` in
 the CI image, because the fixture otherwise skips and the gate silently stops gating.
 
+## Hard constraint: cloned voices never leave the homelab
+
+**Decided, not open.** No cloned voice is sent outside the homelab, and no cloned voice is
+used to speak to anyone other than the maintainer.
+
+This rules out, without further discussion:
+
+- exposing TTS publicly, or proxying it through any external service
+- an agent replying in a cloned voice on an outbound message to a third party
+- uploading reference clips or fine-tuned speaker weights anywhere off-network
+- committing reference audio, speaker embeddings or trained speaker weights to this
+  repository, which is public
+
+The reasoning is not squeamishness. A good clone of a specific real person is mistakable for
+that person by someone who knows them, and the usual mitigation is a watermark, which is
+forensic rather than audible: it helps establish misuse after it has happened and prevents
+nothing at the moment it matters. The only reliable control is to not let the audio leave.
+
+**Where this is enforced today:** both services are LAN-only at the proxy
+(`tts.local.` and `asr.local.` behind an internal whitelist, with no public route), and no
+audio or speaker weights are tracked in git. Any future gateway inherits the same rule: a
+voice surface may be reachable from inside the network only.
+
+Test names and fixtures use generic speaker names. A real person's name in a public test is a
+smaller leak than audio, but it is still a leak, and it costs nothing to avoid.
+
 ## Hardware and placement
 
 | | |
@@ -258,10 +284,7 @@ LiveKit Agents); that decision is deliberately not made here.
 
 1. Does `claude-telegram-bridge` route voice notes to agents today, or can the gateway
    intercept them? Decides whether the gateway or the agent owns the voice exchange.
-2. May agents speak in the maintainer's cloned voice on outbound messages to other people? A
-   good clone is mistakable for the real speaker, and a watermark is forensic, not audible, so
-   it deters misuse after the fact rather than preventing it. **The maintainer's call.**
-3. XTTS v2 real-time factor on the GPU, measured as time to FIRST audio rather than total
+2. XTTS v2 real-time factor on the GPU, measured as time to FIRST audio rather than total
    generation. The CPU figure is a floor and must not be quoted as a deployment number. This
    sets whether the two-speed acknowledgement in the gateway is still needed once TTS moves
    off CPU.
