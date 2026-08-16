@@ -1,0 +1,2 @@
+# Drop .wav reference clips here; each becomes a selectable voice.
+# Mounted read-only into the TTS container at /app/voices.
