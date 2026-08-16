@@ -1,12 +1,12 @@
 # Voice Stack
 
-A self-hosted speech stack for homelabs — ASR (speech-to-text) and TTS (text-to-speech) as a pair of FastAPI microservices with OpenAI-compatible APIs. One unified Docker image runs either service based on a single environment variable. Drop it next to Bazarr for automatic subtitles, plug it into Open WebUI for voice chat, or use it as a local replacement for cloud speech APIs.
+A self-hosted speech stack for homelabs — ASR (speech-to-text) and TTS (text-to-speech) as FastAPI microservices with OpenAI-compatible APIs, plus an optional gateway that turns the pair into a spoken conversation with an agent. One unified Docker image runs either service based on a single environment variable. Drop it next to Bazarr for automatic subtitles, plug it into Open WebUI for voice chat, or use it as a local replacement for cloud speech APIs.
 
 **Key features:**
 
 - OpenAI-compatible `/v1/audio/transcriptions` and `/v1/audio/speech` endpoints
 - Bazarr-native subtitle endpoints (SRT, VTT, JSON, JSONL)
-- Single Docker image, ~6 GB, switches between ASR and TTS via `SERVICE_MODE`
+- Single Docker image, ~6 GB, switches between ASR, TTS and the gateway via `SERVICE_MODE`
 - NVIDIA GPU acceleration with automatic CUDA detection
 - Voice cloning via Coqui XTTS-v2 (drop a .wav file, get a new voice)
 - Built-in concurrency limits, memory guards, and idle model unloading
@@ -209,6 +209,110 @@ Both services expose OpenAI-compatible endpoints, plus extras for Bazarr and mon
 | `/health` | Simple liveness check |
 | `/healthz`, `/healthcheck` | Kubernetes / Docker compatible probes |
 | `/health/detailed` | Memory, swap, GPU, concurrency slots, model state |
+
+---
+
+## Voice Gateway (optional)
+
+A third mode, `SERVICE_MODE=gateway`, that turns one utterance into a spoken reply:
+
+```
+audio in ─▶ ASR ─▶ agent (over NATS) ─▶ TTS ─▶ audio out
+```
+
+It **adds no model and no AI of its own.** It calls the ASR and TTS services over HTTP and asks an
+existing agent on a [NATS](https://nats.io/) bus for the answer. That keeps it a small process that
+starts in milliseconds, holds no GPU memory, and can be restarted without evicting a 1.8 GB model
+from anyone's cache.
+
+If you have no agent bus, you do not need this mode. The ASR and TTS services are independent of it.
+
+### Run it
+
+```bash
+docker run -d --name voice-gateway -p 5003:5003 \
+  -e SERVICE_MODE=gateway \
+  -e GATEWAY_ASR_URL=http://voice-stack-asr:5001 \
+  -e GATEWAY_TTS_URL=http://voice-stack-tts:5002 \
+  -e GATEWAY_NATS_URL=nats://nats:4222 \
+  -e GATEWAY_SELF_NAME=voice-gateway \
+  -e GATEWAY_AGENT=my-agent \
+  voice-stack:latest
+```
+
+With Compose it is behind a profile, because it needs a bus the compose file cannot provide:
+
+```bash
+docker compose --profile gateway up -d
+```
+
+### Use it
+
+```bash
+curl -X POST http://localhost:5003/v1/voice/exchange \
+  -F 'file=@question.wav' -D headers.txt -o reply.opus
+```
+
+```bash
+# Check the microphone path without spending an agent turn
+curl -X POST http://localhost:5003/v1/voice/transcribe-only -F 'file=@question.wav'
+```
+
+### It always answers, and it says how it went
+
+The caller is usually a person holding a microphone, and **an HTTP status code is not something they
+can hear.** So a failed exchange still returns `200` with *speech* explaining the problem, and
+reports what actually happened in headers:
+
+| Header | Meaning |
+|---|---|
+| `X-Voice-Outcome` | `ok`, `no_speech`, `asr_failed`, `agent_timeout`, `agent_error`, `tts_failed` |
+| `X-Voice-Degraded` | `false` only for `ok` |
+| `X-Voice-Transcript` | what was heard, escaped |
+
+| Situation | What the caller gets |
+|---|---|
+| agent does not reply in time | a spoken "that is taking too long" |
+| the audio was noise, not speech | a spoken "say that again", and **the agent is never asked** |
+| ASR fails | a spoken prompt to repeat |
+| TTS fails | JSON containing the agent's answer as text, so the answer is not lost |
+| everything fails at once | a handled result, never a stack trace |
+
+The one case that returns JSON instead of audio is `tts_failed`, because there is no way to speak a
+message when speech itself is what broke.
+
+### Two things it deliberately will not do
+
+**Audio never crosses the message bus.** Only the transcript and the reply text do. NATS has a ~1 MB
+default payload and is a message bus rather than a media pipe, and raw household audio should not
+exist as a routable message. This is structural, not a convention: the agent transport accepts and
+returns `str`, with no parameter capable of carrying bytes.
+
+**It defaults to a stock speaker.** If you clone a real person's voice, that clone is theirs. A good
+one is mistakable for them by the people who know them, and a watermark is forensic rather than
+audible — it can help establish misuse afterwards and prevents nothing at the moment it happens. Keep
+cloned voices on networks you control, and set `GATEWAY_VOICE` deliberately rather than by accident.
+
+### Configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GATEWAY_PORT` | `5003` | |
+| `GATEWAY_ASR_URL` | `http://localhost:5001` | |
+| `GATEWAY_TTS_URL` | `http://localhost:5002` | |
+| `GATEWAY_NATS_URL` | `nats://localhost:4222` | |
+| `GATEWAY_SELF_NAME` | `voice-gateway` | Must match this service's identity on the bus **exactly** |
+| `GATEWAY_AGENT` | `claude-code-channel` | The peer that answers |
+| `GATEWAY_NATS_TOPIC` | `voice` | |
+| `GATEWAY_AGENT_TIMEOUT_S` | `60` | Bounds connect **and** request, so an exchange cannot hang |
+| `GATEWAY_VOICE` | `Claribel Dervla` | A stock speaker on purpose |
+| `GATEWAY_AUDIO_FORMAT` | `opus` | |
+| `GATEWAY_MIN_TRANSCRIPT_CHARS` | `2` | Below this, treated as noise and not sent to the agent |
+
+The subject it publishes on is `agents.<GATEWAY_SELF_NAME>.dm.<GATEWAY_AGENT>.<GATEWAY_NATS_TOPIC>`,
+which reads *from* `.dm.` *to*. If your bus restricts publishing to `agents.<self>.>`, getting
+`GATEWAY_SELF_NAME` wrong is rejected **asynchronously**: the send still looks like it worked and the
+message simply never arrives.
 
 ---
 

@@ -90,6 +90,13 @@ asr = [
   "resampy",
   "ipdb",  # Required by silero-vad (undeclared dependency)
 ]
+gateway = [
+  # The gateway holds no model. It orchestrates the ASR and TTS services over
+  # HTTP and reaches the agent fleet over NATS, so its dependencies are a
+  # client library and a bus client -- deliberately not torch.
+  "httpx>=0.26.0",
+  "nats-py>=2.6.0",
+]
 server = [
   "python-dotenv",
   "pydantic-settings",
@@ -150,12 +157,14 @@ test-asr = "pytest tests/unit/asr -v {args:}"
 test-tts = "pytest tests/unit/tts -v {args:}"
 test-core = "pytest tests/unit/core -v {args:}"
 test-utils = "pytest tests/unit/utils -v {args:}"
+test-gateway = "pytest tests/unit/gateway -v {args:}"
 test-integration = "pytest tests/integration -v {args:}"
 
 # Coverage commands
 cov = "pytest --cov=src --cov-report=term-missing --cov-report=html --cov-report=xml {args:}"
 cov-asr = "pytest tests/unit/asr --cov=src/asr --cov-report=term-missing {args:}"
 cov-tts = "pytest tests/unit/tts --cov=src/tts --cov-report=term-missing {args:}"
+cov-gateway = "pytest tests/unit/gateway --cov=src/gateway --cov-report=term-missing {args:}"
 cov-report = "coverage report --show-missing {args:}"
 cov-html = "coverage html {args:}"
 
