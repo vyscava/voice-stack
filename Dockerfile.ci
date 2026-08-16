@@ -34,6 +34,10 @@ RUN apt-get update -y && \
         git \
         curl \
         ca-certificates \
+        # espeak-ng synthesizes the speech fixture for the ASR timestamp-contract
+        # test. Without it that test pytest.skips, and the gate silently stops
+        # gating -- the exact failure class it exists to catch. ~5 MB, CI only.
+        espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
