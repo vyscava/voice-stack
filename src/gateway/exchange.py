@@ -54,6 +54,18 @@ class Agent(Protocol):
     async def ask(self, text: str, *, timeout_s: float) -> str: ...
 
 
+class SpeechGate(Protocol):
+    """Decides whether a clip is worth sending to ASR at all.
+
+    Injected rather than imported so this module stays free of subprocesses and
+    stays testable without ffmpeg.
+    """
+
+    def looks_like_speech(self, audio: bytes) -> bool: ...
+
+    def is_known_hallucination(self, transcript: str) -> bool: ...
+
+
 @dataclass(frozen=True)
 class ExchangePolicy:
     """The canned speech and thresholds, lifted out of settings for testability."""
@@ -114,8 +126,26 @@ async def run_exchange(
     speaker: Speaker,
     agent: Agent,
     policy: ExchangePolicy,
+    gate: SpeechGate | None = None,
 ) -> ExchangeResult:
     """Run one exchange. Returns a result for every outcome; raises for none."""
+    # 0. Is this audio at all? Whisper does NOT return "I heard nothing" -- it
+    #    INVENTS text, and reliably invents the same things: 1.5 s of silence
+    #    becomes "You", near-silence becomes "Thank you for watching!". Both
+    #    observed here; the second reached a peer agent as a real question.
+    #
+    #    This cannot be caught downstream by transcript length, because a
+    #    hallucination is confident and confidence has no length. The only
+    #    place to stop it is before the model is called, since a model that is
+    #    never called cannot invent anything.
+    if gate is not None and not gate.looks_like_speech(audio):
+        return ExchangeResult(
+            outcome=Outcome.NO_SPEECH,
+            reply_text=policy.msg_no_speech,
+            audio=await _try_speak(speaker, policy.msg_no_speech),
+            detail="audio did not contain speech (too short or too quiet)",
+        )
+
     # 1. Hear.
     try:
         transcript = await transcriber.transcribe(audio, filename=filename)
@@ -129,6 +159,18 @@ async def run_exchange(
 
     # 2. Decide whether that was speech at all. The agent is never asked about
     #    noise, so a cough cannot become a question.
+    # Backstop: a clip that passed the audio gate can still transcribe to a
+    # known artifact. Catches what has already been seen; the audio gate above
+    # is what catches what has not.
+    if gate is not None and transcript and gate.is_known_hallucination(transcript):
+        return ExchangeResult(
+            outcome=Outcome.NO_SPEECH,
+            transcript=transcript,
+            reply_text=policy.msg_no_speech,
+            audio=await _try_speak(speaker, policy.msg_no_speech),
+            detail=f"transcript is a known silence artifact: {transcript!r}",
+        )
+
     if not _is_speech(transcript, policy):
         return ExchangeResult(
             outcome=Outcome.NO_SPEECH,

@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, Response
 
 from core.logging import logger_gateway as logger
 from core.settings import get_settings
-from gateway.deps import build_agent, build_policy, build_speaker, build_transcriber
+from gateway.deps import build_agent, build_gate, build_policy, build_speaker, build_transcriber
 from gateway.exchange import Outcome, run_exchange
 
 router = APIRouter()
@@ -48,6 +48,7 @@ async def exchange(file: UploadFile = File(...)) -> Response:
         speaker=build_speaker(),
         agent=build_agent(),
         policy=build_policy(),
+        gate=build_gate(),
     )
 
     log = logger.info if result.outcome is Outcome.OK else logger.warning

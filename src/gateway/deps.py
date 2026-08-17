@@ -7,6 +7,7 @@ Kept apart from both the endpoint and the orchestration so that
 from __future__ import annotations
 
 from core.settings import get_settings
+from gateway import speech_gate
 from gateway.agent import NatsAgent
 from gateway.clients import AsrHttpClient, TtsHttpClient
 from gateway.exchange import ExchangePolicy
@@ -45,6 +46,20 @@ def build_agent() -> NatsAgent:
             topic=settings.GATEWAY_NATS_TOPIC,
         )
     return _agent
+
+
+class FfmpegSpeechGate:
+    """The concrete gate. Thin adapter so exchange.py stays subprocess-free."""
+
+    def looks_like_speech(self, audio: bytes) -> bool:
+        return speech_gate.looks_like_speech(audio)
+
+    def is_known_hallucination(self, transcript: str) -> bool:
+        return speech_gate.is_known_hallucination(transcript)
+
+
+def build_gate() -> FfmpegSpeechGate:
+    return FfmpegSpeechGate()
 
 
 def build_policy() -> ExchangePolicy:
