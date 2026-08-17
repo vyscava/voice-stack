@@ -254,3 +254,101 @@ class TestDegradedFlag:
             FakeTranscriber(exc=OSError("x")),
         ):
             assert (await _run(transcriber=bad)).degraded
+
+
+class FakeGate:
+    """A gate with both decisions forced, so each branch is reachable."""
+
+    def __init__(self, speech: bool = True, hallucination: bool = False) -> None:
+        self.speech, self.hallucination = speech, hallucination
+        self.checked_audio: list[bytes] = []
+
+    def looks_like_speech(self, audio: bytes) -> bool:
+        self.checked_audio.append(audio)
+        return self.speech
+
+    def is_known_hallucination(self, transcript: str) -> bool:
+        return self.hallucination
+
+
+class TestSilenceNeverReachesTheAgent:
+    """The failure this guard exists for, observed live on 2026-08-17.
+
+    Whisper turned a near-empty clip into "Thank you for watching!", the gateway
+    forwarded it as a real question, and the agent only declined to answer it
+    because it happened to recognise the artifact.
+    """
+
+    @pytest.mark.asyncio
+    async def test_silent_audio_is_rejected_before_asr(self):
+        transcriber, agent = FakeTranscriber(), FakeAgent()
+        result = await run_exchange(
+            AUDIO,
+            filename="u.wav",
+            transcriber=transcriber,
+            speaker=FakeSpeaker(),
+            agent=agent,
+            policy=POLICY,
+            gate=FakeGate(speech=False),
+        )
+
+        assert result.outcome is Outcome.NO_SPEECH
+        assert transcriber.calls == [], "ASR was called on a clip with no speech"
+        assert agent.asked == [], "the agent was asked about silence"
+
+    @pytest.mark.asyncio
+    async def test_the_caller_still_hears_something(self):
+        speaker = FakeSpeaker()
+        result = await run_exchange(
+            AUDIO,
+            filename="u.wav",
+            transcriber=FakeTranscriber(),
+            speaker=speaker,
+            agent=FakeAgent(),
+            policy=POLICY,
+            gate=FakeGate(speech=False),
+        )
+        assert result.audio is not None
+        assert speaker.spoken == [POLICY.msg_no_speech]
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_transcript_is_not_forwarded(self):
+        """The backstop: audio passed the gate, Whisper invented text anyway."""
+        agent = FakeAgent()
+        result = await run_exchange(
+            AUDIO,
+            filename="u.wav",
+            transcriber=FakeTranscriber("Thank you for watching!"),
+            speaker=FakeSpeaker(),
+            agent=agent,
+            policy=POLICY,
+            gate=FakeGate(speech=True, hallucination=True),
+        )
+
+        assert result.outcome is Outcome.NO_SPEECH
+        assert agent.asked == [], "a known Whisper artifact was sent to the agent"
+        assert result.transcript == "Thank you for watching!", "the transcript is kept for diagnosis"
+        assert "silence artifact" in (result.detail or "")
+
+    @pytest.mark.asyncio
+    async def test_real_speech_still_gets_through_with_a_gate_present(self):
+        """The guard must not become a wall."""
+        agent = FakeAgent(reply="It is sunny.")
+        result = await run_exchange(
+            AUDIO,
+            filename="u.wav",
+            transcriber=FakeTranscriber("what is the weather"),
+            speaker=FakeSpeaker(),
+            agent=agent,
+            policy=POLICY,
+            gate=FakeGate(speech=True, hallucination=False),
+        )
+
+        assert result.outcome is Outcome.OK
+        assert agent.asked == ["what is the weather"]
+
+    @pytest.mark.asyncio
+    async def test_no_gate_configured_keeps_prior_behaviour(self):
+        """gate is optional, so existing callers are unaffected."""
+        result = await _run()
+        assert result.outcome is Outcome.OK
