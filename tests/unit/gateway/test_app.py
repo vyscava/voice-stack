@@ -226,3 +226,39 @@ class TestWebClient:
         html = (Path(app_module.__file__).parent / "static" / "index.html").read_text()
         assert "isSecureContext" in html
         assert "HTTPS" in html
+
+
+class TestMetrics:
+    """Liveness alone cannot see a service that is UP and failing everything.
+
+    That is the gap these close: before them, a gateway failing every exchange
+    was indistinguishable from a healthy one, and /health answered 200 either
+    way.
+    """
+
+    def test_metrics_endpoint_serves_prometheus_exposition(self, client):
+        res = client.get("/metrics")
+        assert res.status_code == 200
+        assert "text/plain" in res.headers["content-type"]
+        assert "voice_gateway_exchanges_total" in res.text
+
+    def test_a_successful_exchange_increments_the_ok_outcome(self, client):
+        client.post("/v1/voice/exchange", files={"file": ("u.wav", b"RIFFfake", "audio/wav")})
+        body = client.get("/metrics").text
+        assert 'voice_gateway_exchanges_total{outcome="ok"}' in body
+
+    def test_a_failed_exchange_is_counted_under_its_own_outcome(self, client):
+        """Outcomes are separate labels, not one 'errors' bucket.
+
+        An agent timeout and a silence rejection have different causes and
+        different fixes; collapsing them would hide which is happening.
+        """
+        client.state["agent"] = FakeAgent(exc=TimeoutError("slow"))
+        client.post("/v1/voice/exchange", files={"file": ("u.wav", b"RIFFfake", "audio/wav")})
+        body = client.get("/metrics").text
+        assert 'voice_gateway_exchanges_total{outcome="agent_timeout"}' in body
+
+    def test_duration_is_observed(self, client):
+        client.post("/v1/voice/exchange", files={"file": ("u.wav", b"RIFFfake", "audio/wav")})
+        body = client.get("/metrics").text
+        assert "voice_gateway_exchange_duration_seconds_count" in body

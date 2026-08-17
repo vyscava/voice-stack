@@ -96,6 +96,7 @@ gateway = [
   # client library and a bus client -- deliberately not torch.
   "httpx>=0.26.0",
   "nats-py>=2.6.0",
+  "prometheus-client>=0.20.0",
 ]
 server = [
   "python-dotenv",
