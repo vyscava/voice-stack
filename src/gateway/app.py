@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import importlib.metadata as md
 from collections.abc import AsyncIterator
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Any
 
 import psutil
 from fastapi import FastAPI
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from core.error_handler import register_exception_handlers
 from core.logging import logger_gateway as logger
@@ -76,8 +78,26 @@ if settings.CORS_ORIGINS:
     )
 
 
+_STATIC_DIR = Path(__file__).parent / "static"
+_INDEX = _STATIC_DIR / "index.html"
+
+
 @app.get("/", include_in_schema=False)
-async def root() -> RedirectResponse:
+async def root() -> Response:
+    """Serve the push-to-talk page, or fall back to the API docs.
+
+    The page is the only surface a person can actually speak into, so it lives
+    at the root rather than behind a path nobody would guess. If the file is
+    missing (a partial image, say) fall back to /docs instead of 500ing --
+    a broken UI should not make the service look dead.
+
+    NOTE: browsers expose getUserMedia only in a SECURE CONTEXT, so this page
+    can only reach a microphone over HTTPS or on localhost. Served over plain
+    http on a LAN address it loads and then refuses to record, which is why it
+    says so itself rather than failing silently.
+    """
+    if _INDEX.is_file():
+        return FileResponse(_INDEX, media_type="text/html")
     return RedirectResponse(url="/docs")
 
 
