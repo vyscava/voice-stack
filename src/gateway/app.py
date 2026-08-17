@@ -13,15 +13,14 @@ from __future__ import annotations
 
 import importlib.metadata as md
 from collections.abc import AsyncIterator
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import psutil
 from fastapi import FastAPI
-from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from core.error_handler import register_exception_handlers
 from core.logging import logger_gateway as logger
