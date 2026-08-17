@@ -30,9 +30,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 from core.logging import logger_gateway as logger
+from gateway import metrics
 
 
 class NatsAgent:
@@ -136,10 +138,18 @@ class NatsAgent:
         # is busy reconnecting to a dead server would otherwise hang the
         # exchange for as long as it kept trying, and the caller would hear
         # nothing at all -- the one outcome this gateway must never produce.
+        # Timed HERE rather than in the endpoint, because this is the only place
+        # that knows where the agent call starts and stops. The agent is the
+        # dominant term in an exchange -- measured at 19-20 s for a trivial
+        # question against ~4 s for ASR and ~4 s for TTS -- so without this the
+        # histograms cannot tell you WHERE the time went.
+        started = time.monotonic()
         try:
             data = await asyncio.wait_for(_connect_and_request(), timeout=timeout_s)
         except asyncio.TimeoutError as exc:
+            metrics.AGENT_DURATION.observe(time.monotonic() - started)
             raise TimeoutError(f"agent '{self._peer}' did not reply within {timeout_s}s") from exc
+        metrics.AGENT_DURATION.observe(time.monotonic() - started)
 
         return _extract_reply(data)
 
