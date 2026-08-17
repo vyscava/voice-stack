@@ -218,3 +218,34 @@ class TestTranscriptStaysRaw:
         src = inspect.getsource(exchange_mod.run_exchange)
         assert "agent.ask(transcript," in src, "run_exchange should pass the raw transcript"
         assert "agent.ask(transcript.strip()" not in src
+
+
+class TestAgentDurationIsActuallyRecorded:
+    """A declared metric that is never observed is worse than no metric.
+
+    It appears in /metrics with a count of 0, which reads as "the agent was
+    never called" rather than "nobody wired this up". This shipped inert once
+    already and was caught by querying the count, not by reading the code.
+    """
+
+    def test_the_histogram_is_observed_in_the_ask_path(self):
+        import inspect
+
+        from gateway import agent as agent_mod
+
+        src = inspect.getsource(agent_mod.NatsAgent.ask)
+        assert "AGENT_DURATION.observe" in src, "the agent histogram is declared but never observed"
+
+    def test_a_timeout_is_timed_too(self):
+        """A slow agent is exactly the case worth measuring.
+
+        Recording only on success would hide the turns that took longest,
+        biasing the histogram toward the fast ones.
+        """
+        import inspect
+
+        from gateway import agent as agent_mod
+
+        src = inspect.getsource(agent_mod.NatsAgent.ask)
+        before_raise = src.split("raise TimeoutError")[0]
+        assert "AGENT_DURATION.observe" in before_raise, "timeouts must be observed before raising"
