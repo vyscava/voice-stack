@@ -170,3 +170,59 @@ class TestTranscribeOnly:
         client.state["transcriber"] = FakeTranscriber(exc=RuntimeError("model gone"))
         response = client.post("/v1/voice/transcribe-only", files={"file": ("u.wav", b"RIFFfake", "audio/wav")})
         assert response.status_code == 502
+
+
+class TestWebClient:
+    """The push-to-talk page is the only surface a person can speak into."""
+
+    def test_root_serves_the_page(self, client):
+        res = client.get("/")
+        assert res.status_code == 200
+        assert "text/html" in res.headers["content-type"]
+        body = res.text
+        assert "Hold to speak" in body
+        assert "v1/voice/exchange" in body, "the page must post to the exchange endpoint"
+
+    def test_page_ships_with_the_package(self):
+        """Guards against the static file being dropped from the image.
+
+        The app falls back to /docs when the file is missing, which is right at
+        runtime and useless as a signal -- a vanished UI would look like a
+        working service. This asserts the file is actually there.
+        """
+        from pathlib import Path
+
+        import gateway.app as app_module
+
+        index = Path(app_module.__file__).parent / "static" / "index.html"
+        assert index.is_file(), f"web client missing at {index}"
+        assert index.stat().st_size > 1000
+
+    def test_page_is_self_contained(self):
+        """No CDN, no external fetches.
+
+        The gateway is LAN-only by policy (!53). A page that pulls a script
+        from the public internet would both add a dependency and create egress
+        from a network that is meant not to have any.
+        """
+        from pathlib import Path
+
+        import gateway.app as app_module
+
+        html = (Path(app_module.__file__).parent / "static" / "index.html").read_text()
+        for needle in ("http://", "https://", "//cdn", "integrity="):
+            assert needle not in html, f"page references something external: {needle}"
+
+    def test_page_warns_about_insecure_context(self):
+        """A browser silently withholds getUserMedia on a plain-http origin.
+
+        Without this the page loads, the button appears, and the microphone
+        never works -- with an error that names none of that.
+        """
+        from pathlib import Path
+
+        import gateway.app as app_module
+
+        html = (Path(app_module.__file__).parent / "static" / "index.html").read_text()
+        assert "isSecureContext" in html
+        assert "HTTPS" in html

@@ -1,0 +1,199 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Gateway</title>
+<style>
+  :root {
+    --bg: #12131a; --panel: #1b1d27; --fg: #e8e9ef; --muted: #9aa0b4;
+    --accent: #6aa2ff; --ok: #4ec9a0; --warn: #e2b341; --bad: #e2685f;
+    --border: #2a2d3a;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6fa; --panel:#fff; --fg:#1a1c23; --muted:#5c6274;
+            --accent:#2563eb; --border:#e0e3ec; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+  }
+  main { width: 100%; max-width: 34rem; }
+  h1 { font-size: 1.15rem; font-weight: 600; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); font-size: .875rem; margin: 0 0 1.5rem; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1.5rem;
+  }
+  #talk {
+    width: 100%; padding: 1.5rem; font-size: 1.05rem; font-weight: 600;
+    color: #fff; background: var(--accent); border: 0; border-radius: 10px;
+    cursor: pointer; touch-action: manipulation; user-select: none;
+    transition: background .12s, transform .06s;
+  }
+  #talk:active { transform: scale(.99); }
+  #talk[data-state="rec"] { background: var(--bad); }
+  #talk[data-state="busy"] { background: var(--muted); cursor: progress; }
+  #talk:disabled { opacity: .6; cursor: not-allowed; }
+  .hint { color: var(--muted); font-size: .8rem; margin-top: .75rem; text-align: center; }
+  .row { margin-top: 1.25rem; display: none; }
+  .row.show { display: block; }
+  .label { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em;
+           color: var(--muted); margin-bottom: .3rem; }
+  .value { background: var(--bg); border: 1px solid var(--border);
+           border-radius: 8px; padding: .7rem .85rem; word-wrap: break-word; }
+  .badge { display: inline-block; padding: .15rem .5rem; border-radius: 999px;
+           font-size: .75rem; font-weight: 600; }
+  .badge.ok { background: rgba(78,201,160,.15); color: var(--ok); }
+  .badge.warn { background: rgba(226,179,65,.15); color: var(--warn); }
+  audio { width: 100%; margin-top: .5rem; }
+  .err { color: var(--bad); font-size: .875rem; margin-top: 1rem; }
+</style>
+
+<main>
+  <h1>Voice Gateway</h1>
+  <p class="sub">Hold to speak. Your question goes to an agent; the answer comes back as speech.</p>
+
+  <div class="panel">
+    <button id="talk" disabled>Checking microphone…</button>
+    <div class="hint" id="hint">Hold the button, or hold the spacebar.</div>
+
+    <div class="row" id="heardRow">
+      <div class="label">Heard</div>
+      <div class="value" id="heard"></div>
+    </div>
+
+    <div class="row" id="replyRow">
+      <div class="label">Reply <span id="outcome" class="badge"></span></div>
+      <div class="value" id="replyText">(spoken)</div>
+      <audio id="player" controls></audio>
+    </div>
+
+    <div class="err" id="err"></div>
+  </div>
+</main>
+
+<script>
+// Deliberately dependency-free: no CDN, no build step. This page is served by
+// the gateway itself on a LAN-only host, and pulling a script from the public
+// internet would be both a needless dependency and a needless egress.
+const talk = document.getElementById('talk');
+const hint = document.getElementById('hint');
+const err = document.getElementById('err');
+const heard = document.getElementById('heard');
+const heardRow = document.getElementById('heardRow');
+const replyRow = document.getElementById('replyRow');
+const replyText = document.getElementById('replyText');
+const outcome = document.getElementById('outcome');
+const player = document.getElementById('player');
+
+let recorder = null, chunks = [], stream = null, busy = false;
+
+function fail(msg) { err.textContent = msg; }
+
+// getUserMedia is only exposed in a SECURE CONTEXT. Over plain http on a LAN
+// address the API is simply absent, which otherwise surfaces as an
+// undefined-property error that tells the user nothing.
+if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+  talk.textContent = 'Microphone unavailable';
+  fail('This page must be served over HTTPS (or localhost). Browsers block microphone access on insecure origins.');
+} else {
+  talk.disabled = false;
+  talk.textContent = 'Hold to speak';
+}
+
+async function ensureStream() {
+  if (stream) return stream;
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+  });
+  return stream;
+}
+
+async function start() {
+  if (busy || talk.disabled) return;
+  err.textContent = '';
+  try {
+    const s = await ensureStream();
+    chunks = [];
+    recorder = new MediaRecorder(s);
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = send;
+    recorder.start();
+    talk.dataset.state = 'rec';
+    talk.textContent = 'Listening… release to send';
+  } catch (e) {
+    fail('Microphone was refused: ' + e.message);
+  }
+}
+
+function stop() {
+  if (recorder && recorder.state === 'recording') recorder.stop();
+}
+
+async function send() {
+  const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+  // A hold too short to contain speech is a mis-click, not a question. Sending
+  // it would spend an agent turn on silence.
+  if (blob.size < 2000) {
+    talk.dataset.state = '';
+    talk.textContent = 'Hold to speak';
+    fail('That was too short to hear. Hold the button while you speak.');
+    return;
+  }
+
+  busy = true;
+  talk.dataset.state = 'busy';
+  talk.textContent = 'Thinking…';
+  hint.textContent = 'The agent may take a while on a hard question.';
+
+  const form = new FormData();
+  form.append('file', blob, 'utterance.webm');
+
+  try {
+    const res = await fetch('v1/voice/exchange', { method: 'POST', body: form });
+
+    // The transcript rides a header, escaped, because header values must be
+    // latin-1 encodable and speech is not.
+    const raw = res.headers.get('X-Voice-Transcript') || '';
+    let text = raw;
+    try { text = JSON.parse('"' + raw.replace(/"/g, '\\"') + '"'); } catch {}
+    if (text) { heard.textContent = text; heardRow.classList.add('show'); }
+
+    const oc = res.headers.get('X-Voice-Outcome') || 'unknown';
+    outcome.textContent = oc;
+    outcome.className = 'badge ' + (oc === 'ok' ? 'ok' : 'warn');
+
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      // TTS failed. The answer still exists, so show it rather than lose it.
+      const body = await res.json();
+      replyText.textContent = body.reply_text || '(no reply)';
+      player.removeAttribute('src');
+      player.style.display = 'none';
+    } else {
+      const audio = await res.blob();
+      player.src = URL.createObjectURL(audio);
+      player.style.display = '';
+      replyText.textContent = '(spoken)';
+      player.play().catch(() => {});
+    }
+    replyRow.classList.add('show');
+  } catch (e) {
+    fail('Could not reach the gateway: ' + e.message);
+  } finally {
+    busy = false;
+    talk.dataset.state = '';
+    talk.textContent = 'Hold to speak';
+    hint.textContent = 'Hold the button, or hold the spacebar.';
+  }
+}
+
+talk.addEventListener('mousedown', start);
+talk.addEventListener('touchstart', e => { e.preventDefault(); start(); }, { passive: false });
+addEventListener('mouseup', stop);
+addEventListener('touchend', stop);
+
+addEventListener('keydown', e => { if (e.code === 'Space' && !e.repeat) { e.preventDefault(); start(); } });
+addEventListener('keyup', e => { if (e.code === 'Space') { e.preventDefault(); stop(); } });
+</script>
