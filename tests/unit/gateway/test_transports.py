@@ -132,8 +132,16 @@ class TestAgentCallIsBounded:
             await agent.ask("hello", timeout_s=0.05)
 
         message = str(excinfo.value)
-        assert "channel" in message
-        assert "0.05" in message
+
+        # ANCHORED, not a bare substring. `"0.05" in message` passes when the
+        # message says "10.05s", so a bug that reports the WRONG budget goes
+        # unnoticed by the very test asserting the budget is named. Verified by
+        # mutation: adding 10 to the reported timeout left that assertion green.
+        # Credit: claude-code-channel, who found the same trap in their own
+        # guard tests ("3 shipping" matching "13 shipping").
+        assert "'channel'" in message, "the peer must be named, quoted, not merely mentioned"
+        assert "within 0.05s" in message, "the budget must be reported exactly"
+        assert "within 10.05s" not in message
 
 
 class TestPayloadMarksAsrInput:
