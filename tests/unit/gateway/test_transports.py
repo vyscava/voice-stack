@@ -134,3 +134,28 @@ class TestAgentCallIsBounded:
         message = str(excinfo.value)
         assert "channel" in message
         assert "0.05" in message
+
+
+class TestPayloadMarksAsrInput:
+    """A peer must be able to tell a transcript from typed input.
+
+    Otherwise a mishearing is answered confidently and then SPOKEN ALOUD in a
+    human voice, which is considerably more convincing than being wrong in text.
+    """
+
+    def test_payload_carries_source_and_transcript(self):
+        import inspect
+
+        from gateway import agent as agent_mod
+
+        src = inspect.getsource(agent_mod.NatsAgent.ask)
+        assert '"source": "asr"' in src
+        assert '"transcript": text' in src
+
+    def test_payload_still_carries_text_for_existing_peers(self):
+        """`text` stays, so peers that only read it keep working."""
+        import inspect
+
+        from gateway import agent as agent_mod
+
+        assert '"text": text' in inspect.getsource(agent_mod.NatsAgent.ask)
