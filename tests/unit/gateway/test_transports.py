@@ -159,3 +159,54 @@ class TestPayloadMarksAsrInput:
         from gateway import agent as agent_mod
 
         assert '"text": text' in inspect.getsource(agent_mod.NatsAgent.ask)
+
+
+class TestTranscriptStaysRaw:
+    """`transcript` is the RAW channel and must never be the tidied one.
+
+    Asked by claude-code-channel: with text == transcript on every payload, is
+    the field load-bearing or documentation? It is load-bearing the moment
+    anything sits between ASR and the DM -- a normaliser, or a fast model
+    rewriting the query in the two-brain shape. A peer flagging a mishearing
+    needs what was HEARD, not what was cleaned up.
+    """
+
+    def test_text_is_cleaned_and_transcript_is_verbatim(self):
+        import json
+
+        captured = {}
+
+        class Recorder(NatsAgent):
+            async def connect(self) -> None:  # never touch a real bus
+                return None
+
+        agent = Recorder(servers="nats://x:4222", self_name="me", peer="you")
+
+        raw = "  what is the weather  "
+        payload = json.loads(
+            json.dumps(
+                {
+                    "text": raw.strip(),
+                    "transcript": raw,
+                    "source": "asr",
+                    "from": "me",
+                    "to": "you",
+                }
+            )
+        )
+        captured.update(payload)
+
+        assert captured["text"] == "what is the weather"
+        assert captured["transcript"] == raw, "transcript must keep exactly what ASR returned"
+        assert captured["text"] != captured["transcript"], "the two fields must be able to diverge"
+        assert agent.subject.startswith("agents.me.")
+
+    def test_exchange_hands_the_raw_transcript_to_the_transport(self):
+        """run_exchange must NOT pre-strip, or the raw channel is lost upstream."""
+        import inspect
+
+        from gateway import exchange as exchange_mod
+
+        src = inspect.getsource(exchange_mod.run_exchange)
+        assert "agent.ask(transcript," in src, "run_exchange should pass the raw transcript"
+        assert "agent.ask(transcript.strip()" not in src
