@@ -104,9 +104,22 @@ class NatsAgent:
         # Told the input was heard rather than read, a peer can say "I heard X"
         # when X looks implausible. Asked for by claude-code-channel, who is on
         # the receiving end of exactly this failure.
+        # `text` is the cleaned form a peer should ACT on. `transcript` is what
+        # ASR actually returned, verbatim, and must never be rewritten.
+        #
+        # They are equal today apart from whitespace, which prompted a fair
+        # question from claude-code-channel: is `transcript` load-bearing or
+        # documentation? Answer: it is the RAW channel, and it earns its keep
+        # the moment anything sits between ASR and the DM -- a normaliser, a
+        # spell-corrector, or a fast model rewriting the query in the two-brain
+        # shape. At that point a peer needs to see what was HEARD, not what was
+        # tidied, in order to say "I heard X" about a mishearing.
+        #
+        # So: whatever is added between here and ASR, `transcript` stays raw.
+        # Collapsing these into one field would quietly remove that guarantee.
         payload = json.dumps(
             {
-                "text": text,
+                "text": text.strip(),
                 "transcript": text,
                 "source": "asr",
                 "from": self._self_name,

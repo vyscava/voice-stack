@@ -182,7 +182,9 @@ async def run_exchange(
     # 3. Ask the agent. Text only, and bounded: an agent that never answers
     #    must not become a request that never returns.
     try:
-        reply = await agent.ask(transcript.strip(), timeout_s=policy.agent_timeout_s)
+        # RAW, not stripped. The transport derives `text` from this and keeps
+        # `transcript` verbatim, so the two fields can diverge. See NatsAgent.ask.
+        reply = await agent.ask(transcript, timeout_s=policy.agent_timeout_s)
     except (TimeoutError, asyncio.TimeoutError):
         return ExchangeResult(
             outcome=Outcome.AGENT_TIMEOUT,

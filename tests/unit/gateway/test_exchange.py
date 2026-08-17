@@ -86,10 +86,17 @@ class TestHappyPath:
         assert not result.degraded
 
     @pytest.mark.asyncio
-    async def test_agent_is_asked_the_transcript_stripped(self):
+    async def test_agent_is_handed_the_RAW_transcript(self):
+        """Stripping is the TRANSPORT's job, not the orchestrator's.
+
+        The DM carries both a cleaned `text` and a verbatim `transcript`. If
+        run_exchange pre-stripped, the raw form would be lost before the
+        transport could record it, and `transcript` would silently become a
+        second copy of `text`.
+        """
         agent = FakeAgent()
         await _run(transcriber=FakeTranscriber("  hello there  "), agent=agent)
-        assert agent.asked == ["hello there"]
+        assert agent.asked == ["  hello there  "], "the raw transcript must reach the transport intact"
 
 
 class TestAudioNeverReachesTheAgent:
