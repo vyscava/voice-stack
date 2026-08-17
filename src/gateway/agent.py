@@ -95,7 +95,24 @@ class NatsAgent:
         Raises TimeoutError if the peer does not answer in time. The caller
         turns that into speech rather than a hang.
         """
-        payload = json.dumps({"text": text, "from": self._self_name, "to": self._peer}).encode()
+        # `text` carries the transcript, and `source` says where it came from.
+        #
+        # Without the marker an ASR transcript is indistinguishable from typed
+        # input, so a peer treats a MISHEARING as a genuine question and answers
+        # it confidently -- and the gateway then speaks that answer aloud in a
+        # human voice, which is a far more convincing way to be wrong than text.
+        # Told the input was heard rather than read, a peer can say "I heard X"
+        # when X looks implausible. Asked for by claude-code-channel, who is on
+        # the receiving end of exactly this failure.
+        payload = json.dumps(
+            {
+                "text": text,
+                "transcript": text,
+                "source": "asr",
+                "from": self._self_name,
+                "to": self._peer,
+            }
+        ).encode()
 
         async def _connect_and_request() -> bytes:
             await self.connect()
