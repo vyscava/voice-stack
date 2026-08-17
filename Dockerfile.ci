@@ -56,7 +56,9 @@ COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh
 
 # Create hatch default environment with all dependencies
-# This installs: dev, server, tts, asr features from pyproject.toml
+# This installs: dev, server, tts, asr, gateway features from pyproject.toml.
+# Keep this list matching the production Dockerfile's extras -- CI installing a
+# different set than prod ships is the general form of voice-stack#4.
 RUN hatch env create
 
 # Force the CPU build of torch/torchaudio.

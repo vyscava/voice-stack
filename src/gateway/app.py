@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from core.error_handler import register_exception_handlers
 from core.logging import logger_gateway as logger
 from core.settings import get_settings
+from gateway import metrics
 from gateway.api.api_v1.api import api_router
 from gateway.deps import build_agent, shutdown_agent
 
@@ -115,6 +116,17 @@ async def healthcheck() -> JSONResponse:
     what it can currently reach.
     """
     return JSONResponse({"status": "ok", "service": "gateway"})
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics() -> Response:
+    """Prometheus exposition.
+
+    Unauthenticated by design and consistent with the other homelab exporters:
+    the service is LAN-only, and the payload is counters, not content.
+    """
+    payload, content_type = metrics.render()
+    return Response(content=payload, media_type=content_type)
 
 
 @app.get("/health/detailed")

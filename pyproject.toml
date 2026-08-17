@@ -96,6 +96,7 @@ gateway = [
   # client library and a bus client -- deliberately not torch.
   "httpx>=0.26.0",
   "nats-py>=2.6.0",
+  "prometheus-client>=0.20.0",
 ]
 server = [
   "python-dotenv",
@@ -136,7 +137,10 @@ packages = ["src"]
 [tool.hatch.envs.default]
 type = "virtual"
 path = ".venv"
-features = ["dev", "server", "tts", "asr"]
+# gateway included so CI installs the same set the production image does
+# (Dockerfile: .[server,asr,tts,gateway]). Without it, any module importing a
+# gateway-only dependency passes locally and fails in CI at IMPORT time.
+features = ["dev", "server", "tts", "asr", "gateway"]
 dependencies = []
 
 [tool.hatch.envs.default.scripts]

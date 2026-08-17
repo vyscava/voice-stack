@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from core.logging import logger_gateway as logger
 from core.settings import get_settings
+from gateway import metrics
 from gateway.deps import build_agent, build_gate, build_policy, build_speaker, build_transcriber
 from gateway.exchange import Outcome, run_exchange
 
@@ -41,6 +44,7 @@ async def exchange(file: UploadFile = File(...)) -> Response:
     audio = await file.read()
     filename = file.filename or "utterance.wav"
 
+    started = time.monotonic()
     result = await run_exchange(
         audio,
         filename=filename,
@@ -50,6 +54,13 @@ async def exchange(file: UploadFile = File(...)) -> Response:
         policy=build_policy(),
         gate=build_gate(),
     )
+
+    # Record BEFORE logging, so a logging change can never silently drop
+    # metrics. Outcome is a bounded enum, so the label set cannot explode.
+    metrics.EXCHANGES.labels(outcome=result.outcome.value).inc()
+    metrics.EXCHANGE_DURATION.observe(time.monotonic() - started)
+    if result.detail and "did not contain speech" in result.detail:
+        metrics.SILENCE_REJECTED.inc()
 
     log = logger.info if result.outcome is Outcome.OK else logger.warning
     log(
