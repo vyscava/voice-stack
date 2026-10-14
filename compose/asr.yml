@@ -1,5 +1,5 @@
 # Voice Stack ASR (Portainer Production Stack)
-# Deployed on openwebui host (192.168.50.15). CPU inference, no GPU.
+# Deployed on openwebui host (openwebui.server.local.vitorgarbim.me, 10.87.2.15). CPU inference, no GPU.
 #
 # Runs on CPU to free the RTX 3060 VRAM for the kb-face service.
 # faster-whisper on CPU requires an int8/float32 compute type (float16 is
@@ -8,7 +8,7 @@
 # Portainer config:
 #   Repository: https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
 #   Compose path: compose/asr.yml
-#   Environment: openwebui (192.168.50.15)
+#   Environment: openwebui (openwebui.server.local.vitorgarbim.me)
 
 services:
   asr:
@@ -50,7 +50,7 @@ services:
       - asr-models:/app/models
 
     dns:
-      - 192.168.50.4
+      - 10.87.2.4
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]

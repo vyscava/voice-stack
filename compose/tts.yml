@@ -1,5 +1,5 @@
 # Voice Stack TTS (Portainer Production Stack)
-# Deployed on openwebui host (192.168.50.15). CPU inference, no GPU.
+# Deployed on openwebui host (openwebui.server.local.vitorgarbim.me, 10.87.2.15). CPU inference, no GPU.
 #
 # Runs on CPU to free the RTX 3060 VRAM for the kb-face service.
 # Coqui XTTS-v2 runs on CPU (slower than GPU but functional); TTS_DEVICE is
@@ -8,7 +8,7 @@
 # Portainer config:
 #   Repository: https://gitlab.vitorgarbim.me/data-platforms/voice-stack.git
 #   Compose path: compose/tts.yml
-#   Environment: openwebui (192.168.50.15)
+#   Environment: openwebui (openwebui.server.local.vitorgarbim.me)
 
 services:
   tts:
@@ -47,7 +47,7 @@ services:
       - tts-voices:/app/voices
 
     dns:
-      - 192.168.50.4
+      - 10.87.2.4
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5002/health"]

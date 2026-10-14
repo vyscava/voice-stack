@@ -11,8 +11,8 @@ deployment rather than as something to copy.
 | reference | where | what it is |
 |---|---|---|
 | `registry.local.vitorgarbim.me/voice-stack:latest` | `asr.yml:15`, `tts.yml:15` | a private container registry |
-| `192.168.50.4` | `asr.yml:53`, `tts.yml:50` | an internal DNS server, hardcoded |
-| `192.168.50.15`, hostname `openwebui` | `asr.yml:2,11`, `tts.yml:2,11` | the host these run on |
+| `10.87.2.4` | `asr.yml:53`, `tts.yml:50` | an internal DNS server, hardcoded |
+| `openwebui.server.local.vitorgarbim.me` (10.87.2.15), hostname `openwebui` | `asr.yml:2,11`, `tts.yml:2,11` | the host these run on |
 | `https://gitlab.vitorgarbim.me/...` | `asr.yml:9`, `tts.yml:9` | the private GitLab this mirrors from |
 | named volumes | `asr.yml:73-75`, `tts.yml:70-74` | Portainer-managed volumes |
 | `${DNS_RESOLVER}` | `gateway.yml` | an internal resolver, supplied as a stack variable rather than hardcoded |
