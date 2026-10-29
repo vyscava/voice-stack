@@ -12,6 +12,9 @@ from asr.schemas.audio_engine import Task
 class ResponseFormat(str, Enum):
     JSON = "json"
     TEXT = "text"
+    SRT = "srt"
+    VTT = "vtt"
+    VERBOSE_JSON = "verbose_json"
 
 
 def _empty_to_none(v: str | None) -> str | None:
@@ -63,7 +66,10 @@ class OpenAITranscriptionRequest(BaseModel):
     model: str = Field("whisper-1", description="Model name; kept for OpenAI compatibility.")
     language: str | None = Field(None, description="Optional BCP-47 language hint (e.g. 'en', 'pt').")
     temperature: float | None = Field(None, description="Sampling temperature; 0.0 for deterministic output.")
-    response_format: ResponseFormat = Field(ResponseFormat.JSON, description="Response format: 'json' or 'text'.")
+    response_format: ResponseFormat = Field(
+        ResponseFormat.JSON,
+        description="Response format: 'json', 'text', 'srt', 'vtt' or 'verbose_json' (OpenAI's set).",
+    )
     prompt: str | None = Field(None, description="Prompt text; ignored for Whisper.")
     timestamp_granularities: str | None = Field(None, description="Ignored (OpenAI placeholder).")
 
@@ -158,7 +164,10 @@ class OpenAITranslationsRequest(BaseModel):
 
     model: str = Field("whisper-1", description="Model name; kept for OpenAI compatibility.")
     temperature: float | None = Field(None, description="Sampling temperature; 0.0 for deterministic output.")
-    response_format: ResponseFormat = Field(ResponseFormat.JSON, description="Response format: 'json' or 'text'.")
+    response_format: ResponseFormat = Field(
+        ResponseFormat.JSON,
+        description="Response format: 'json', 'text', 'srt', 'vtt' or 'verbose_json' (OpenAI's set).",
+    )
     prompt: str | None = Field(None, description="Prompt text; ignored for Whisper.")
 
     @classmethod
@@ -222,3 +231,31 @@ class OpenAITranscription(BaseModel):
     """OpenAI-compatible minimal payload."""
 
     text: str
+
+
+class OpenAIVerboseSegment(BaseModel):
+    """One segment in OpenAI's `verbose_json` shape (the fields we can honour)."""
+
+    id: int = Field(..., description="Zero-based segment index.")
+    start: float = Field(..., description="Segment start time in seconds.")
+    end: float = Field(..., description="Segment end time in seconds.")
+    text: str = Field(..., description="Recognized text for this segment.")
+
+
+class OpenAIVerboseTranscription(BaseModel):
+    """OpenAI's `verbose_json` response for /v1/audio/transcriptions.
+
+    `task`, `language` (ISO-639-1 where the engine resolves one), `duration`,
+    `text`, `segments[]`, and `words[]` when the caller asked for word granularity
+    AND the engine produced word timestamps.
+    """
+
+    task: str = Field("transcribe", description="'transcribe' or 'translate'.")
+    language: str | None = Field(None, description="Detected/requested language code.")
+    duration: float | None = Field(None, description="Audio duration in seconds.")
+    text: str = Field(..., description="Full concatenated transcript.")
+    segments: list[OpenAIVerboseSegment] = Field(default_factory=list)
+    words: list[dict[str, Any]] | None = Field(
+        None,
+        description="Word-level timings when `timestamp_granularities` includes 'word'.",
+    )
