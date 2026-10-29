@@ -269,6 +269,11 @@ def test_response_format_matches_openai() -> None:
         "vtt",
         "verbose_json",
     }
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_openai_transcription_minimal() -> None:
     """Test OpenAITranscription minimal response."""
     response = OpenAITranscription(text="Hello world")
 

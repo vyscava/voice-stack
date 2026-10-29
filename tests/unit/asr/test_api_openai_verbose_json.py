@@ -56,8 +56,8 @@ def test_transcriptions_verbose_json_has_the_openai_shape(asr_client: TestClient
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["task"] == "transcribe"
-    assert "language" in data
-    assert "duration" in data
+    assert data["language"] == "en"
+    assert data["duration"] is not None
     assert isinstance(data["text"], str)
     assert isinstance(data["segments"], list)
     for seg in data["segments"]:
@@ -66,6 +66,50 @@ def test_transcriptions_verbose_json_has_the_openai_shape(asr_client: TestClient
     assert data["words"] is None
 
 
+@pytest.mark.unit
+@pytest.mark.asr
+@pytest.mark.parametrize(
+    ("fmt", "media_type"),
+    [
+        ("srt", "application/x-subrip"),
+        ("vtt", "text/vtt; charset=utf-8"),
+        ("text", "text/plain; charset=utf-8"),
+    ],
+)
+def test_translations_accepts_openai_response_formats(
+    asr_client: TestClient, sample_audio_bytes: bytes, fmt: str, media_type: str
+) -> None:
+    """The translations route gets the same format set and media types."""
+    response = asr_client.post(
+        "/v1/audio/translations",
+        data={"model": "whisper-1", "response_format": fmt},
+        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == media_type
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_translations_verbose_json_keeps_the_verbose_body(
+    asr_client: TestClient, sample_audio_bytes: bytes
+) -> None:
+    """`response_model=None` on translations: the body must not collapse to {"text"}."""
+    response = asr_client.post(
+        "/v1/audio/translations",
+        data={"model": "whisper-1", "response_format": "verbose_json"},
+        files={"file": ("test.wav", sample_audio_bytes, "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["task"] == "translate"
+    assert {"language", "duration", "text", "segments"} <= set(data)
+
+
+@pytest.mark.unit
+@pytest.mark.asr
 def test_verbose_payload_maps_engine_names_to_openai() -> None:
     """The engine says language_code/confidence, the schema language/language_probability.
 
@@ -88,6 +132,8 @@ def test_verbose_payload_maps_engine_names_to_openai() -> None:
     assert payload["language_name"] == "Portuguese"
 
 
+@pytest.mark.unit
+@pytest.mark.asr
 def test_openai_verbose_words_only_when_requested() -> None:
     result = _FakeResult(
         text="a b",
