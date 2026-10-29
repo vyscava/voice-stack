@@ -164,23 +164,22 @@ class ASRFasterWhisper(ASRBase):
             # original timeline when VAD compressed the audio) so the OpenAI
             # `verbose_json` path can emit `words[]`.
             seg_words = getattr(seg, "words", None)
-            if seg_words:
-                seg_payload["words"] = [
-                    {
-                        "word": w.word,
-                        "start": self.helper_map_compressed_to_original_timeline(
-                            float(w.start), vad_segments
+            if isinstance(seg_words, list) and seg_words:
+                mapped_words: list[dict[str, Any]] = []
+                for word in seg_words:
+                    word_start = float(word.start)
+                    word_end = float(word.end)
+                    if vad_used and vad_segments:
+                        word_start = self.helper_map_compressed_to_original_timeline(
+                            word_start, vad_segments
                         )
-                        if vad_used and vad_segments
-                        else float(w.start),
-                        "end": self.helper_map_compressed_to_original_timeline(
-                            float(w.end), vad_segments
+                        word_end = self.helper_map_compressed_to_original_timeline(
+                            word_end, vad_segments
                         )
-                        if vad_used and vad_segments
-                        else float(w.end),
-                    }
-                    for w in seg_words
-                ]
+                    mapped_words.append(
+                        {"word": word.word, "start": word_start, "end": word_end}
+                    )
+                seg_payload["words"] = mapped_words
             segments.append(seg_payload)
 
         # Joining all text pieces to have a single string

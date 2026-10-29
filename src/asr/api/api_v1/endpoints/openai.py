@@ -59,14 +59,14 @@ def _openai_words(result: Any) -> list[dict[str, Any]]:
     """Flatten per-segment word timings into OpenAI's `words[]` list."""
     words: list[dict[str, Any]] = []
     for seg in getattr(result, "segments", []):
-        for w in seg.get("words") or []:
-            words.append(
-                {
-                    "word": str(w.get("word", "")),
-                    "start": float(w.get("start", 0.0)),
-                    "end": float(w.get("end", 0.0)),
-                }
-            )
+        words.extend(
+            {
+                "word": str(w.get("word", "")),
+                "start": float(w.get("start", 0.0)),
+                "end": float(w.get("end", 0.0)),
+            }
+            for w in seg.get("words") or []
+        )
     return words
 
 
