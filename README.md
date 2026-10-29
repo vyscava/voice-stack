@@ -187,7 +187,7 @@ Both services expose OpenAI-compatible endpoints, plus extras for Bazarr and mon
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible) |
+| `POST` | `/v1/audio/transcriptions` | Transcribe audio (OpenAI-compatible; `response_format`: `json`, `text`, `srt`, `vtt`, `verbose_json`) |
 | `POST` | `/v1/audio/transcriptions/verbose` | Transcribe with segment metadata |
 | `POST` | `/v1/audio/translations` | Translate audio to English |
 | `POST` | `/bazarr/asr` | Subtitle output (SRT, VTT, JSON, TXT, TSV, JSONL) |

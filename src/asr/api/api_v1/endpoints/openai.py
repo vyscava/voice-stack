@@ -41,6 +41,20 @@ settings = get_settings()
 _engine_for_listing = get_audio_engine()
 
 
+def _verbose_payload(result: Any) -> dict[str, Any]:
+    """Map the engine dataclass onto the verbose response's OpenAI field names.
+
+    The engine calls them `language_code` and `confidence`; the schema uses
+    OpenAI's `language` and `language_probability`. Passing the raw dict let
+    pydantic drop both as unknown fields, which is why the 2026-10-28 run saw
+    `language: null` next to a filled `language_name`.
+    """
+    payload = result.to_dict()
+    payload["language"] = payload.get("language_code")
+    payload["language_probability"] = payload.get("confidence")
+    return payload
+
+
 def _openai_words(result: Any) -> list[dict[str, Any]]:
     """Flatten per-segment word timings into OpenAI's `words[]` list."""
     words: list[dict[str, Any]] = []
@@ -266,14 +280,8 @@ async def transcriptions_verbose(
             # If someone still asks for text, mirror the minimal behavior.
             return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
 
-        # Full JSON payload for debugging/analytics. The engine dataclass names
-        # are `language_code`/`confidence`; the response schema uses OpenAI's
-        # `language`/`language_probability`, so map them explicitly instead of
-        # letting pydantic drop the unknown fields (the 2026-10-28 nulls).
-        payload = result.to_dict()
-        payload["language"] = payload.get("language_code")
-        payload["language_probability"] = payload.get("confidence")
-        return TranscribeVerboseResponse(**payload)
+        # Full JSON payload for debugging/analytics (language mapped in the helper).
+        return TranscribeVerboseResponse(**_verbose_payload(result))
 
     except (OSError, ValueError) as e:
         # File decoding or validation errors (client error)
