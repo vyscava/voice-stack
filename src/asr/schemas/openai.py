@@ -12,6 +12,9 @@ from asr.schemas.audio_engine import Task
 class ResponseFormat(str, Enum):
     JSON = "json"
     TEXT = "text"
+    SRT = "srt"
+    VTT = "vtt"
+    VERBOSE_JSON = "verbose_json"
 
 
 def _empty_to_none(v: str | None) -> str | None:
@@ -63,9 +66,14 @@ class OpenAITranscriptionRequest(BaseModel):
     model: str = Field("whisper-1", description="Model name; kept for OpenAI compatibility.")
     language: str | None = Field(None, description="Optional BCP-47 language hint (e.g. 'en', 'pt').")
     temperature: float | None = Field(None, description="Sampling temperature; 0.0 for deterministic output.")
-    response_format: ResponseFormat = Field(ResponseFormat.JSON, description="Response format: 'json' or 'text'.")
+    response_format: ResponseFormat = Field(
+        ResponseFormat.JSON,
+        description="Response format: 'json', 'text', 'srt', 'vtt' or 'verbose_json' (OpenAI's set).",
+    )
     prompt: str | None = Field(None, description="Prompt text; ignored for Whisper.")
-    timestamp_granularities: str | None = Field(None, description="Ignored (OpenAI placeholder).")
+    timestamp_granularities: str | None = Field(
+        None, description="Comma-joined OpenAI granularities; 'word' turns on word timings."
+    )
 
     # Coerce "" -> None for optional fields that arrive as strings
     @field_validator("language", "prompt", "timestamp_granularities", mode="before")
@@ -87,14 +95,20 @@ class OpenAITranscriptionRequest(BaseModel):
         response_format: ResponseFormat = Form(ResponseFormat.JSON),
         prompt: str | None = Form(None),
         timestamp_granularities: str | None = Form(None),
+        timestamp_granularities_bracket: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     ) -> OpenAITranscriptionRequest:
+        # openai-python sends this field as `timestamp_granularities[]` (a repeated
+        # form key), never as a plain string, so accept both spellings.
+        merged = (
+            ",".join(timestamp_granularities_bracket) if timestamp_granularities_bracket else timestamp_granularities
+        )
         return cls(
             model=model,
             language=language,
             temperature=temperature,
             response_format=response_format,
             prompt=prompt,
-            timestamp_granularities=timestamp_granularities,
+            timestamp_granularities=merged,
         )
 
 
@@ -132,19 +146,23 @@ class OpenAITranscriptionVerboseRequest(OpenAITranscriptionRequest):
         response_format: ResponseFormat = Form(ResponseFormat.JSON),
         prompt: str | None = Form(None),
         timestamp_granularities: str | None = Form(None),
+        timestamp_granularities_bracket: list[str] | None = Form(None, alias="timestamp_granularities[]"),
         task: Task | None = Form(None),
         beam_size: int | None = Form(None),
         best_of: int | None = Form(None),
         word_timestamps: bool | None = Form(None),
         vad: bool | None = Form(None),
     ) -> OpenAITranscriptionVerboseRequest:
+        merged = (
+            ",".join(timestamp_granularities_bracket) if timestamp_granularities_bracket else timestamp_granularities
+        )
         return cls(
             model=model,
             language=language,
             temperature=temperature,
             response_format=response_format,
             prompt=prompt,
-            timestamp_granularities=timestamp_granularities,
+            timestamp_granularities=merged,
             task=task,
             beam_size=beam_size,
             best_of=best_of,
@@ -158,8 +176,15 @@ class OpenAITranslationsRequest(BaseModel):
 
     model: str = Field("whisper-1", description="Model name; kept for OpenAI compatibility.")
     temperature: float | None = Field(None, description="Sampling temperature; 0.0 for deterministic output.")
-    response_format: ResponseFormat = Field(ResponseFormat.JSON, description="Response format: 'json' or 'text'.")
+    response_format: ResponseFormat = Field(
+        ResponseFormat.JSON,
+        description="Response format: 'json', 'text', 'srt', 'vtt' or 'verbose_json' (OpenAI's set).",
+    )
     prompt: str | None = Field(None, description="Prompt text; ignored for Whisper.")
+    timestamp_granularities: str | None = Field(
+        None,
+        description="Comma-joined OpenAI granularities; 'word' turns on word timings.",
+    )
 
     @classmethod
     def as_form(
@@ -168,12 +193,18 @@ class OpenAITranslationsRequest(BaseModel):
         temperature: float | None = Form(None),
         response_format: ResponseFormat = Form(ResponseFormat.JSON),
         prompt: str | None = Form(None),
+        timestamp_granularities: str | None = Form(None),
+        timestamp_granularities_bracket: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     ) -> OpenAITranslationsRequest:
+        merged = (
+            ",".join(timestamp_granularities_bracket) if timestamp_granularities_bracket else timestamp_granularities
+        )
         return cls(
             model=model,
             temperature=temperature,
             response_format=response_format,
             prompt=prompt,
+            timestamp_granularities=merged,
         )
 
 
@@ -222,3 +253,44 @@ class OpenAITranscription(BaseModel):
     """OpenAI-compatible minimal payload."""
 
     text: str
+
+
+class OpenAIVerboseSegment(BaseModel):
+    """One segment in OpenAI's `verbose_json` shape.
+
+    `id`/`start`/`end`/`text` are the engine's own values. The remaining fields are
+    REQUIRED by openai-python's `TranscriptionSegment`, so they are emitted with
+    neutral defaults: faster-whisper does not expose per-segment token ids,
+    log-probabilities or a temperature, and inventing values for them would be
+    worse than a clearly neutral default.
+    """
+
+    id: int = Field(..., description="Zero-based segment index.")
+    seek: int = Field(0, description="Seek offset; the engine reports none.")
+    start: float = Field(..., description="Segment start time in seconds.")
+    end: float = Field(..., description="Segment end time in seconds.")
+    text: str = Field(..., description="Recognized text for this segment.")
+    tokens: list[int] = Field(default_factory=list, description="Token ids; not produced by the engine.")
+    temperature: float = Field(0.0, description="Sampling temperature; not reported per segment.")
+    avg_logprob: float = Field(0.0, description="Average log-probability; not reported by the engine.")
+    compression_ratio: float = Field(0.0, description="Compression ratio; not reported by the engine.")
+    no_speech_prob: float = Field(0.0, description="No-speech probability; not reported by the engine.")
+
+
+class OpenAIVerboseTranscription(BaseModel):
+    """OpenAI's `verbose_json` response for /v1/audio/transcriptions.
+
+    `task`, `language` (ISO-639-1 where the engine resolves one), `duration`,
+    `text`, `segments[]`, and `words[]` when the caller asked for word granularity
+    AND the engine produced word timestamps.
+    """
+
+    task: str = Field("transcribe", description="'transcribe' or 'translate'.")
+    language: str | None = Field(None, description="Detected/requested language code.")
+    duration: float | None = Field(None, description="Audio duration in seconds.")
+    text: str = Field(..., description="Full concatenated transcript.")
+    segments: list[OpenAIVerboseSegment] = Field(default_factory=list)
+    words: list[dict[str, Any]] | None = Field(
+        None,
+        description="Word-level timings when `timestamp_granularities` includes 'word'.",
+    )

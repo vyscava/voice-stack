@@ -260,6 +260,19 @@ def test_transcribe_verbose_response_optional_fields() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asr
+def test_response_format_matches_openai() -> None:
+    """voice-stack#9: the enum matches OpenAI's transcription formats exactly."""
+    assert {f.value for f in ResponseFormat} == {
+        "json",
+        "text",
+        "srt",
+        "vtt",
+        "verbose_json",
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.asr
 def test_openai_transcription_minimal() -> None:
     """Test OpenAITranscription minimal response."""
     response = OpenAITranscription(text="Hello world")

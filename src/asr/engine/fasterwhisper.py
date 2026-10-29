@@ -154,7 +154,27 @@ class ASRFasterWhisper(ASRBase):
                 start_time = self.helper_map_compressed_to_original_timeline(start_time, vad_segments)
                 end_time = self.helper_map_compressed_to_original_timeline(end_time, vad_segments)
 
-            segments.append({"start": start_time, "end": end_time, "text": text_piece})
+            seg_payload: dict[str, Any] = {
+                "start": start_time,
+                "end": end_time,
+                "text": text_piece,
+            }
+            # Word timings: faster-whisper fills `seg.words` only when
+            # word_timestamps=True. Carry them through (mapped back to the
+            # original timeline when VAD compressed the audio) so the OpenAI
+            # `verbose_json` path can emit `words[]`.
+            seg_words = getattr(seg, "words", None)
+            if isinstance(seg_words, list) and seg_words:
+                mapped_words: list[dict[str, Any]] = []
+                for word in seg_words:
+                    word_start = float(word.start)
+                    word_end = float(word.end)
+                    if vad_used and vad_segments:
+                        word_start = self.helper_map_compressed_to_original_timeline(word_start, vad_segments)
+                        word_end = self.helper_map_compressed_to_original_timeline(word_end, vad_segments)
+                    mapped_words.append({"word": word.word, "start": word_start, "end": word_end})
+                seg_payload["words"] = mapped_words
+            segments.append(seg_payload)
 
         # Joining all text pieces to have a single string
         full_text = " ".join(parts).strip()
