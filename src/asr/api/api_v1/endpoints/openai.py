@@ -147,6 +147,9 @@ async def transcriptions(
             content_type=file.content_type,
             request_language=request.language,
             temperature=request.temperature,
+            # `verbose_json` + timestamp_granularities=word asks the engine for
+            # per-word timings; without this flag the engine never produces them.
+            word_timestamps="word" in (request.timestamp_granularities or "").lower(),
         )
 
         # OpenAI's response_format set: text/plain plus the subtitle formats,
@@ -317,7 +320,7 @@ async def transcriptions_verbose(
 
 @router.post(
     "/audio/translations",
-    response_model=OpenAITranscription,
+    response_model=None,
     responses={
         status.HTTP_200_OK: {
             "content": {
@@ -373,6 +376,7 @@ async def translations(
             # Let the engine auto-detect source language; translation target is English.
             task="translate",
             temperature=request.temperature,
+            word_timestamps="word" in (request.timestamp_granularities or "").lower(),
             # Intentionally don't pass `request_language` here; Whisper detects source.
         )
 
