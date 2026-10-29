@@ -25,6 +25,8 @@ from asr.schemas.openai import (
     OpenAITranscriptionRequest,
     OpenAITranscriptionVerboseRequest,
     OpenAITranslationsRequest,
+    OpenAIVerboseSegment,
+    OpenAIVerboseTranscription,
     TranscribeVerboseResponse,
 )
 from core.error_handler import ErrorContext
@@ -39,9 +41,53 @@ settings = get_settings()
 _engine_for_listing = get_audio_engine()
 
 
+def _openai_words(result: Any) -> list[dict[str, Any]]:
+    """Flatten per-segment word timings into OpenAI's `words[]` list."""
+    words: list[dict[str, Any]] = []
+    for seg in getattr(result, "segments", []):
+        for w in seg.get("words") or []:
+            words.append(
+                {
+                    "word": str(w.get("word", "")),
+                    "start": float(w.get("start", 0.0)),
+                    "end": float(w.get("end", 0.0)),
+                }
+            )
+    return words
+
+
+def _openai_verbose(
+    result: Any, *, task: str, granularities: str | None
+) -> OpenAIVerboseTranscription:
+    """Build OpenAI's `verbose_json` payload from the engine result.
+
+    `language` is the engine's `language_code` and `duration` its
+    `duration_input_s`: the engine dataclass names differ from OpenAI's, and
+    building the response from the dataclass field names silently dropped both
+    (the 2026-10-28 `language: null` report on the verbose route).
+    """
+    want_words = bool(granularities) and "word" in str(granularities).lower()
+    return OpenAIVerboseTranscription(
+        task=task,
+        language=getattr(result, "language_code", None) or None,
+        duration=getattr(result, "duration_input_s", None),
+        text=result.text,
+        segments=[
+            OpenAIVerboseSegment(
+                id=i,
+                start=float(s.get("start", 0.0)),
+                end=float(s.get("end", 0.0)),
+                text=str(s.get("text") or ""),
+            )
+            for i, s in enumerate(getattr(result, "segments", []))
+        ],
+        words=_openai_words(result) if want_words else None,
+    )
+
+
 @router.post(
     "/audio/transcriptions",
-    response_model=OpenAITranscription,
+    response_model=None,
     responses={
         status.HTTP_200_OK: {
             "content": {
@@ -91,9 +137,26 @@ async def transcriptions(
             temperature=request.temperature,
         )
 
-        # If return  is text lets give it a plan text
+        # OpenAI's response_format set: text/plain plus the subtitle formats,
+        # `verbose_json` (full metadata) and the minimal `json` default.
         if request.response_format == "text":
             return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
+        if request.response_format == "srt":
+            return PlainTextResponse(
+                content=result.to_srt(),
+                media_type="application/x-subrip",
+                status_code=status.HTTP_200_OK,
+            )
+        if request.response_format == "vtt":
+            return PlainTextResponse(
+                content=result.to_vtt(),
+                media_type="text/vtt; charset=utf-8",
+                status_code=status.HTTP_200_OK,
+            )
+        if request.response_format == "verbose_json":
+            return _openai_verbose(
+                result, task="transcribe", granularities=request.timestamp_granularities
+            )
 
         # or we default to JSON
         return OpenAITranscription(**result.to_dict())
@@ -203,8 +266,14 @@ async def transcriptions_verbose(
             # If someone still asks for text, mirror the minimal behavior.
             return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
 
-        # Full JSON payload for debugging/analytics.
-        return TranscribeVerboseResponse(**result.to_dict())
+        # Full JSON payload for debugging/analytics. The engine dataclass names
+        # are `language_code`/`confidence`; the response schema uses OpenAI's
+        # `language`/`language_probability`, so map them explicitly instead of
+        # letting pydantic drop the unknown fields (the 2026-10-28 nulls).
+        payload = result.to_dict()
+        payload["language"] = payload.get("language_code")
+        payload["language_probability"] = payload.get("confidence")
+        return TranscribeVerboseResponse(**payload)
 
     except (OSError, ValueError) as e:
         # File decoding or validation errors (client error)
@@ -303,8 +372,25 @@ async def translations(
             # Intentionally don't pass `request_language` here; Whisper detects source.
         )
 
+        # Same OpenAI response_format set as the transcription endpoint.
         if request.response_format == "text":
             return PlainTextResponse(content=result.text, status_code=status.HTTP_200_OK)
+        if request.response_format == "srt":
+            return PlainTextResponse(
+                content=result.to_srt(),
+                media_type="application/x-subrip",
+                status_code=status.HTTP_200_OK,
+            )
+        if request.response_format == "vtt":
+            return PlainTextResponse(
+                content=result.to_vtt(),
+                media_type="text/vtt; charset=utf-8",
+                status_code=status.HTTP_200_OK,
+            )
+        if request.response_format == "verbose_json":
+            return _openai_verbose(
+                result, task="translate", granularities=request.timestamp_granularities
+            )
 
         return OpenAITranscription(**result.to_dict())
 
