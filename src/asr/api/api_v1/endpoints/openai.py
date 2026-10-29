@@ -70,9 +70,7 @@ def _openai_words(result: Any) -> list[dict[str, Any]]:
     return words
 
 
-def _openai_verbose(
-    result: Any, *, task: str, granularities: str | None
-) -> OpenAIVerboseTranscription:
+def _openai_verbose(result: Any, *, task: str, granularities: str | None) -> OpenAIVerboseTranscription:
     """Build OpenAI's `verbose_json` payload from the engine result.
 
     `language` is the engine's `language_code` and `duration` its
@@ -168,9 +166,7 @@ async def transcriptions(
                 status_code=status.HTTP_200_OK,
             )
         if request.response_format == "verbose_json":
-            return _openai_verbose(
-                result, task="transcribe", granularities=request.timestamp_granularities
-            )
+            return _openai_verbose(result, task="transcribe", granularities=request.timestamp_granularities)
 
         # or we default to JSON
         return OpenAITranscription(**result.to_dict())
@@ -396,9 +392,7 @@ async def translations(
                 status_code=status.HTTP_200_OK,
             )
         if request.response_format == "verbose_json":
-            return _openai_verbose(
-                result, task="translate", granularities=request.timestamp_granularities
-            )
+            return _openai_verbose(result, task="translate", granularities=request.timestamp_granularities)
 
         return OpenAITranscription(**result.to_dict())
 

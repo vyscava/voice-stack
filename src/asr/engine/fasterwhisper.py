@@ -170,15 +170,9 @@ class ASRFasterWhisper(ASRBase):
                     word_start = float(word.start)
                     word_end = float(word.end)
                     if vad_used and vad_segments:
-                        word_start = self.helper_map_compressed_to_original_timeline(
-                            word_start, vad_segments
-                        )
-                        word_end = self.helper_map_compressed_to_original_timeline(
-                            word_end, vad_segments
-                        )
-                    mapped_words.append(
-                        {"word": word.word, "start": word_start, "end": word_end}
-                    )
+                        word_start = self.helper_map_compressed_to_original_timeline(word_start, vad_segments)
+                        word_end = self.helper_map_compressed_to_original_timeline(word_end, vad_segments)
+                    mapped_words.append({"word": word.word, "start": word_start, "end": word_end})
                 seg_payload["words"] = mapped_words
             segments.append(seg_payload)
 

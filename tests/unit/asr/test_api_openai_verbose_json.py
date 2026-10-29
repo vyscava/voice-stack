@@ -46,9 +46,7 @@ def test_transcriptions_accepts_openai_response_formats(
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_transcriptions_verbose_json_has_the_openai_shape(
-    asr_client: TestClient, sample_audio_bytes: bytes
-) -> None:
+def test_transcriptions_verbose_json_has_the_openai_shape(asr_client: TestClient, sample_audio_bytes: bytes) -> None:
     response = asr_client.post(
         "/v1/audio/transcriptions",
         data={"model": "whisper-1", "response_format": "verbose_json"},
