@@ -71,7 +71,9 @@ class OpenAITranscriptionRequest(BaseModel):
         description="Response format: 'json', 'text', 'srt', 'vtt' or 'verbose_json' (OpenAI's set).",
     )
     prompt: str | None = Field(None, description="Prompt text; ignored for Whisper.")
-    timestamp_granularities: str | None = Field(None, description="Comma-joined OpenAI granularities; 'word' turns on word timings.")
+    timestamp_granularities: str | None = Field(
+        None, description="Comma-joined OpenAI granularities; 'word' turns on word timings."
+    )
 
     # Coerce "" -> None for optional fields that arrive as strings
     @field_validator("language", "prompt", "timestamp_granularities", mode="before")
