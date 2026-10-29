@@ -92,9 +92,7 @@ def test_translations_accepts_openai_response_formats(
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_translations_verbose_json_keeps_the_verbose_body(
-    asr_client: TestClient, sample_audio_bytes: bytes
-) -> None:
+def test_translations_verbose_json_keeps_the_verbose_body(asr_client: TestClient, sample_audio_bytes: bytes) -> None:
     """`response_model=None` on translations: the body must not collapse to {"text"}."""
     response = asr_client.post(
         "/v1/audio/translations",
