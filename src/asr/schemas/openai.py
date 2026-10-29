@@ -100,9 +100,7 @@ class OpenAITranscriptionRequest(BaseModel):
         # openai-python sends this field as `timestamp_granularities[]` (a repeated
         # form key), never as a plain string, so accept both spellings.
         merged = (
-            ",".join(timestamp_granularities_bracket)
-            if timestamp_granularities_bracket
-            else timestamp_granularities
+            ",".join(timestamp_granularities_bracket) if timestamp_granularities_bracket else timestamp_granularities
         )
         return cls(
             model=model,
@@ -156,9 +154,7 @@ class OpenAITranscriptionVerboseRequest(OpenAITranscriptionRequest):
         vad: bool | None = Form(None),
     ) -> OpenAITranscriptionVerboseRequest:
         merged = (
-            ",".join(timestamp_granularities_bracket)
-            if timestamp_granularities_bracket
-            else timestamp_granularities
+            ",".join(timestamp_granularities_bracket) if timestamp_granularities_bracket else timestamp_granularities
         )
         return cls(
             model=model,
@@ -201,9 +197,7 @@ class OpenAITranslationsRequest(BaseModel):
         timestamp_granularities_bracket: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     ) -> OpenAITranslationsRequest:
         merged = (
-            ",".join(timestamp_granularities_bracket)
-            if timestamp_granularities_bracket
-            else timestamp_granularities
+            ",".join(timestamp_granularities_bracket) if timestamp_granularities_bracket else timestamp_granularities
         )
         return cls(
             model=model,
