@@ -12,17 +12,16 @@ What this module provides
    - Matches common ASR model requirements (e.g., Whisper-family).
 
 3) VAD (Silero)
-   - Lazy load of Silero VAD (CPU by default).
+   - Silero v6 as the ONNX model bundled with faster-whisper, run on onnxruntime.
    - Apply VAD to PCM16 audio and stitch speech-only regions together.
-   - Keeps dependencies optional: torch/torchaudio are imported inside functions.
+   - No torch on this path: the slim image ships without it (voice-stack#13).
+     torch/torchaudio remain optional, imported lazily, for resampling only.
 """
 
 from __future__ import annotations
 
 import io
 import logging
-import sys
-import types
 from typing import Any
 
 import numpy as np
@@ -149,15 +148,6 @@ def _to_torch_device(x: Any, device: str) -> Any:
         return x  # e.g., if x is a plain Python object
 
 
-def _device_to_str(dev: Any) -> str:
-    if isinstance(dev, str):
-        return dev.split(":", 1)[0]
-    dev_type = getattr(dev, "type", None)
-    if isinstance(dev_type, str):
-        return dev_type
-    return "cpu"
-
-
 def _resample_torch_audio(
     *,
     audio_f32: npt.NDArray[np.float32],
@@ -275,82 +265,72 @@ def resample_to_16k_mono(
         raise RuntimeError("No resampler available (torch/torchaudio or resampy)") from e
 
 
+# Silero's own get_speech_timestamps() defaults (silero-vad 6.x). faster-whisper's
+# VadOptions defaults are tuned for long-form chunking (2 s silence, 400 ms pad)
+# and would change what this service trims, so the silero values are passed
+# explicitly: same v6 model, same parameters, only the runtime changed.
+SILERO_VAD_DEFAULTS: dict[str, Any] = {
+    "threshold": 0.5,
+    "min_speech_duration_ms": 250,
+    "min_silence_duration_ms": 100,
+    "speech_pad_ms": 30,
+}
+
+
+def _onnx_speech_timestamps(
+    audio: npt.NDArray[np.float32], model: Any, sampling_rate: int = 16000
+) -> list[dict[Any, Any]]:
+    """Run faster-whisper's ONNX Silero VAD; returns [{start, end}] in samples.
+
+    ``model`` is accepted for the (model, fn) calling convention and is the same
+    cached session faster-whisper uses internally (``get_vad_model`` is an
+    lru_cache), so loading it up front is what makes a broken install fail at
+    startup instead of on the first request.
+    """
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+    del model  # faster-whisper resolves the cached session itself
+    ts: list[dict[Any, Any]] = get_speech_timestamps(
+        np.ascontiguousarray(audio, dtype=np.float32),
+        vad_options=VadOptions(**SILERO_VAD_DEFAULTS),
+        sampling_rate=sampling_rate,
+    )
+    return ts
+
+
 def load_silero_model(log: logging.Logger) -> tuple[Any, Any]:
     """
-    Lazily import and instantiate Silero VAD, preferring an accelerated torch device.
+    Load the Silero VAD model that ships inside faster-whisper (ONNX, CPU).
 
-    Why lazy?
-    ---------
-    - Avoids importing PyTorch/torchaudio at process start when VAD isn't used.
-    - Tries MPS (Apple), then CUDA (NVIDIA), then CPU. Falls back gracefully to CPU.
+    Why not the ``silero-vad`` package
+    ----------------------------------
+    It is the same Silero v6 network, but packaged as TorchScript, so it pulled
+    torch and torchaudio into every image that runs ASR. faster-whisper already
+    bundles the ONNX export (``faster_whisper/assets/silero_vad_v6.onnx``) and
+    runs it on onnxruntime, which it depends on anyway. Using it keeps torch out
+    of the slim image entirely (voice-stack#13).
 
     Returns
     -------
     (model, get_speech_timestamps) | (None, None)
-        `model` is the Silero VAD module, already `.eval()`-ed and moved to a device
-        that appears to support execution. If an accelerated device fails a quick
-        capability check, the model is transparently moved to CPU.
-        `get_speech_timestamps` is the callable to run VAD.
-        If anything fails (missing deps, incompatible ops), returns (None, None).
-
-    Logging
-    -------
-    Emits messages indicating which device is used. If acceleration is unavailable
-    or unsupported, logs a warning and uses CPU.
+        ``model`` is the onnxruntime-backed Silero session; ``get_speech_timestamps``
+        is called as ``fn(audio_f32_16k, model, sampling_rate=16000)`` and
+        returns sample-index segments. On any failure (missing package, missing
+        asset, onnxruntime unable to build the session) returns (None, None) and
+        logs at ERROR, because transcribing without VAD is a silent quality and
+        latency regression, not a neutral fallback.
     """
-
     try:
-        # Prevent Silero from breaking into ipdb
-        def _noop(*_args: Any, **_kwargs: Any) -> None:
-            return None
+        from faster_whisper.vad import get_vad_model
 
-        fake_ipdb = types.ModuleType("ipdb")
-        fake_ipdb.set_trace = _noop
-        sys.modules["ipdb"] = fake_ipdb
+        model = get_vad_model()
+        # Prove the session runs, not just that it was constructed: ~0.25 s of
+        # silence must come back as "no speech", not raise.
+        _onnx_speech_timestamps(np.zeros(4000, dtype=np.float32), model, sampling_rate=16000)
+        log.info("Silero VAD loaded (ONNX, CPU).")
+        return model, _onnx_speech_timestamps
     except Exception as e:
-        print(f"Warning: failed to neutralize ipdb: {e}")
-
-    try:
-        import torch
-        import torchaudio  # noqa: F401 (we may need it for resampling later)
-        from silero_vad import get_speech_timestamps, load_silero_vad
-
-        # 1) Load model (official API loads CPU by default), eval mode
-        model = load_silero_vad()
-        eval_fn = getattr(model, "eval", None)
-        if callable(eval_fn):
-            try:
-                eval_fn()
-            except Exception:
-                pass
-
-        # 2) Try to move to an accelerated device (MPS -> CUDA -> CPU).
-        #    If anything fails, we revert to CPU.
-        device = pick_torch_device(("mps", "cuda", "cpu"))
-        chosen = "cpu"
-        if device != "cpu":
-            try:
-                model = _to_torch_device(model, device)
-                # Quick smoke test: run a tiny forward to ensure ops exist on the device.
-                # We use ~0.25s of zeros at 16 kHz.
-                test = torch.zeros(4000, dtype=torch.float32, device=device)
-                # Some silero wrappers accept waveform + sr directly; others need only waveform at 16k
-                speech_fn: Any = get_speech_timestamps
-                with torch.no_grad():
-                    _ = speech_fn(test, model, sampling_rate=16000)
-                chosen = device
-            except Exception as e:
-                log.warning("Silero VAD acceleration (%s) unavailable, falling back to CPU: %s", device, e)
-                model = _to_torch_device(model, "cpu")
-                chosen = "cpu"
-        else:
-            model = _to_torch_device(model, "cpu")
-
-        log.info("Silero VAD loaded (%s).", chosen.upper())
-        return model, get_speech_timestamps
-
-    except Exception as e:
-        log.warning("Silero VAD unavailable, proceeding without VAD: %s", e)
+        log.error("Silero VAD unavailable, proceeding WITHOUT VAD: %s", e)
         return None, None
 
 
@@ -408,24 +388,15 @@ def apply_vad_silero(
 
     Contract
     --------
-    - Input: PCM16 mono, sample rate `sr` (any). If `sr != 16000`, we resample to 16 kHz.
+    - Input: PCM16 mono, sample rate `sr` (any). If `sr != 16000`, we resample to 16 kHz (resampy).
     - Output: Tuple of (PCM16 mono with non-speech removed, list of speech segment timestamps)
 
-    Device selection and fallbacks
-    ------------------------------
-    - If the Silero model appears to live on MPS/CUDA, we attempt to execute on that device.
-    - If device execution fails (unsupported op/dtype), we transparently fall back to CPU.
-    - Resampling uses TorchAudio on the chosen device when available; falls back to resampy.
-
-    Why convert types?
-    ------------------
-    - Silero expects a float32 tensor in [-1, 1] and works best at 16 kHz.
-    - We therefore:
-        1) Convert int16 → float32 [-1, 1].
-        2) Resample to 16 kHz if needed (TorchAudio preferred; resampy fallback).
-        3) Run VAD to get speech timestamps.
+    Pipeline (NumPy + onnxruntime, no torch):
+        1) Convert int16 -> float32 [-1, 1].
+        2) Resample to 16 kHz if needed.
+        3) Run VAD to get speech timestamps (sample indices at 16 kHz).
         4) Stitch speech regions with NumPy.
-        5) Convert float32 → int16 for downstream pipelines that expect PCM16.
+        5) Convert float32 -> int16 for downstream pipelines that expect PCM16.
 
     Fail-safe behavior
     ------------------
@@ -457,114 +428,18 @@ def apply_vad_silero(
         return pcm16, []
 
     try:
-        import torch
+        audio_f32 = pcm16.astype(np.float32).reshape(-1) / 32768.0
+        if sr != 16000:
+            import resampy
 
-        # torch/torchaudio might not be present; we handle fallback later.
-        try:
-            import torchaudio as torchaudio_module
-        except Exception:
-            torchaudio_module = None
+            audio_f32 = resampy.resample(audio_f32, sr, 16000).astype(np.float32, copy=False)
 
-        # Helper: infer device from the model if possible (jit/script or nn.Module).
-        def _infer_model_device(m: Any) -> str:
-            # Try parameters first (nn.Module)
-            try:
-                params_attr = getattr(m, "parameters", None)
-                if callable(params_attr):
-                    for param in params_attr():
-                        dev = getattr(param, "device", None)
-                        if dev is not None:
-                            return _device_to_str(dev)
-                        break
-            except Exception:
-                pass
+        ts = get_speech_timestamps_fn(audio_f32, silero_model, sampling_rate=16000)
 
-            # Try buffers (some modules have no params)
-            try:
-                buffers_attr = getattr(m, "buffers", None)
-                if callable(buffers_attr):
-                    bufs_iter = buffers_attr()
-                    for buf in bufs_iter:
-                        dev = getattr(buf, "device", None)
-                        if dev is not None:
-                            return _device_to_str(dev)
-                        break
-            except Exception:
-                pass
-
-            # Fallback: attribute on custom/torchscript objects
-            dev = getattr(m, "device", None)
-            if dev is not None:
-                return _device_to_str(dev)
-
-            return "cpu"
-
-        # 1) int16 → float32 in [-1, 1], ensure contiguous 1-D array
-        audio_f32 = pcm16.astype(np.float32) / 32768.0
-
-        # Choose execution device (prefer model's device; fall back to CPU)
-        exec_device = _infer_model_device(silero_model)
-        if exec_device not in {"cpu", "cuda", "mps"}:
-            # If it's a torch.device object or similar, stringify may have returned 'device(type=\'cpu\')'
-            exec_device = "cpu"
-
-        def _run_on_device(device: str) -> tuple[npt.NDArray[np.int16], list[dict[str, float]]]:
-            """
-            Attempt the full pipeline on the requested device.
-            Falls back to CPU at the caller if any op fails here.
-            """
-            x = torch.from_numpy(np.ascontiguousarray(audio_f32.reshape(-1))).to(device=device, dtype=torch.float32)
-            _sr = sr
-
-            # 2) Resample to 16 kHz on the same device when possible
-            if _sr != 16000:
-                if torchaudio_module is not None:
-                    try:
-                        resampler = torchaudio_module.transforms.Resample(orig_freq=_sr, new_freq=16000)
-                        resampler = _to_torch_device(resampler, device)
-                        x = resampler(x)
-                        _sr = 16000
-                    except Exception:
-                        # Fallback to resampy on CPU
-                        import resampy
-
-                        y = resampy.resample(audio_f32, _sr, 16000).astype("float32", copy=False)
-                        x = torch.from_numpy(y).to(device=device)
-                        _sr = 16000
-                else:
-                    # No torchaudio, fallback to resampy (CPU) then move to device
-                    import resampy
-
-                    y = resampy.resample(audio_f32, _sr, 16000).astype("float32", copy=False)
-                    x = torch.from_numpy(y).to(device=device)
-                    _sr = 16000
-
-            # 3) Run Silero to get speech timestamps (returns sample indices)
-            with torch.no_grad():
-                ts = get_speech_timestamps_fn(x, silero_model, sampling_rate=_sr)
-
-            # 4) Convert timestamps from sample indices to seconds (for original timeline reference)
-            #    These timestamps are relative to the 16kHz resampled audio, which matches the original timeline
-            timestamps_sec = [{"start": float(t["start"]) / 16000.0, "end": float(t["end"]) / 16000.0} for t in ts]
-
-            # 5) Stitch speech segments and convert back to PCM16
-            speech_np_f32 = _concat_chunks_numpy(x.detach().to("cpu").numpy(), ts)
-            speech_i16 = (np.clip(speech_np_f32, -1.0, 1.0) * 32767.0).astype(np.int16)
-            return speech_i16, timestamps_sec
-
-        # Try on the model's device; if it fails (unsupported op), retry on CPU.
-        try:
-            return _run_on_device(exec_device)
-        except Exception as dev_err:
-            if exec_device != "cpu":
-                log.warning("[VAD:silero] device '%s' failed (%s). Retrying on CPU.", exec_device, dev_err)
-                # Move model to CPU if needed
-                try:
-                    silero_model = _to_torch_device(silero_model, "cpu")
-                except Exception:
-                    pass
-                return _run_on_device("cpu")
-            raise  # will be caught by outer except
+        timestamps_sec = [{"start": float(t["start"]) / 16000.0, "end": float(t["end"]) / 16000.0} for t in ts]
+        speech_np_f32 = _concat_chunks_numpy(audio_f32, ts)
+        speech_i16 = (np.clip(speech_np_f32, -1.0, 1.0) * 32767.0).astype(np.int16)
+        return speech_i16, timestamps_sec
 
     except Exception as e:
         # Any failure should not break the ASR pipeline; just return original audio with no timestamps.

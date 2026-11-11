@@ -63,7 +63,7 @@ RUN hatch env create
 
 # Force the CPU build of torch/torchaudio.
 #
-# pyproject pins the VERSION (==2.9.1) but PyPI serves that version as the CUDA
+# pyproject pins the VERSION (==2.15.0) but PyPI serves that version as the CUDA
 # wheel, so hatch's resolve lands ~4 GB of nvidia-*-cu12 packages and, worse, a
 # DIFFERENT artifact from the one production runs. CI testing a different wheel
 # than prod ships is the general form of voice-stack#4.
@@ -71,10 +71,12 @@ RUN hatch env create
 # hatch owns environment creation here, so the variant is corrected afterwards
 # rather than installed first as in the production Dockerfile. --no-deps keeps
 # pip from re-resolving; --force-reinstall is required because the installed
-# 2.9.1 already satisfies ==2.9.1 and pip would otherwise skip it.
+# 2.15.0 already satisfies ==2.15.0 and pip would otherwise skip it. torchaudio
+# is 2.11.0, its last release (see pyproject.toml). torchcodec is corrected the
+# same way: PyPI's x86_64 0.17.0 wheel is a CUDA build that cannot load here.
 RUN .venv/bin/pip install --no-cache-dir --force-reinstall --no-deps \
         --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.9.1 torchaudio==2.9.1
+        torch==2.15.0 torchaudio==2.11.0 torchcodec==0.17.0
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
 RUN bash scripts/accept_coqui_license.sh
@@ -84,7 +86,9 @@ ENV HATCH_ENV_TYPE_VIRTUAL_PATH=.venv \
     PATH="/workspace/.venv/bin:$PATH"
 
 # Same assertions the production image runs -- identical invariants, one file,
-# so CI and prod cannot drift.
+# so CI and prod cannot drift. check_asr imports the service's own VAD loader
+# (utils.audio.audio_helper), so the source tree must be present here too.
+COPY src/ ./src/
 RUN python --version && \
     pip --version && \
     hatch --version && \

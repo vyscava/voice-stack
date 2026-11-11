@@ -54,7 +54,7 @@ The license is accepted by creating a `tos_agreed.txt` file in the TTS cache dir
 
 **Contains**:
 - All dev dependencies (pytest, black, ruff, mypy)
-- ASR dependencies (faster-whisper, silero-vad)
+- ASR dependencies (faster-whisper with its bundled Silero ONNX VAD; openai-whisper)
 - TTS dependencies (coqui-tts)
 - PyTorch (CPU or CUDA based on auto-detection)
 
@@ -315,6 +315,12 @@ gateway with its variables set. See `compose/README.md` for the
 homelab-specific values to change.
 
 ### GPU Support
+
+> Both published images are CPU-only since voice-stack#13: torch is the `+cpu`
+> build, and the full image is based on `python:3.11-slim` (its former
+> `nvidia/cuda` Ubuntu 22.04 base ran Python 3.11.0rc1, the root cause of #4).
+> GPU use needs a custom build with a CUDA torch and CUDA runtime libraries;
+> the steps below are the host side only.
 
 To use NVIDIA GPU with Docker:
 

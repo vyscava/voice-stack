@@ -296,7 +296,11 @@ class ASRBase(ABC):
     ]
 
     def __init__(self) -> None:
-        # Optional Silero VAD (CPU)
+        # Optional Silero VAD (ONNX, CPU). Both attributes always exist: with
+        # ASR_VAD_ENABLED=false they used to be unset and the check below raised
+        # AttributeError at engine construction.
+        self.silero_model: Any = None
+        self.silero_ts_fn: Any = None
         if settings.ASR_VAD_ENABLED:
             self.silero_model, self.silero_ts_fn = load_silero_model(logger)
 

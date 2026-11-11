@@ -89,7 +89,8 @@ services:
           cpus: '1.0'
           memory: 2G
 
-    # GPU support (uncomment if using CUDA)
+    # GPU support: the published images are CPU-only since voice-stack#13
+    # (see DOCKER_DEPLOYMENT.md "GPU Support"); this needs a custom CUDA build.
     # runtime: nvidia
     # environment:
     #   - NVIDIA_VISIBLE_DEVICES=all
@@ -176,7 +177,8 @@ services:
           cpus: '2.0'
           memory: 4G
 
-    # GPU support (uncomment if using CUDA)
+    # GPU support: the published images are CPU-only since voice-stack#13
+    # (see DOCKER_DEPLOYMENT.md "GPU Support"); this needs a custom CUDA build.
     # runtime: nvidia
     # environment:
     #   - NVIDIA_VISIBLE_DEVICES=all

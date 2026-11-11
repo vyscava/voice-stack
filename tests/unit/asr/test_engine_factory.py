@@ -194,3 +194,21 @@ def test_get_audio_engine_lazy_initialization() -> None:
         engine = engine_factory.get_audio_engine()
         assert engine is mock_engine
         assert mock_create.call_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_whisper_engine_without_torch_raises_a_clear_error() -> None:
+    """The slim image has no torch (voice-stack#13). ASR_ENGINE=whisper there must
+    fail with a message naming the fix, not a bare ImportError from deep inside."""
+    import sys
+
+    from asr import engine_factory
+
+    with (
+        patch("asr.engine_factory.get_settings") as mock_get_settings,
+        patch.dict(sys.modules, {"asr.engine.whisper": None}),
+    ):
+        mock_get_settings.return_value = Mock(ASR_ENGINE="whisper")
+        with pytest.raises(RuntimeError, match="asr-whisper"):
+            engine_factory._create_engine_from_settings()
