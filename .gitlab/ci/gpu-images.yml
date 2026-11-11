@@ -23,10 +23,17 @@
 # Nothing on the runner has a GPU. These jobs prove the images BUILD and are
 # the GPU builds they claim to be; they do not prove inference on a GPU.
 #
-# The runner is one shared docker daemon. Names carry ${CI_JOB_ID} so
-# concurrent jobs cannot collide, and the image is removed when the job ends.
-# BuildKit's layer cache is kept (it is what makes a rebuild minutes rather
-# than an hour); it is the daemon's to garbage-collect.
+# DISK. The runner is one shared docker daemon on one disk, and these builds
+# are big (images 9-12 GB, builder stages as large again). The first version
+# built on the daemon's default builder and kept its layer cache: two
+# pipelines left ~110 GB and filled the disk, failing every project's CI. So:
+#   - each build runs in a throwaway docker-container builder whose cache is
+#     deleted with it (ci/gpu-image-check.sh), and the image is removed after;
+#   - resource_group gpu-image-build runs ONE GPU build at a time across all
+#     pipelines, so the peak is one build (~50 GB for ROCm), not several;
+#   - cleanup:gpu-build-cache (manual) removes cache left by builds made
+#     before this, or by a job killed before its after_script ran.
+# Names carry ${CI_JOB_ID} so concurrent jobs cannot collide.
 # ============================================================================
 
 .gpu-image:
@@ -35,12 +42,15 @@
   needs: []
   before_script: []
   timeout: 3 hours
+  resource_group: gpu-image-build
   variables:
     GPU_IMAGE: "voice-stack-gpu-${GPU_VARIANT}:job-${CI_JOB_ID}"
+    GPU_BUILDER: "gpu-${GPU_VARIANT}-${CI_JOB_ID}"
   script:
     - sh ci/gpu-image-check.sh "$GPU_VARIANT"
   after_script:
     - docker rm -f "freeze-${GPU_VARIANT}-${CI_JOB_ID}" "meta-${GPU_VARIANT}-${CI_JOB_ID}" "trivy-${GPU_VARIANT}-${CI_JOB_ID}" "audit-${GPU_VARIANT}-${CI_JOB_ID}-report" "audit-${GPU_VARIANT}-${CI_JOB_ID}-gate" >/dev/null 2>&1 || true
+    - docker buildx rm -f "$GPU_BUILDER" || true
     - docker rmi -f "$GPU_IMAGE" || true
   artifacts:
     when: always
@@ -95,3 +105,30 @@ build:gpu-image:rocm:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: manual
       allow_failure: true
+
+# Manual: remove GPU-build cache left on the daemon's default builder (see the
+# DISK note above). Dry-run listing first, then the prune; scoped to records
+# only these Dockerfiles create (ci/gpu-cache-prune.sh says how).
+cleanup:gpu-build-cache:
+  stage: build-images
+  image: docker:29
+  needs: []
+  before_script: []
+  variables:
+    GIT_DEPTH: "1"
+  script:
+    - sh ci/gpu-cache-prune.sh
+    - sh ci/gpu-cache-prune.sh --apply
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - buildx-du.txt
+      - gpu-cache-records.txt
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true
+  tags:
+    - docker
+    - nuc

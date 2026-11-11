@@ -22,7 +22,8 @@
 # must not be pushed, and a hand-off through the shared daemon would leave a
 # 10+ GB image behind whenever a pipeline is cancelled between jobs.
 #
-# Needs: GPU_IMAGE (the local tag to build), CI_JOB_ID, a docker CLI talking to
+# Needs: GPU_IMAGE (the local tag to build), GPU_BUILDER (the throwaway buildx
+# builder's name), CI_JOB_ID, a docker CLI talking to
 # the build daemon (DOCKER_HOST). Busybox sh compatible (docker:29 is Alpine).
 # ============================================================================
 set -eu
@@ -41,11 +42,26 @@ AUDIT_IMAGE="python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a6
 PIP_AUDIT_VERSION="2.10.1"
 
 # ---------------------------------------------------------------- 1. build
+# In a THROWAWAY builder, not the daemon's default one. The default builder
+# keeps every layer as cache after the job, and these images are 9-12 GB with
+# builder stages as large again: the first two pipelines of !77 left ~110 GB on
+# the shared runner and filled its disk. A docker-container builder keeps its
+# cache in its own volume, which `docker buildx rm` deletes with it (here and
+# in the job's after_script), so a build leaves nothing behind but the --load'ed
+# image, which after_script removes too. The price is a cold build every time.
+BUILDER="${GPU_BUILDER:?GPU_BUILDER must name the throwaway builder}"
+BUILDKIT_IMAGE="moby/buildkit@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c" # v0.34.1
+docker buildx rm -f "$BUILDER" >/dev/null 2>&1 || true
+docker buildx create --name "$BUILDER" --driver docker-container \
+  --driver-opt "image=${BUILDKIT_IMAGE}" >/dev/null
 APT_REFRESH="$(date -u +%F)${APT_REFRESH_FORCE:+-$APT_REFRESH_FORCE}"
 start=$(date +%s)
-docker build --pull --file "docker/Dockerfile.${VARIANT}" --tag "$IMAGE" \
+docker buildx build --builder "$BUILDER" --pull --load \
+  --file "docker/Dockerfile.${VARIANT}" --tag "$IMAGE" \
   --build-arg APT_REFRESH="$APT_REFRESH" .
 seconds=$(( $(date +%s) - start ))
+# The image is in the daemon now; the builder and all its cache can go.
+docker buildx rm -f "$BUILDER"
 bytes=$(docker image inspect -f '{{.Size}}' "$IMAGE")
 {
   echo "variant=${VARIANT}"
