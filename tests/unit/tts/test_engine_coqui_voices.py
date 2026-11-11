@@ -208,3 +208,55 @@ class TestUnknownVoiceIsRejected:
 
         with pytest.raises(RuntimeError):
             eng.resolve_voice("anything")
+
+
+# --- "default" alias ---------------------------------------------------------
+# The request layer sends voice="default" when a request names none, and the
+# gateway now defaults to it. Before the alias existed that reached
+# resolve_voice as a literal id and 404'd on every voiceless request.
+
+
+def test_default_alias_resolves_to_the_configured_speaker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tts.engine import coqui
+
+    monkeypatch.setattr(coqui.settings, "TTS_XTTS_DEFAULT_VOICE", "Daisy Studious")
+    eng = _make_engine(tmp_path, builtin=["Claribel Dervla", "Daisy Studious"])
+    assert eng.canonical_voice("default") == "Daisy Studious"
+    assert eng.resolve_voice("default") is None  # builtin speaker, selected by name
+
+
+def test_default_alias_with_a_missing_speaker_is_still_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tts.engine import coqui
+
+    monkeypatch.setattr(coqui.settings, "TTS_XTTS_DEFAULT_VOICE", "Nobody Here")
+    eng = _make_engine(tmp_path, builtin=["Claribel Dervla"])
+    with pytest.raises(KeyError):
+        eng.resolve_voice("default")
+
+
+def test_other_voice_ids_pass_through_unchanged() -> None:
+    from tts.engine.coqui import TTSCoqui
+
+    assert TTSCoqui.canonical_voice("Claribel Dervla") == "Claribel Dervla"
+
+
+def test_a_reload_never_exposes_an_empty_speaker_table(tmp_path: Path) -> None:
+    """_load_model rebuilds the speaker table while other requests may be
+    resolving voices. It used to reset it to {} and then refill it, so a
+    concurrent lookup could see no speakers (500) or miss one (404)."""
+    eng = _make_engine(tmp_path, builtin=["Claribel Dervla"])
+    before = dict(eng.voice_to_preset)
+    observed: list[dict[str, str]] = []
+
+    class Speakers(list):
+        def __iter__(self):
+            observed.append(dict(eng.voice_to_preset))  # what a concurrent reader sees mid-rebuild
+            return super().__iter__()
+
+    class FakeTTS:
+        speakers = Speakers(["Claribel Dervla", "Daisy Studious"])
+
+    eng.tts = FakeTTS()
+    eng._load_voices_presets()
+    assert observed == [before]
+    assert set(eng.voice_to_preset) == {"Claribel Dervla", "Daisy Studious"}

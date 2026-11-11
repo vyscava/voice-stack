@@ -66,7 +66,14 @@ def test_settings_tts_defaults() -> None:
     """Test TTS-specific field default values."""
     # Check model field defaults
     assert Settings.model_fields["TTS_LOG_NAME"].default == "tts.app"
-    assert Settings.model_fields["TTS_ENGINE"].default == "coqui"
+    assert Settings.model_fields["TTS_ENGINE"].default == "kokoro"
+    assert Settings.model_fields["TTS_KOKORO_MODEL_PATH"].default == "/app/models/kokoro/kokoro-v1.0.onnx"
+    assert Settings.model_fields["TTS_KOKORO_VOICES_PATH"].default == "/app/models/kokoro/voices-v1.0.bin"
+    assert Settings.model_fields["TTS_KOKORO_DEFAULT_VOICE"].default == "af_heart"
+    assert Settings.model_fields["TTS_KOKORO_THREADS"].default == 0
+    assert Settings.model_fields["TTS_XTTS_DEFAULT_VOICE"].default == "Claribel Dervla"
+    # "default" follows whichever engine is booted, so switching engines needs no voice change.
+    assert Settings.model_fields["GATEWAY_VOICE"].default == "default"
     assert Settings.model_fields["TTS_DEVICE"].default == "cpu"
     assert Settings.model_fields["TTS_MODEL"].default == "tts_models/multilingual/multi-dataset/xtts_v2"
     assert Settings.model_fields["TTS_VOICES_DIR"].default == "voices"

@@ -63,7 +63,22 @@ dependencies = [
 
 [project.optional-dependencies]
 # Split by feature so you can `pip install .[tts]` on lightweight machines, etc.
+# TTS engines are separate extras because each image ships a subset of them:
+# the slim CPU image carries Kokoro only (no torch), the full image carries both.
+# `tts` stays as the union so existing installs (`.[tts]`) keep working.
 tts = [
+  "voice-stack[tts-kokoro,tts-xtts]",
+]
+tts-kokoro = [
+  # Pinned for the same reason as torch below: onnxruntime is a compiled
+  # extension, and kokoro-onnx's API has moved between minor versions
+  # (from_session arrived late). Bump both together and re-run the engine tests.
+  "kokoro-onnx==0.6.1",
+  "onnxruntime==1.31.1",
+  "numpy",
+  "soundfile",
+]
+tts-xtts = [
   "coqui-tts[codec]",
   "transformers<5",
   "torch==2.9.1",

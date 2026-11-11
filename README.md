@@ -6,8 +6,9 @@ A self-hosted speech stack for homelabs — ASR (speech-to-text) and TTS (text-t
 
 - OpenAI-compatible `/v1/audio/transcriptions` and `/v1/audio/speech` endpoints
 - Bazarr-native subtitle endpoints (SRT, VTT, JSON, JSONL)
-- Single Docker image, ~6 GB, switches between ASR, TTS and the gateway via `SERVICE_MODE`
-- NVIDIA GPU acceleration with automatic CUDA detection
+- Two TTS engines, picked at boot with `TTS_ENGINE`: **Kokoro** (default, fast on CPU) and **Coqui XTTS-v2** (voice cloning)
+- One image runs ASR, TTS or the gateway via `SERVICE_MODE`; a slim CPU image (`:kokoro`) and a full image (`:xtts` / `:latest`)
+- NVIDIA GPU acceleration with automatic CUDA detection (XTTS and Whisper)
 - Voice cloning via Coqui XTTS-v2 (drop a .wav file, get a new voice)
 - Built-in concurrency limits, memory guards, and idle model unloading
 - Portainer-ready compose files for homelab deployment
@@ -23,7 +24,8 @@ The fastest way to get running. Requires Docker and optionally an NVIDIA GPU.
 ```bash
 git clone https://github.com/vyscava/voice-stack.git
 cd voice-stack
-docker build -t voice-stack:latest .
+docker build -t voice-stack:latest .                    # full: ASR + both TTS engines
+docker build --target kokoro -t voice-stack:kokoro .    # slim CPU: ASR + Kokoro + gateway
 ```
 
 ### Run Both Services
@@ -97,7 +99,7 @@ The `compose/` directory contains production-ready stack files designed for Port
 | File | Service | Port |
 |------|---------|------|
 | `compose/asr.yml` | ASR (Faster-Whisper) | 5001 |
-| `compose/tts.yml` | TTS (Coqui XTTS-v2) | 5002 |
+| `compose/tts.yml` | TTS (Kokoro or Coqui XTTS-v2) | 5002 |
 
 These use `${VAR}` syntax so you can configure everything through Portainer's stack environment variables — no config files on the host needed.
 
@@ -162,7 +164,8 @@ Bare-metal/systemd installs use the per-service templates instead:
 | `ASR_DEVICE` / `TTS_DEVICE` | `cpu` | Set to `cuda` for GPU acceleration |
 | `ASR_MODEL` | `base` | Whisper model: `tiny`, `base`, `small`, `medium`, `large-v3` |
 | `ASR_ENGINE` | `fasterwhisper` | `fasterwhisper` (recommended) or `whisper` |
-| `TTS_MODEL` | `tts_models/multilingual/multi-dataset/xtts_v2` | Coqui model ID |
+| `TTS_ENGINE` | `kokoro` | `kokoro` or `coqui` (aliases `xtts`, `xtts-2`); see [TTS Engines](#tts-engines) |
+| `TTS_MODEL` | `tts_models/multilingual/multi-dataset/xtts_v2` | Coqui model ID (XTTS only) |
 | `ASR_PORT` / `TTS_PORT` | `5001` / `5002` | Service ports |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
 | `ASR_VAD_ENABLED` | `true` | Voice Activity Detection (30-50% faster transcription) |
@@ -305,7 +308,7 @@ cloned voices on networks you control, and set `GATEWAY_VOICE` deliberately rath
 | `GATEWAY_AGENT` | `claude-code-channel` | The peer that answers |
 | `GATEWAY_NATS_TOPIC` | `voice` | |
 | `GATEWAY_AGENT_TIMEOUT_S` | `60` | Bounds connect **and** request, so an exchange cannot hang |
-| `GATEWAY_VOICE` | `Claribel Dervla` | A stock speaker on purpose |
+| `GATEWAY_VOICE` | `default` | The engine's own default voice (a stock one, on purpose), so switching `TTS_ENGINE` needs no change here |
 | `GATEWAY_AUDIO_FORMAT` | `opus` | |
 | `GATEWAY_MIN_TRANSCRIPT_CHARS` | `2` | Below this, treated as noise and not sent to the agent |
 
@@ -316,7 +319,40 @@ message simply never arrives.
 
 ---
 
+## TTS Engines
+
+The engine is chosen once, at boot, with `TTS_ENGINE`. The API (`/v1/audio/speech`,
+`/v1/audio/voices`) is the same for both.
+
+| | Kokoro (`kokoro`, default) | Coqui XTTS-v2 (`coqui`) |
+|---|---|---|
+| Speed on CPU | faster than real time | seconds per sentence |
+| Voice cloning | no | yes, from `.wav` samples |
+| Languages | en-US, en-GB, pt-BR, es, fr, it, hi | 16 incl. pt, ja, zh |
+| Image | `:kokoro` (slim) and `:xtts` / `:latest` | `:xtts` / `:latest` only |
+| `default` voice | `TTS_KOKORO_DEFAULT_VOICE` (`af_heart`) | `TTS_XTTS_DEFAULT_VOICE` (`Claribel Dervla`) |
+
+Kokoro voices are bound to a language (`pf_dora`, `pm_alex` and `pm_santa` are Brazilian
+Portuguese; `GET /v1/audio/voices` lists them all), so the language comes from
+`TTS_FORCE_LANG`, then the request, then the voice itself. The model files are baked into
+both images; set `TTS_KOKORO_MODEL_PATH=/app/models/kokoro/kokoro-v1.0.int8.onnx` for the
+int8 model, about twice as fast with some quality cost.
+
+An unknown `TTS_ENGINE`, or an engine the image does not ship, fails the start with the
+image to use instead. Nothing silently falls back to another engine.
+
+Kokoro phonemizes with espeak-ng, which copies its shared library into a temporary
+directory and loads it from there, so `/tmp` must be writable **and allow exec**. A
+read-only root filesystem or a `noexec` tmpfs on `/tmp` makes every synthesis fail with
+`failed to map segment from shared object`; mount `--tmpfs /tmp:exec` if you lock the
+container down.
+
+---
+
 ## Voice Cloning (TTS)
+
+Requires `TTS_ENGINE=coqui` and the full image.
+
 
 Add `.wav` files to the voices directory and they become available as voice options:
 
@@ -340,7 +376,8 @@ Mount the voices directory in Docker: `-v ./voices:/app/voices:ro`
 |-------|-----|-----|------|-------|
 | ASR (CPU, base model) | 4+ cores | 4 GB | 2 GB | Good for short clips |
 | ASR (GPU, large-v3) | 2+ cores | 4 GB + 4 GB VRAM | 6 GB | Best accuracy |
-| TTS (CPU) | 4+ cores | 8 GB | 4 GB | Slow but works |
+| TTS Kokoro (CPU) | 2+ cores | 1 GB | 1 GB | Faster than real time |
+| TTS XTTS (CPU) | 4+ cores | 8 GB | 4 GB | Slow but works |
 | TTS (GPU) | 2+ cores | 4 GB + 4 GB VRAM | 4 GB | Recommended for real-time |
 | Both (GPU) | 4+ cores | 8 GB + 8 GB VRAM | 10 GB | Full stack on one machine |
 
@@ -378,7 +415,7 @@ Swagger UI available at `/docs` on each running service.
 voice-stack/
 ├── src/
 │   ├── asr/               # ASR microservice (Faster-Whisper, OpenAI Whisper)
-│   ├── tts/               # TTS microservice (Coqui XTTS-v2)
+│   ├── tts/               # TTS microservice (Kokoro, Coqui XTTS-v2)
 │   ├── core/              # Shared settings, logging, middleware
 │   └── utils/             # Audio processing, language detection, text helpers
 ├── compose/               # Portainer-ready production stacks (asr.yml, tts.yml)
@@ -410,6 +447,7 @@ voice-stack/
 
 - [SubGen](https://github.com/McCloudS/subgen) — Bazarr FastAPI project whose subtitle routing design influenced the Bazarr endpoints here
 - [whisper-asr-webservice](https://github.com/ahmetoner/whisper-asr-webservice) — Inspiration for OpenAI-compatible ASR workflows
+- [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0) and [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (MIT) — the default TTS engine
 
 ---
 

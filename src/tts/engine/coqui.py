@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import base64
-import io
 import math
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import soundfile as sf
 from torch.serialization import add_safe_globals
 from TTS.api import TTS
 from TTS.config.shared_configs import BaseAudioConfig, BaseDatasetConfig
@@ -28,8 +24,6 @@ from tts.schemas.audio_engine import (
     VoiceResponse,
     VoicesResponse,
 )
-from utils.audio.audio_helper import wav_bytes_to_pcm16le_bytes
-from utils.audio.ffmpeg_helper import encode_audio_from_wav_bytes
 from utils.language.language_codes import LanguageCode
 from utils.language.language_helper import detect_lang, latin_heuristic, script_heuristic
 from utils.text import build_safe_chunks, normalize_text
@@ -40,6 +34,12 @@ add_safe_globals([BaseAudioConfig, BaseDatasetConfig, XttsConfig, XttsArgs, Xtts
 
 
 class TTSCoqui(TTSBase):
+    # One shared XTTS model: thread-safety of concurrent tts() calls is not
+    # documented, and on CPU two parallel inferences only halve each other's
+    # speed while doubling working memory. Synthesis ran one at a time while it
+    # was (accidentally) on the event loop; keep it that way off it.
+    serialize_synthesis = True
+
     def __init__(self) -> None:
         super().__init__()
         self._load_model()
@@ -154,10 +154,10 @@ class TTSCoqui(TTSBase):
             ...
         }
         """
-        self.voice_to_preset: dict[str, str] = {}
-        if hasattr(self.tts, "speakers") and isinstance(self.tts.speakers, list):
-            for name in self.tts.speakers:
-                self.voice_to_preset[name] = name
+        # Built locally and assigned once: a reload rebuilds this while other
+        # requests may be resolving voices, and they must never see it empty.
+        speakers = self.tts.speakers if isinstance(getattr(self.tts, "speakers", None), list) else []
+        self.voice_to_preset = {name: name for name in speakers}
 
     def _load_custom_voices(self) -> None:
         """Map custom voice ids to the reference audio that clones them.
@@ -174,20 +174,23 @@ class TTSCoqui(TTSBase):
         embedding over them, which is more stable than a single sample. More is
         not automatically better though -- 3 good clips beat 6 mixed ones.
         """
-        self.voice_to_wavs: dict[str, list[str]] = {}
+        # Built locally and assigned once, like the presets (see above).
+        found: dict[str, list[str]] = {}
 
         root = Path(self.voices_dir)
         if not root.is_dir():
+            self.voice_to_wavs = found
             logger.info("No voices dir at %s; only builtin speakers available", root)
             return
 
         for entry in sorted(root.iterdir()):
             if entry.is_file() and entry.suffix.lower() == ".wav":
-                self.voice_to_wavs[entry.stem] = [str(entry)]
+                found[entry.stem] = [str(entry)]
             elif entry.is_dir():
                 wavs = sorted(str(w) for w in entry.glob("*.wav"))
                 if wavs:
-                    self.voice_to_wavs[entry.name] = wavs
+                    found[entry.name] = wavs
+        self.voice_to_wavs = found
 
         overlap = set(self.voice_to_wavs) & set(self.voice_to_preset)
         if overlap:
@@ -282,6 +285,17 @@ class TTSCoqui(TTSBase):
     def list_models(self) -> ModelsResponse:
         return ModelsResponse(data=[ModelResponse(id=model) for model in self.available_models])
 
+    @staticmethod
+    def canonical_voice(voice: str) -> str:
+        """Map the "default" alias to the configured speaker; other ids pass through.
+
+        "default" is an explicit alias, not a fallback: the request layer sends
+        it when no voice is given, and the gateway uses it so that switching
+        TTS_ENGINE needs no voice change. If the configured speaker does not
+        exist, resolve_voice still raises KeyError (404).
+        """
+        return settings.TTS_XTTS_DEFAULT_VOICE if voice == "default" else voice
+
     def resolve_voice(self, voice: str) -> list[str] | None:
         """Resolve a requested voice id.
 
@@ -300,6 +314,7 @@ class TTSCoqui(TTSBase):
         if not self.voice_to_preset and not self.voice_to_wavs:
             raise RuntimeError("No builtin speakers or custom voices available for this model.")
 
+        voice = self.canonical_voice(voice)
         if voice in self.voice_to_preset:
             return None
         if voice in self.voice_to_wavs:
@@ -338,12 +353,6 @@ class TTSCoqui(TTSBase):
             language_hint=language_hint,
         )
 
-        # Update last used timestamp for idle timeout tracking
-        self._touch()
-
-        # Ensure model is loaded (reload if it was unloaded due to idle timeout)
-        self.ensure_model_loaded()
-
         if (props.speed) != 1.0:
             logger.warning(
                 "speed=%.2f requested; high-quality time-stretch not configured. Returning original tempo.",
@@ -351,107 +360,62 @@ class TTSCoqui(TTSBase):
             )
 
         # Voice selection: builtin speaker, or a custom voice cloned from wavs.
-        speaker_wav = self.resolve_voice(props.voice)
+        voice_id = self.canonical_voice(props.voice)
+        speaker_wav = self.resolve_voice(voice_id)
 
-        # Split long text into manageable chunks
-        cur_size = max(1, int(self.max_chars))  # current chunk budget
-        chunks = build_safe_chunks(props.input, cur_size)
+        # in_use(): loads the model if it was idle-unloaded, keeps the idle
+        # unloader off it, and serialises synthesis (serialize_synthesis, above).
+        with self.in_use():
+            # Split long text into manageable chunks
+            cur_size = max(1, int(self.max_chars))  # current chunk budget
+            chunks = build_safe_chunks(props.input, cur_size)
 
-        attempts = 0
-        while True:
-            try:
-                wavs: list[npt.NDArray[np.float32]] = []
-                for chunk in chunks:
-                    chunk = normalize_text(chunk)
-                    lang_for_chunk = self._choose_lang(chunk, props.requested_language)
+            attempts = 0
+            while True:
+                try:
+                    wavs: list[npt.NDArray[np.float32]] = []
+                    for chunk in chunks:
+                        chunk = normalize_text(chunk)
+                        lang_for_chunk = self._choose_lang(chunk, props.requested_language)
 
-                    # Generate chunk audio. A custom voice is cloned from its
-                    # reference clips (speaker_wav); a builtin one is selected
-                    # by name. Passing both would be ambiguous to Coqui.
-                    if speaker_wav is not None:
-                        wav = self.tts.tts(
-                            text=chunk,
-                            speaker_wav=speaker_wav,
-                            language=lang_for_chunk,
-                        )
-                    else:
-                        wav = self.tts.tts(
-                            text=chunk,
-                            speaker=props.voice,
-                            language=lang_for_chunk,
-                        )
-                    wavs.append(np.asarray(wav, dtype=np.float32))
+                        # Generate chunk audio. A custom voice is cloned from its
+                        # reference clips (speaker_wav); a builtin one is selected
+                        # by name. Passing both would be ambiguous to Coqui.
+                        if speaker_wav is not None:
+                            wav = self.tts.tts(
+                                text=chunk,
+                                speaker_wav=speaker_wav,
+                                language=lang_for_chunk,
+                            )
+                        else:
+                            wav = self.tts.tts(
+                                text=chunk,
+                                speaker=voice_id,
+                                language=lang_for_chunk,
+                            )
+                        wavs.append(np.asarray(wav, dtype=np.float32))
 
-                # Merge chunks
-                wav = wavs[0] if len(wavs) == 1 else np.concatenate(wavs, axis=0)
-                break
+                    # Merge chunks
+                    wav = wavs[0] if len(wavs) == 1 else np.concatenate(wavs, axis=0)
+                    break
 
-            except Exception as e:
-                msg = str(e)
-                retriable = any(t in msg for t in ("index out of range", "device-side assert", "CUDA error", "cudnn"))
-                if (not retriable) or attempts >= self.retry_steps or cur_size <= int(self.min_chars):
-                    raise
-                attempts += 1
-                new_size = max(self.min_chars, math.floor(self.max_chars * 0.66))
-                if new_size == cur_size:
-                    new_size = max(self.min_chars, cur_size - 5)
-                cur_size = new_size
-                logger.warning(
-                    "tts.coqui | retry: shrinking chunk size to %d (attempt %d)",
-                    cur_size,
-                    attempts,
-                )
-                chunks = build_safe_chunks(props.input, cur_size)
+                except Exception as e:
+                    msg = str(e)
+                    retriable = any(
+                        t in msg for t in ("index out of range", "device-side assert", "CUDA error", "cudnn")
+                    )
+                    if (not retriable) or attempts >= self.retry_steps or cur_size <= int(self.min_chars):
+                        raise
+                    attempts += 1
+                    new_size = max(self.min_chars, math.floor(self.max_chars * 0.66))
+                    if new_size == cur_size:
+                        new_size = max(self.min_chars, cur_size - 5)
+                    cur_size = new_size
+                    logger.warning(
+                        "tts.coqui | retry: shrinking chunk size to %d (attempt %d)",
+                        cur_size,
+                        attempts,
+                    )
+                    chunks = build_safe_chunks(props.input, cur_size)
 
-        # Always produce WAV internally, then encode to target format
-        buf = io.BytesIO()
-        sf.write(buf, wav, self.sample_rate, subtype="PCM_16", format="WAV")
-        wav_bytes = buf.getvalue()
-
-        # Encode via utils
-        if props.response_format == "pcm":
-            encoded = wav_bytes_to_pcm16le_bytes(wav_bytes)  # fast path via soundfile
-        else:
-            encoded = encode_audio_from_wav_bytes(
-                wav_bytes=wav_bytes,
-                target_format=props.response_format,
-                sample_rate=self.sample_rate,
-                channels=1,
-            )
-
-        # Stream selection
-        if props.stream_format == "audio":
-            return encoded
-        if props.stream_format == "sse":
-            return self._sse_base64_chunks(encoded)
-        return self._chunked(encoded)
-
-    @staticmethod
-    def _chunked(b: bytes, *, chunk_size: int = 65536) -> Iterable[bytes]:
-        """
-        Binary chunk generator for streaming audio transport.
-        """
-        view = memoryview(b)
-        n = len(view)
-        i = 0
-        while i < n:
-            yield bytes(view[i : i + chunk_size])
-            i += chunk_size
-
-    @staticmethod
-    def _sse_base64_chunks(b: bytes, *, b64_chunk_size: int = 65536) -> Iterable[bytes]:
-        """
-        SSE-friendly generator: yields lines like b"data: <base64>\n\n".
-        Caller sets the HTTP headers:
-          Content-Type: text/event-stream
-          Cache-Control: no-cache
-          Connection: keep-alive
-        """
-        # We base64-encode in chunks to keep each SSE event small-ish.
-        i = 0
-        n = len(b)
-        while i < n:
-            chunk = b[i : i + b64_chunk_size]
-            i += b64_chunk_size
-            enc = base64.b64encode(chunk)
-            yield b"data: " + enc + b"\n\n"
+        return self.package_audio(wav, props)

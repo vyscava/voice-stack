@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
 from fastapi.responses import Response, StreamingResponse
 
 from core.settings import get_settings
@@ -112,6 +116,49 @@ def speech_effective_options(
 
 
 class TTSBase(ABC):
+    # Engines whose model must not run two syntheses at once set this to True:
+    # in_use() then serialises synthesis on the engine. Synthesis left the event
+    # loop for #8, which removed the accidental serialisation the loop provided.
+    serialize_synthesis: bool = False
+
+    def _state(self) -> dict[str, Any]:
+        """Lifecycle lock, synthesis lock and in-flight count, created on first use.
+
+        Created lazily (dict.setdefault is atomic in CPython) so engines built
+        with __new__ in tests, which skip __init__, still get them.
+        """
+        state: dict[str, Any] = self.__dict__.setdefault(
+            "_lifecycle_state",
+            {"lock": threading.RLock(), "synth": threading.Lock(), "inflight": 0},
+        )
+        return state
+
+    @contextmanager
+    def in_use(self) -> Iterator[None]:
+        """Hold the model for one synthesis.
+
+        Marks the engine in use, (re)loads the model under the lifecycle lock so
+        two requests after an idle unload cannot both load it, and keeps the
+        idle unloader away until the synthesis finishes. Engines wrap their
+        model calls in this instead of calling _touch()/ensure_model_loaded().
+        """
+        state = self._state()
+        with state["lock"]:
+            state["inflight"] += 1
+            self._touch()
+        try:
+            with state["lock"]:
+                self.ensure_model_loaded()
+            if self.serialize_synthesis:
+                with state["synth"]:
+                    yield
+            else:
+                yield
+        finally:
+            with state["lock"]:
+                state["inflight"] -= 1
+                self._touch()  # idle time counts from the END of the last synthesis
+
     def __init__(self) -> None:
         # Retrieving requested settings
         self.model_id = settings.TTS_MODEL
@@ -144,11 +191,16 @@ class TTSBase(ABC):
             logger.info(f"TTS idle timeout enabled: {self.idle_timeout_minutes} minutes")
 
     def _touch(self) -> None:
-        """Update last used timestamp - call this on every synthesis request."""
+        """Update last used timestamp - call this on every synthesis request.
+
+        It must not mark the model as loaded. Engines call _touch() before
+        ensure_model_loaded(), so setting the flag here made the reload check
+        always pass: after an idle unload the next request found no model.
+        Only ensure_model_loaded() (and __init__) may set _model_loaded.
+        """
         from datetime import datetime
 
         self.last_used = datetime.now()
-        self._model_loaded = True
 
     @abstractmethod
     def _load_model(self) -> None:
@@ -202,23 +254,29 @@ class TTSBase(ABC):
         Returns:
             bool: True if model was unloaded, False otherwise
         """
-        if self.idle_timeout_minutes <= 0 or not self._model_loaded:
+        if self.idle_timeout_minutes <= 0:
             return False
 
         from datetime import datetime, timedelta
 
         from core.logging import logger_tts as logger
 
-        idle_time = datetime.now() - self.last_used
-        timeout = timedelta(minutes=self.idle_timeout_minutes)
+        state = self._state()
+        with state["lock"]:
+            # Under the lock, and never while a synthesis holds the model: the
+            # idle checker runs concurrently with synthesis threads, and
+            # unloading mid-synthesis left the engine calling a None model.
+            if not self._model_loaded or state["inflight"] > 0:
+                return False
 
-        if idle_time > timeout:
+            idle_time = datetime.now() - self.last_used
+            if idle_time <= timedelta(minutes=self.idle_timeout_minutes):
+                return False
+
             logger.info(f"Model idle for {idle_time}, unloading...")
             self._unload_model()
             self._model_loaded = False
             return True
-
-        return False
 
     def get_model(self, model_id: str) -> ModelResponse:
         return ModelResponse(id=model_id)
@@ -243,6 +301,72 @@ class TTSBase(ABC):
         language_hint: str | None = None,
     ) -> Any:
         raise NotImplementedError
+
+    def package_audio(self, wav: npt.NDArray[np.float32], props: PropsConf) -> Any:
+        """Encode synthesized samples to the requested format and transport.
+
+        Shared by every engine: an engine produces float32 samples at
+        self.sample_rate, this turns them into the bytes / chunk iterator the
+        API layer returns. Kept out of the engines so a new engine cannot get
+        the formats subtly different from the others.
+        """
+        import io
+
+        import soundfile as sf
+
+        from utils.audio.audio_helper import wav_bytes_to_pcm16le_bytes
+        from utils.audio.ffmpeg_helper import encode_audio_from_wav_bytes
+
+        buf = io.BytesIO()
+        sf.write(buf, wav, self.sample_rate, subtype="PCM_16", format="WAV")
+        wav_bytes = buf.getvalue()
+
+        if props.response_format == "pcm":
+            encoded = wav_bytes_to_pcm16le_bytes(wav_bytes)  # fast path via soundfile
+        else:
+            encoded = encode_audio_from_wav_bytes(
+                wav_bytes=wav_bytes,
+                target_format=props.response_format,
+                sample_rate=self.sample_rate,
+                channels=1,
+            )
+
+        if props.stream_format == "audio":
+            return encoded
+        if props.stream_format == "sse":
+            return self._sse_base64_chunks(encoded)
+        return self._chunked(encoded)
+
+    @staticmethod
+    def _chunked(b: bytes, *, chunk_size: int = 65536) -> Iterable[bytes]:
+        """
+        Binary chunk generator for streaming audio transport.
+        """
+        view = memoryview(b)
+        n = len(view)
+        i = 0
+        while i < n:
+            yield bytes(view[i : i + chunk_size])
+            i += chunk_size
+
+    @staticmethod
+    def _sse_base64_chunks(b: bytes, *, b64_chunk_size: int = 65536) -> Iterable[bytes]:
+        """
+        SSE-friendly generator: yields lines like b"data: <base64>\n\n".
+        Caller sets the HTTP headers:
+          Content-Type: text/event-stream
+          Cache-Control: no-cache
+          Connection: keep-alive
+        """
+        import base64
+
+        # We base64-encode in chunks to keep each SSE event small-ish.
+        i = 0
+        n = len(b)
+        while i < n:
+            chunk = b[i : i + b64_chunk_size]
+            i += b64_chunk_size
+            yield b"data: " + base64.b64encode(chunk) + b"\n\n"
 
     def helper_return_sse_stream(
         self, *, audio: bytes | bytearray | Iterable[bytes], already_sse: bool = True

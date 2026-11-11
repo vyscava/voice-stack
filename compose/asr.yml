@@ -12,7 +12,9 @@
 
 services:
   asr:
-    image: registry.local.vitorgarbim.me/voice-stack:latest
+    # VOICE_STACK_TAG picks the image: kokoro (slim CPU: ASR + Kokoro + gateway)
+    # or latest / xtts (full: both TTS engines). Unset keeps latest.
+    image: registry.local.vitorgarbim.me/voice-stack:${VOICE_STACK_TAG:-latest}
     container_name: voice-stack-asr
     restart: unless-stopped
 

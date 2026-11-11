@@ -580,3 +580,216 @@ class TestTTSBase:
             assert response.media_type == "text/event-stream"
             assert "Cache-Control" in response.headers
             assert response.headers["Cache-Control"] == "no-cache"
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+class TestIdleReload:
+    """An idle-unloaded model must be reloaded by the next request.
+
+    Every engine's speech() calls _touch() and then ensure_model_loaded().
+    _touch() used to set _model_loaded = True, so the reload check always
+    passed and the first request after an idle unload ran against no model
+    (Coqui: self.tts is None). This drives the real base-class methods in the
+    order the engines call them.
+    """
+
+    @staticmethod
+    def _engine():
+        from datetime import datetime, timedelta
+
+        class CountingTTS(TTSBase):
+            def __init__(self) -> None:  # skip settings; only the idle state matters here
+                self.loads = 0
+                self.model = "loaded"
+                self.idle_timeout_minutes = 1
+                self.last_used = datetime.now() - timedelta(minutes=5)
+                self._model_loaded = True
+
+            def _load_model(self):
+                self.loads += 1
+                self.model = "loaded"
+
+            def _unload_model(self):
+                self.model = None
+
+            def speech(self, **kwargs):
+                self._touch()
+                self.ensure_model_loaded()
+                assert self.model is not None, "synthesis ran against an unloaded model"
+                return b"audio"
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
+        return CountingTTS()
+
+    def test_touch_does_not_mark_the_model_loaded(self) -> None:
+        eng = self._engine()
+        assert eng.check_and_unload_if_idle() is True
+        eng._touch()
+        assert eng._model_loaded is False
+
+    def test_request_after_idle_unload_reloads_the_model(self) -> None:
+        eng = self._engine()
+        assert eng.check_and_unload_if_idle() is True
+        assert eng.speech() == b"audio"
+        assert eng.loads == 1
+        assert eng._model_loaded is True
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+class TestLifecycleUnderThreads:
+    """Synthesis runs in worker threads (#8) while the idle checker runs on the loop.
+
+    Before #8 the event loop serialised everything by accident. These pin the
+    guarantees that now have to be explicit: the unloader never pulls a model
+    out from under a synthesis, concurrent requests after an unload load the
+    model once, and an engine that asks for it runs one synthesis at a time.
+    """
+
+    @staticmethod
+    def _engine(*, serialize: bool = False, load_delay: float = 0.0):
+        import threading
+        import time
+        from datetime import datetime, timedelta
+
+        class ThreadedTTS(TTSBase):
+            serialize_synthesis = serialize
+
+            def __init__(self) -> None:  # skip settings; only lifecycle state matters
+                self.loads = 0
+                self.model = "loaded"
+                self.idle_timeout_minutes = 1
+                self.last_used = datetime.now() - timedelta(minutes=5)
+                self._model_loaded = True
+                self.gate = threading.Event()
+                self.entered = threading.Event()
+                self.active = 0
+                self.max_active = 0
+                self._count = threading.Lock()
+
+            def _load_model(self):
+                time.sleep(load_delay)
+                self.loads += 1
+                self.model = "loaded"
+
+            def _unload_model(self):
+                self.model = None
+
+            def speech(self, **kwargs):
+                with self.in_use():
+                    with self._count:
+                        self.active += 1
+                        self.max_active = max(self.max_active, self.active)
+                    self.entered.set()
+                    assert self.gate.wait(timeout=5)
+                    assert self.model is not None, "model was unloaded mid-synthesis"
+                    with self._count:
+                        self.active -= 1
+                return b"audio"
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
+        return ThreadedTTS()
+
+    def test_idle_unloader_skips_a_model_in_use(self) -> None:
+        import threading
+        from datetime import datetime, timedelta
+
+        eng = self._engine()
+        worker = threading.Thread(target=eng.speech)
+        worker.start()
+        assert eng.entered.wait(timeout=5)
+        eng.last_used = datetime.now() - timedelta(minutes=5)  # looks idle, but is in use
+
+        assert eng.check_and_unload_if_idle() is False
+        assert eng.model == "loaded"
+
+        eng.gate.set()
+        worker.join(timeout=5)
+        eng.last_used = datetime.now() - timedelta(minutes=5)
+        assert eng.check_and_unload_if_idle() is True  # once free, it does unload
+
+    def test_concurrent_requests_after_an_unload_load_once(self) -> None:
+        import threading
+
+        eng = self._engine(load_delay=0.2)
+        assert eng.check_and_unload_if_idle() is True
+        eng.gate.set()
+        workers = [threading.Thread(target=eng.speech) for _ in range(2)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(timeout=5)
+        assert eng.loads == 1
+
+    def test_serialized_engine_runs_one_synthesis_at_a_time(self) -> None:
+        self._assert_max_parallel(serialize=True, expected=1)
+
+    def test_unserialized_engine_runs_in_parallel(self) -> None:
+        # The control: without it, the serialized test passes whether or not
+        # serialize_synthesis does anything.
+        self._assert_max_parallel(serialize=False, expected=2)
+
+    def _assert_max_parallel(self, *, serialize: bool, expected: int) -> None:
+        import threading
+        import time
+
+        eng = self._engine(serialize=serialize)
+        workers = [threading.Thread(target=eng.speech) for _ in range(2)]
+        for w in workers:
+            w.start()
+        time.sleep(0.3)  # give both threads the chance to enter
+        eng.gate.set()
+        for w in workers:
+            w.join(timeout=5)
+        assert eng.max_active == expected
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_coqui_engine_serializes_synthesis() -> None:
+    from tts.engine.coqui import TTSCoqui
+    from tts.engine.kokoro import TTSKokoro
+
+    assert TTSCoqui.serialize_synthesis is True
+    assert TTSKokoro.serialize_synthesis is False  # onnxruntime sessions are thread-safe
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_in_use_releases_its_inflight_slot_when_the_reload_fails() -> None:
+    """A failed reload must not leave the engine counted as in use forever,
+    or the idle unloader would never run again."""
+
+    class FailingLoad(TTSBase):
+        def __init__(self) -> None:
+            self._model_loaded = False
+
+        def _load_model(self):
+            raise RuntimeError("disk gone")
+
+        def _unload_model(self):
+            pass
+
+        def speech(self, **kwargs):
+            with self.in_use():
+                return b"audio"
+
+        def list_voices(self):
+            from tts.schemas.audio_engine import VoicesResponse
+
+            return VoicesResponse(data=[])
+
+    eng = FailingLoad()
+    with pytest.raises(RuntimeError):
+        eng.speech()
+    assert eng._state()["inflight"] == 0
+    assert eng._model_loaded is False  # the next request retries the load

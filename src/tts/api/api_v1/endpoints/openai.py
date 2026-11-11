@@ -8,11 +8,14 @@ OpenAI-compatible TTS endpoint.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 
 from core.error_handler import ErrorContext
+from core.exceptions import VoiceStackError
 from core.logging import logger_tts as logger
 from core.settings import get_settings
 from tts.engine_factory import acquire_engine, get_audio_engine, release_engine
@@ -23,9 +26,10 @@ from tts.schemas.openai import OpenAICreateSpeechRequest
 router = APIRouter()
 
 settings = get_settings()
-# Note: get_audio_engine() is used for model/voice listing (read-only),
-# but synthesis endpoints use acquire_engine() for concurrency control
-_engine_for_listing = get_audio_engine()
+# Listing endpoints read the engine through get_audio_engine() on every call
+# (read-only, no concurrency slot); synthesis uses acquire_engine(). This used to
+# be a module-level reference built at import time, which went stale after
+# reset_audio_engine() and forced every import of this module to load a model.
 
 
 @router.get("/audio/voices", response_model=VoicesResponse)
@@ -42,7 +46,7 @@ async def list_voices() -> Any:
 
     try:
         logger.info("Listing available voices", extra=ctx.to_log_dict())
-        return _engine_for_listing.list_voices()
+        return get_audio_engine().list_voices()
     except Exception as e:
         logger.error(
             "Failed to list voices",
@@ -75,7 +79,7 @@ async def list_models() -> Any:
 
     try:
         logger.info("Listing available models", extra=ctx.to_log_dict())
-        return _engine_for_listing.list_models()
+        return get_audio_engine().list_models()
     except Exception as e:
         logger.error(
             "Failed to list models",
@@ -109,7 +113,7 @@ async def get_model(model_id: str) -> Any:
 
     try:
         logger.info("Retrieving model info", extra=ctx.to_log_dict())
-        return _engine_for_listing.get_model(model_id=model_id)
+        return get_audio_engine().get_model(model_id=model_id)
     except KeyError as e:
         # Model not found
         logger.warning(
@@ -165,22 +169,51 @@ async def tts(request: OpenAICreateSpeechRequest) -> Any:
     # Acquire engine with concurrency control
     engine = await acquire_engine()
 
+    async def _synthesize_then_release() -> Any:
+        # The slot is released when the WORKER finishes, not when this request
+        # does. A thread cannot be cancelled: if the client goes away and the
+        # handler is cancelled, the synthesis keeps running, and releasing the
+        # slot then would let real concurrency exceed TTS_MAX_CONCURRENT_REQUESTS.
+        try:
+            return await run_in_threadpool(
+                engine.speech,
+                input=request.input,
+                voice=request.voice,
+                response_format=request.response_format,
+                speed=request.speed,
+                stream_format=request.stream_format,
+            )
+        finally:
+            release_engine()
+
+    # Started immediately after acquiring, so nothing between here and the
+    # await can leave the slot held with no task to release it.
+    job = asyncio.ensure_future(_synthesize_then_release())
+    # If this request is cancelled, nobody awaits job any more; retrieve its
+    # outcome anyway so a failure after a disconnect is not logged as
+    # "Task exception was never retrieved".
+    job.add_done_callback(lambda t: t.cancelled() or t.exception())
+
     try:
         # Log request details
         logger.info("Processing TTS synthesis request", extra=ctx.to_log_dict())
 
-        result = engine.speech(
-            input=request.input,
-            voice=request.voice,
-            response_format=request.response_format,
-            speed=request.speed,
-            stream_format=request.stream_format,
-        )
+        # Synthesis is CPU-bound and synchronous. Called directly from this async
+        # handler it held the event loop for its whole duration, so /health went
+        # unanswered and every long synthesis paged EndpointDown (#8). It runs in
+        # the threadpool; shield() keeps the slot-owning task alive if this
+        # request is cancelled.
+        result = await asyncio.shield(job)
 
         if request.stream_format == "audio":
             return engine.helper_return_audio_file(audio=result, response_format=request.response_format)
         else:
             return engine.helper_return_sse_stream(audio=result, already_sse=True)
+
+    except VoiceStackError:
+        # Already typed for the client (e.g. TextValidationError -> 422); do not
+        # rewrap it as a 500 in the generic branch below.
+        raise
 
     except KeyError as e:
         # Voice not found
@@ -227,6 +260,5 @@ async def tts(request: OpenAICreateSpeechRequest) -> Any:
             context=ctx.to_dict(),
             original_exception=e,
         ) from e
-    finally:
-        # Always release the concurrency slot
-        release_engine()
+    # The concurrency slot is released by _synthesize_then_release, when the
+    # synthesis actually ends.

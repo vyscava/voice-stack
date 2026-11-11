@@ -89,3 +89,51 @@ def test_app_metadata(tts_client: TestClient) -> None:
     assert tts_client.app.title is not None
     assert tts_client.app.version is not None
     assert tts_client.app.openapi_url is not None
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+@pytest.mark.asyncio
+async def test_idle_checker_runs_off_the_event_loop_on_the_current_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The idle check takes the engine's lifecycle lock, which a synthesis
+    thread holds through a whole model reload. On the event loop that froze
+    /health (#8). It must run in a worker thread, and must check the engine
+    that is current at each tick, not the one present when the task started."""
+    import asyncio
+    import threading
+
+    from tts import app as tts_app
+    from tts import engine_factory
+
+    loop_thread = threading.get_ident()
+    calls: list[tuple[str, int]] = []
+
+    class Engine:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def check_and_unload_if_idle(self) -> bool:
+            calls.append((self.name, threading.get_ident()))
+            return False
+
+    monkeypatch.setattr(engine_factory, "_engine", Engine("old"))
+    monkeypatch.setattr(tts_app.settings, "TTS_IDLE_TIMEOUT_MINUTES", 60)
+
+    ticks = 0
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_: float) -> None:
+        nonlocal ticks
+        ticks += 1
+        if ticks == 2:
+            engine_factory._engine = Engine("new")  # replaced, e.g. reset_audio_engine()
+        if ticks > 2:
+            raise asyncio.CancelledError
+        await real_sleep(0)
+
+    monkeypatch.setattr(tts_app.asyncio, "sleep", fast_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await tts_app.idle_timeout_checker()
+
+    assert [name for name, _ in calls] == ["old", "new"]
+    assert all(tid != loop_thread for _, tid in calls)

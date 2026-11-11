@@ -46,6 +46,11 @@ variables:
   CI_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack/ci:$CI_COMMIT_SHA
   PROD_IMAGE: ${DOCKER_REGISTRY}/voice-stack:latest
   PROD_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack:$CI_COMMIT_SHA
+  # Slim CPU image (Dockerfile target "kokoro"): ASR + Kokoro + gateway.
+  KOKORO_IMAGE: ${DOCKER_REGISTRY}/voice-stack:kokoro
+  KOKORO_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack:kokoro-$CI_COMMIT_SHA
+  # The full image under an explicit name, alongside :latest.
+  XTTS_IMAGE: ${DOCKER_REGISTRY}/voice-stack:xtts
 
   # Enable Docker BuildKit
   DOCKER_BUILDKIT: 1
@@ -151,9 +156,12 @@ build:prod-image:
       fi
 
   script:
-    - echo "Building production image (unified ASR+TTS)..."
-    - docker build --file Dockerfile --tag $PROD_IMAGE_SHA --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
+    - echo "Building the full image (ASR + both TTS engines)..."
+    - docker build --file Dockerfile --target full --tag $PROD_IMAGE_SHA --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
     - docker push $PROD_IMAGE_SHA
+    - echo "Building the slim CPU image (ASR + Kokoro + gateway)..."
+    - docker build --file Dockerfile --target kokoro --tag $KOKORO_IMAGE_SHA --cache-from $KOKORO_IMAGE --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
+    - docker push $KOKORO_IMAGE_SHA
     - echo "Production image built and pushed with SHA tag"
     - echo "Image will be promoted to latest in release stage after all checks pass"
 
@@ -388,6 +396,7 @@ release:latest:
   needs:
     - build:prod-image
     - smoke:image-works
+    - smoke:kokoro-image
     - coverage:report
     - secret_detection
 
@@ -408,8 +417,13 @@ release:latest:
     - echo "Promoting production image to :latest tag..."
     - docker pull $PROD_IMAGE_SHA
     - docker tag $PROD_IMAGE_SHA $PROD_IMAGE
+    - docker tag $PROD_IMAGE_SHA $XTTS_IMAGE
     - docker push $PROD_IMAGE
-    - echo "Production image available at $PROD_IMAGE"
+    - docker push $XTTS_IMAGE
+    - docker pull $KOKORO_IMAGE_SHA
+    - docker tag $KOKORO_IMAGE_SHA $KOKORO_IMAGE
+    - docker push $KOKORO_IMAGE
+    - echo "Images available at $PROD_IMAGE ($XTTS_IMAGE) and $KOKORO_IMAGE"
 
   tags:
     - docker
@@ -444,10 +458,14 @@ release:version:
     - docker tag $PROD_IMAGE_SHA $PROD_IMAGE
     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
     - docker push $PROD_IMAGE
+    - docker pull $KOKORO_IMAGE_SHA
+    - docker tag $KOKORO_IMAGE_SHA $CI_REGISTRY_IMAGE:kokoro-$CI_COMMIT_TAG
+    - docker push $CI_REGISTRY_IMAGE:kokoro-$CI_COMMIT_TAG
     - echo "Released version $CI_COMMIT_TAG"
     - echo "Image available at:"
     - echo "  - $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
     - echo "  - $PROD_IMAGE"
+    - echo "  - $CI_REGISTRY_IMAGE:kokoro-$CI_COMMIT_TAG"
 
   tags:
     - docker

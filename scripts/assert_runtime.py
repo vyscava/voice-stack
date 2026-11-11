@@ -36,29 +36,34 @@ real data, and are the smoke stage's job, not this file's.
 
 from __future__ import annotations
 
+import argparse
+import importlib.util
+import os
 import sys
+from pathlib import Path
 
 EXPECTED_VARIANT = "+cpu"
 
+# Image variants (Dockerfile targets). "full" is the default because
+# Dockerfile.ci runs this script without arguments and installs everything.
+VARIANTS = ("full", "kokoro")
+DEFAULT_KOKORO_MODEL = "/app/models/kokoro/kokoro-v1.0.onnx"
+DEFAULT_KOKORO_VOICES = "/app/models/kokoro/voices-v1.0.bin"
 
-def main() -> int:
-    failures: list[str] = []
 
+def check_torch(failures: list[str]) -> bool:
+    """torch + torchaudio import, and are the CPU build. Returns False if unimportable."""
     # Wrapped like everything else: an unimportable torch is the rarest failure
     # but also the one where a raw traceback is least useful, and it would skip
     # the summary that tells you which OTHER checks were never reached.
     try:
         import torch
         import torchaudio
-        import transformers
     except Exception as exc:  # noqa: BLE001
-        print("RUNTIME ASSERTIONS FAILED:", file=sys.stderr)
-        print(f"  - the core stack could not be imported at all: {exc!r}", file=sys.stderr)
-        return 1
+        failures.append(f"torch/torchaudio could not be imported at all: {exc!r}")
+        return False
 
-    print(
-        f"torch {torch.__version__} | torchaudio {torchaudio.__version__} " f"| transformers {transformers.__version__}"
-    )
+    print(f"torch {torch.__version__} | torchaudio {torchaudio.__version__}")
 
     # Variant, not just version: PyPI serves torch==2.9.1 as the CUDA build.
     for name, version in (("torch", torch.__version__), ("torchaudio", torchaudio.__version__)):
@@ -67,6 +72,26 @@ def main() -> int:
                 f"{name} is {version}, expected a {EXPECTED_VARIANT} build "
                 "(install from https://download.pytorch.org/whl/cpu)"
             )
+    return True
+
+
+def check_asr(failures: list[str]) -> None:
+    try:
+        import faster_whisper  # noqa: F401
+        import silero_vad  # noqa: F401
+
+        print("faster_whisper + silero_vad import OK")
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"ASR imports failed: {exc!r}")
+
+
+def check_xtts(failures: list[str]) -> None:
+    try:
+        import transformers
+
+        print(f"transformers {transformers.__version__}")
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"transformers could not be imported: {exc!r}")
 
     # torchcodec has to LOAD. find_spec-style checks pass on a broken install.
     try:
@@ -77,22 +102,73 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - any failure here is fatal
         failures.append(f"torchcodec could not load its extension: {exc!r}")
 
-    # ASR side.
-    try:
-        import faster_whisper  # noqa: F401
-        import silero_vad  # noqa: F401
-
-        print("faster_whisper + silero_vad import OK")
-    except Exception as exc:  # noqa: BLE001
-        failures.append(f"ASR imports failed: {exc!r}")
-
-    # TTS side: the exact call that broke in #4.
+    # The exact call that broke in #4.
     try:
         from TTS.api import TTS  # noqa: F401
 
         print("TTS.api import OK")
     except Exception as exc:  # noqa: BLE001
         failures.append(f"TTS engine import failed: {exc!r}")
+
+
+def check_kokoro(failures: list[str], *, require_model: bool) -> None:
+    """kokoro-onnx imports, and (when the model is baked in) the session builds.
+
+    Building the ONNX session and reading the voices is not inference: it is the
+    step that fails on a wrong-architecture onnxruntime wheel or a truncated
+    model file, both of which import cleanly.
+    """
+    try:
+        import onnxruntime
+        from kokoro_onnx import Kokoro
+
+        print(f"onnxruntime {onnxruntime.__version__} | kokoro_onnx import OK")
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"Kokoro engine imports failed: {exc!r}")
+        return
+
+    model = Path(os.environ.get("TTS_KOKORO_MODEL_PATH", DEFAULT_KOKORO_MODEL))
+    voices = Path(os.environ.get("TTS_KOKORO_VOICES_PATH", DEFAULT_KOKORO_VOICES))
+    if not (model.is_file() and voices.is_file()):
+        if require_model:
+            failures.append(f"Kokoro model files missing: {model} / {voices}")
+        else:
+            print("Kokoro model not present here; session check skipped")
+        return
+    try:
+        engine = Kokoro(str(model), str(voices))
+        n = len(engine.get_voices())
+        print(f"Kokoro session built from {model.name}, {n} voices")
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"Kokoro session could not be built: {exc!r}")
+
+
+def check_absent(failures: list[str], modules: tuple[str, ...]) -> None:
+    """The slim image must not quietly grow the heavy engine back."""
+    failures.extend(
+        f"{name} is installed but must not be in this image"
+        for name in modules
+        if importlib.util.find_spec(name) is not None
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--variant", choices=VARIANTS, default="full")
+    args = parser.parse_args(argv)
+
+    failures: list[str] = []
+    print(f"variant: {args.variant}")
+
+    torch_ok = check_torch(failures)
+    if torch_ok:
+        check_asr(failures)
+    if args.variant == "full":
+        check_xtts(failures)
+        check_kokoro(failures, require_model=False)
+    else:
+        check_kokoro(failures, require_model=True)
+        check_absent(failures, ("TTS", "transformers"))
 
     if failures:
         print("\nRUNTIME ASSERTIONS FAILED:", file=sys.stderr)
