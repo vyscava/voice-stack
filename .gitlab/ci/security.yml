@@ -1,0 +1,438 @@
+# ============================================================================
+# Security gates (homelab standard, ported from kb-mcp / homelab-mcp)
+# ============================================================================
+# Every job carries a fail-closed guard: a scanner's silent fake-pass shape
+# (exit 0 while scanning nothing) is a RED job, not a green one.
+#
+#   test:secrets:mr          gitleaks over the MR commit range. The GitLab
+#                            Secret-Detection template (included in
+#                            .gitlab-ci.yml) only runs on branch pipelines.
+#   test:sast:semgrep        semgrep with a LOCAL rules file (.semgrep/rules.yml)
+#   test:audit:{full,kokoro} pip-audit of the Python set INSIDE each built image
+#   test:scan:trivy:{full,kokoro}  trivy OS-package scan of each published image
+#
+# release:latest / release:version `needs` the audit and trivy jobs, so a red
+# gate stops promotion to :latest (the needs edge, not the stage order, is
+# what blocks).
+# ============================================================================
+
+# The image gates (audit + trivy) need the SHA-tagged images, which
+# build:prod-image only produces on main and on MRs touching the image inputs.
+# Keep this list identical to build:prod-image's, or a gate would be created
+# without the job it needs and the pipeline would be invalid.
+.image-gate-rules:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - pyproject.toml
+        - Dockerfile
+        - .gitlab-ci.yml
+        - .gitlab/ci/smoke.yml
+        - .gitlab/ci/security.yml
+        - ci/trivy-guard.tpl
+        - scripts/entrypoint.sh
+        - scripts/assert_runtime.py
+        - scripts/accept_coqui_license.sh
+        - src/**/*
+
+# ---------------------------------------------------------------------------
+# Dependency audit.
+#
+# Why audit the BUILT IMAGE instead of `uv export` / the pyproject extras:
+# voice-stack has no lock file, and the dependencies float (most extras are
+# unpinned: fastapi, faster-whisper, coqui-tts...). The set that matters is the
+# one that actually SHIPS, and torch/torchaudio come from the PyTorch CPU
+# index, which no static export of pyproject can reproduce. `pip freeze` inside
+# the image is the exact resolved set, per variant (the full and kokoro images
+# resolve different extras). pip-audit then runs with --no-deps (the freeze IS
+# the complete pinned set; re-resolving would turn a missing wheel into a
+# --strict failure unrelated to any advisory) and --strict (an unauditable
+# package fails the job instead of being skipped).
+#
+# Two exclusions, both deliberate:
+#   - the project itself (editable install, not on PyPI): --exclude-editable
+#   - the `+cpu` local-version suffix is stripped from torch/torchaudio:
+#     "2.9.1+cpu" is not a PyPI version, and pip-audit would otherwise be
+#     unable to look it up. Advisories are keyed on the public version.
+#
+# Container names carry ${CI_JOB_ID}: the Tower runner runs jobs concurrently.
+# ---------------------------------------------------------------------------
+# Two steps because no single stock image has both a docker client and
+# pip-audit, and installing either at job time (apk) hangs on this runner:
+#   test:freeze:*  (docker:29, build-daemon runner) exports the pinned set
+#   test:audit:*   (python:3.12-slim) runs pip-audit on that export
+.freeze-image:
+  stage: security
+  image: docker:29
+  extends: .image-gate-rules
+  needs:
+    - build:prod-image
+  before_script:
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      fi
+  script:
+    - docker pull "$SCAN_IMAGE"
+    - |
+      docker run --rm --name "freeze-${AUDIT_NAME}-${CI_JOB_ID}" \
+        --entrypoint /app/.venv/bin/python "$SCAN_IMAGE" \
+        -m pip freeze --exclude-editable > requirements.freeze.txt
+    - sed -E 's/\+cpu$//' requirements.freeze.txt > requirements.audit.txt
+    # Export just the *.dist-info metadata of the venv (a few MB, no weights or
+    # wheels) so pip-audit can read the installed set directly with --path and
+    # never run a pip resolution (see test:audit:*). The project's own
+    # dist-info is dropped: it is not on PyPI. torch/torchaudio carry a +cpu
+    # local version that PyPI does not know, so it is stripped in METADATA.
+    - mkdir -p dist-meta
+    - |
+      docker run --rm --name "meta-${AUDIT_NAME}-${CI_JOB_ID}" --entrypoint sh "$SCAN_IMAGE" \
+        -c 'cd /app/.venv/lib/python3.*/site-packages && tar cf - *.dist-info' | tar xf - -C dist-meta
+    - rm -rf dist-meta/voice_stack-*.dist-info
+    # pip-audit --path takes the version from the dist-info DIRECTORY NAME,
+    # not from METADATA (reproduced: torch-2.9.1+cpu.dist-info with
+    # "Version: 2.9.1" inside is still looked up as 2.9.1+cpu and fails
+    # --strict). So strip +cpu from both.
+    - |
+      find dist-meta -name METADATA -exec sed -i -E 's/^Version: (.*)\+cpu$/Version: \1/' {} +
+      for d in dist-meta/*+cpu.dist-info; do
+        [ -e "$d" ] || continue
+        mv "$d" "$(echo "$d" | sed 's/+cpu\.dist-info$/.dist-info/')"
+      done
+      if ls -d dist-meta/*+cpu* >/dev/null 2>&1; then echo "FAIL: +cpu left in dist-meta"; exit 1; fi
+      ls -d dist-meta/torch-*.dist-info
+    - |
+      test "$(ls -d dist-meta/*.dist-info | wc -l)" -ge 60 || { echo "FAIL: dist-info export too small"; exit 1; }
+    # Fail-closed: an empty/short freeze would make pip-audit trivially pass.
+    - |
+      n=$(grep -c '==' requirements.audit.txt || true)
+      echo "pinned packages in ${AUDIT_NAME} image: ${n}"
+      if [ "${n}" -lt 20 ]; then
+        echo "FAIL: only ${n} pinned packages exported - freeze did not capture the venv"
+        exit 1
+      fi
+      grep -q '^torch==' requirements.audit.txt || { echo "FAIL: torch missing from the export"; exit 1; }
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - requirements.freeze.txt
+      - requirements.audit.txt
+      - dist-meta/
+  tags:
+    - docker
+    - nuc
+
+test:freeze:full:
+  extends: .freeze-image
+  variables:
+    SCAN_IMAGE: $PROD_IMAGE_SHA
+    AUDIT_NAME: full
+
+test:freeze:kokoro:
+  extends: .freeze-image
+  variables:
+    SCAN_IMAGE: $KOKORO_IMAGE_SHA
+    AUDIT_NAME: kokoro
+
+.audit-image:
+  stage: security
+  image: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+  extends: .image-gate-rules
+  before_script:
+    # Pinned: this job can read the project's masked variables on main.
+    - pip install --no-cache-dir --quiet pip-audit==2.10.1
+  script:
+    # --path (installed-distribution mode) reads the exported dist-info
+    # directly. The requirements-file mode (-r) was tried first and cannot be
+    # used here: pip-audit runs a pip dry-run resolution even with --no-deps
+    # when requirements are unhashed, and the torch+cpu pins (the CPU index
+    # build, not on PyPI) make that resolve fail (ResolutionImpossible against
+    # triton). Nothing is resolved in --path mode: it audits exactly what the
+    # image ships. --strict still fails any package pip-audit cannot look up.
+    #
+    # Ignored advisories: torch 2.9.1 only, each one named, tracked in
+    # voice-stack#13. torch is pinned on purpose (see pyproject.toml): 2.13
+    # broke the XTTS import path and took TTS down for three days (#4), and
+    # the fixes need >=2.10 / >=2.13, so the upgrade is its own change with a
+    # TTS import and VAD test. None is reachable by a client: the services
+    # never load a checkpoint, script or pt2 file a caller supplies.
+    #   PYSEC-2026-2286 / PYSEC-2026-1856 (CVE-2026-24747) weights_only
+    #     unpickler, crafted .pth; fixed 2.10.0
+    #   PYSEC-2025-195 (CVE-2025-3001) torch.lstm_cell; fixed 2.10.0
+    #   PYSEC-2025-194 (CVE-2025-3000) torch.jit.script; fixed 2.13.0
+    #   PYSEC-2026-139 (CVE-2026-4538) pt2 loading; no fixed version yet
+    # transformers 4.57.6, full image only (pinned <5 for coqui-tts), same
+    # issue: every advisory needs an attacker-controlled model, checkpoint,
+    # repo or config to load, or is in training/save code; XTTS loads only
+    # its fixed upstream model. Fixes are all in 5.x.
+    #   PYSEC-2025-217 (CVE-2025-14929) X-CLIP checkpoint conversion
+    #   PYSEC-2026-2288 (CVE-2026-1839) Trainer rng-state load
+    #   PYSEC-2026-2289 (CVE-2026-4372) crafted config.json
+    #   PYSEC-2026-2290 (CVE-2026-5241) LightGlue model repo
+    #   PYSEC-2026-3929 (CVE-2026-9856) save_pretrained path traversal
+    #   PYSEC-2026-4174 (CVE-2026-80047) custom generation code download
+    # Anything else, in torch, transformers or any other package, still
+    # fails the job.
+    - |
+      # Report-only pass with NO ignores, kept as an artifact, so an ignored
+      # advisory stays visible.
+      pip-audit --progress-spinner off --path dist-meta -f json -o pip-audit-all.json || true
+      set -- $AUDIT_IGNORE
+      args=""
+      for id in "$@"; do args="$args --ignore-vuln $id"; done
+      echo "ignoring: ${AUDIT_IGNORE}"
+      pip-audit --strict --progress-spinner off --path dist-meta $args
+    - echo "audited $(ls -d dist-meta/*.dist-info | wc -l) distributions"
+  artifacts:
+    when: always
+    expire_in: 1 month
+    paths:
+      - pip-audit-all.json
+
+# The ignore lists are per image: transformers is only in the full image, so
+# its IDs are not ignored for the slim one.
+test:audit:full:
+  extends: .audit-image
+  variables:
+    AUDIT_IGNORE: >-
+      PYSEC-2026-2286 PYSEC-2026-1856 PYSEC-2025-195 PYSEC-2025-194 PYSEC-2026-139
+      PYSEC-2025-217 PYSEC-2026-2288 PYSEC-2026-2289 PYSEC-2026-2290 PYSEC-2026-3929 PYSEC-2026-4174
+  needs:
+    - job: test:freeze:full
+      artifacts: true
+
+test:audit:kokoro:
+  extends: .audit-image
+  variables:
+    AUDIT_IGNORE: >-
+      PYSEC-2026-2286 PYSEC-2026-1856 PYSEC-2025-195 PYSEC-2025-194 PYSEC-2026-139
+  needs:
+    - job: test:freeze:kokoro
+      artifacts: true
+
+# ---------------------------------------------------------------------------
+# Semgrep SAST with a vendored rules file. See .semgrep/rules.yml for why no
+# registry packs. The explicit `.` target is REQUIRED: the semgrep image sets
+# SEMGREP_IN_DOCKER=1 and, with no explicit target, chdirs to /src and dies
+# with exit 2 and no report.
+# ---------------------------------------------------------------------------
+test:sast:semgrep:
+  stage: security
+  image:
+    name: semgrep/semgrep@sha256:ae27024c16f7848cdbfd49c24ed0b78b13f13b85fcd7b87c679aaa8b0c0dce98
+    entrypoint: [""]
+  needs: []
+  before_script: []
+  variables:
+    SEMGREP_SEND_METRICS: "off"
+  script:
+    - semgrep --version
+    - |
+      set +e
+      semgrep scan -j 1 --verbose --config .semgrep/rules.yml --json --output semgrep-report.json .
+      scan_rc=$?
+      export SCAN_EXIT=${scan_rc}
+      echo "SCAN_EXIT=${scan_rc}"
+      ls -la semgrep-report.json 2>&1 || true
+    # Fail-closed: a config/runtime failure exits 0/2 with no report. The
+    # severity decision happens HERE: the scan runs ALL rules; the guard fails
+    # only on ERROR-severity findings (WARNING stays report-only).
+    - |
+      python3 - <<'PY'
+      import json, sys, os
+      rc = int(os.environ.get("SCAN_EXIT", "0"))
+      try:
+          rep = json.load(open("semgrep-report.json"))
+      except FileNotFoundError:
+          print("FAIL: semgrep-report.json missing - scan did not run")
+          sys.exit(1)
+      except json.JSONDecodeError as e:
+          print("FAIL: semgrep-report.json unparsable: %s" % e)
+          sys.exit(1)
+      if "results" not in rep:
+          print("FAIL: report has no results key - scan did not run")
+          sys.exit(1)
+      errs = rep.get("errors") or []
+      if errs:
+          print("FAIL: semgrep reported %d config/runtime errors: %s" % (len(errs), errs[0].get("message")))
+          sys.exit(1)
+      scanned = rep.get("paths", {}).get("scanned") or []
+      if not scanned:
+          print("FAIL: paths.scanned is empty - scan covered no files")
+          sys.exit(1)
+      results = rep.get("results") or []
+      err_findings = [r for r in results if (r.get("extra") or {}).get("severity") == "ERROR"]
+      warn_findings = len(results) - len(err_findings)
+      if err_findings:
+          for r in err_findings:
+              print("  %s:%s %s" % (r["path"], r["start"]["line"], r["check_id"]))
+          print("FAIL: %d ERROR-severity findings (%d WARNING report-only)" % (len(err_findings), warn_findings))
+          sys.exit(1)
+      print("ok   semgrep scanned %d files: %d WARNING findings, no ERROR" % (len(scanned), warn_findings))
+      sys.exit(rc)
+      PY
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - semgrep-report.json
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# ---------------------------------------------------------------------------
+# gitleaks over the MR commit range (the Secret-Detection template covers
+# branch pipelines only). Range scan: only the MR's commits, so it cannot fail
+# on pre-existing history, which is what makes blocking safe.
+# ---------------------------------------------------------------------------
+test:secrets:mr:
+  stage: security
+  image:
+    name: zricethezav/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055
+    entrypoint: [""]
+  needs: []
+  before_script: []
+  variables:
+    GIT_DEPTH: "0"   # the diff-base SHA must be resolvable for a range scan
+  script:
+    - gitleaks version
+    - |
+      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+      if [ -z "${BASE}" ]; then
+        echo "FAIL: CI_MERGE_REQUEST_DIFF_BASE_SHA is empty - cannot compute a diff range"
+        exit 1
+      fi
+      if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+        echo "FAIL: diff base ${BASE} is not a resolvable commit in this checkout"
+        exit 1
+      fi
+      if ! git merge-base --is-ancestor "${BASE}" HEAD; then
+        echo "FAIL: diff base ${BASE} is not an ancestor of HEAD - range would scan unrelated history"
+        exit 1
+      fi
+      COMMITS=$(git rev-list --count "${BASE}..HEAD")
+      if [ "${COMMITS}" -lt 1 ]; then
+        echo "FAIL: zero commits in range ${BASE}..HEAD - a zero-commit scan trivially reports no leaks"
+        exit 1
+      fi
+      echo "ok   range ${BASE}..HEAD contains ${COMMITS} commit(s)"
+      gitleaks git \
+        --log-opts="${BASE}..HEAD" \
+        --redact \
+        --report-format json --report-path gitleaks-mr.json \
+        --exit-code 1 2>&1 | tee gitleaks-mr.log
+      GL_EXIT=${PIPESTATUS[0]}
+      if grep -q "no leaks found in partial scan" gitleaks-mr.log; then
+        echo "FAIL: partial scan - the diff-base range did not resolve (upstream #1450 trap), scan did not run"
+        exit 1
+      fi
+      exit ${GL_EXIT}
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - gitleaks-mr.log
+      - gitleaks-mr.json
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# ---------------------------------------------------------------------------
+# Trivy scan of each PUBLISHED image (SHA tag, pre-promotion).
+#
+# Policy (mirrors kb-mcp): OS packages only (--pkg-types os; Python CVEs are
+# pip-audit's job and this must never become a second, weaker Python gate),
+# HIGH and CRITICAL, --ignore-unfixed. Unfixed findings (no upstream patch to
+# take) cannot be acted on and would turn the gate permanently red on the
+# Debian/Ubuntu/CUDA base layers; a fixed-version finding is always
+# actionable by rebuilding with a fresh base (cache-bust + --pull).
+#
+# The trivy image is ash-only with no docker CLI, so it reads the image
+# directly from the build daemon over DOCKER_HOST (--docker-host). The scan
+# jobs therefore carry the same runner tags as build:prod-image so they hit
+# the daemon that holds the image.
+#
+# BREAK-GLASS (trivy's DB moves daily; an unchanged image can red on a new
+# disclosure alone): one-line MR setting `allow_failure: true` on the red
+# job, author is not the approver, CVE-tracking issue opened in the same act
+# with a hard re-arm deadline (7d CRITICAL / 14d HIGH). Never remove the job,
+# its needs edge, or the guard.
+# ---------------------------------------------------------------------------
+.trivy-image:
+  stage: security
+  image:
+    name: aquasec/trivy@sha256:086971aaf400beebd94e8300fd8ea623774419597169156cec56eec5b00dfb1e
+    entrypoint: [""]
+  extends: .image-gate-rules
+  needs:
+    - build:prod-image
+  timeout: 45 minutes
+  before_script: []
+  variables:
+    DOCKER_HOST: "tcp://172.17.0.1:2375"
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivycache"
+    TRIVY_NO_PROGRESS: "true"
+  cache:
+    # Per ref: an MR pipeline (public repo) must not write the DB main reads.
+    key: trivy-db-v1-$CI_COMMIT_REF_SLUG
+    paths:
+      - .trivycache/
+  script:
+    - trivy --version
+    # --exit-code 1 gates on findings; the JSON report is written first, so
+    # the artifact exists either way. No --skip-db-update (fatal on a cold
+    # cache).
+    - |
+      trivy image "${SCAN_IMAGE}" \
+        --docker-host "${DOCKER_HOST}" \
+        --image-src docker \
+        --scanners vuln --pkg-types os --list-all-pkgs \
+        --severity HIGH,CRITICAL --ignore-unfixed \
+        --format json --output trivy-report.json \
+        --exit-code 1
+    # Fail-closed guard: on DB/egress failure trivy exits 0 with an empty
+    # report. A committed Go template rendered by trivy's own decoder counts
+    # analyzed packages (struct fields, not JSON key names); the render
+    # doubles as the parse check. Ash + awk only.
+    - |
+      if [ ! -s trivy-report.json ]; then
+        echo "FAIL: trivy-report.json missing or empty - scan did not run"
+        exit 1
+      fi
+      COUNTS="$(trivy convert --format template --template @ci/trivy-guard.tpl trivy-report.json 2>trivy-convert.err)" || {
+        echo "FAIL: trivy report does not parse - scan did not run:"
+        tail -5 trivy-convert.err
+        exit 1
+      }
+      echo "$COUNTS" | awk '
+        { pkgs += $1; vulns += $2 }
+        END {
+          if (pkgs < 1) {
+            print "FAIL: no analyzed packages in any Result - image was not scanned"
+            exit 1
+          }
+          print "ok   trivy analyzed " pkgs " packages; " vulns " vulnerability entries"
+        }'
+  # Print the findings table in the job log on both outcomes (after_script
+  # runs on failure too and cannot change the job's result), so a red gate
+  # shows the package, CVE and fixed version without downloading the artifact.
+  after_script:
+    - 'trivy convert --format table --severity HIGH,CRITICAL trivy-report.json || true'
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - trivy-report.json
+  tags:
+    - docker
+    - nuc
+
+test:scan:trivy_full:
+  extends: .trivy-image
+  variables:
+    SCAN_IMAGE: $PROD_IMAGE_SHA
+
+test:scan:trivy_kokoro:
+  extends: .trivy-image
+  variables:
+    SCAN_IMAGE: $KOKORO_IMAGE_SHA

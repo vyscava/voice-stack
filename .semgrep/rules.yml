@@ -1,0 +1,138 @@
+# Curated Semgrep ruleset for voice-stack (vendored, self-contained).
+#
+# Vendored instead of registry packs (p/python, p/bandit, p/dockerfile): a
+# merge gate that depends on semgrep.dev being reachable mid-scan is
+# nondeterministic, and a local ruleset is reproducible from git and immune to
+# rule drift. Copied from the homelab kb-mcp ruleset.
+#
+# The CI job scans ALL rules (no severity filter at scan time); the job's JSON
+# guard fails only on ERROR-severity findings, so WARNING rules are genuinely
+# report-only in the artifact - the severity decision lives in the guard.
+rules:
+  # --- subprocess / shell execution (injection surface) ---
+  - id: unsafe-shell-true
+    message: >-
+      subprocess called with shell=True builds the command through the shell;
+      a non-constant command string is a command injection surface. Use a
+      token list (shell=False) or shlex.quote() the interpolated parts.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FUNC(..., shell=True, ...)
+          - pattern: os.popen(...)
+          - pattern: os.system(...)
+
+  # --- TLS verification disabled ---
+  - id: insecure-verify-false
+    message: >-
+      TLS certificate verification disabled. verify=False accepts any
+      certificate and defeats the transport's authenticity; prefer the
+      system CA store or an explicit CA bundle.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: requests.$METHOD(..., verify=False, ...)
+          - pattern: httpx.$METHOD(..., verify=False, ...)
+          - pattern: aiohttp.ClientSession(..., verify_ssl=False, ...)
+
+  # --- dynamic code execution ---
+  - id: dangerous-eval-exec
+    message: >-
+      eval/exec on a non-literal argument executes attacker-influenced code.
+      Replace with a safe parser or an explicit allowlist.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+
+  # --- unsafe deserialization ---
+  - id: unsafe-pickle-load
+    message: >-
+      pickle.load/loads on untrusted bytes executes arbitrary code during
+      deserialization. Use a safe serialization format (JSON) or a
+      content-type-restricted loader.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load(...)
+          - pattern: pickle.loads(...)
+
+  # --- unsafe YAML parsing ---
+  - id: unsafe-yaml-load
+    message: >-
+      yaml.load without an explicit SafeLoader instantiates arbitrary Python
+      objects from the document. Use yaml.safe_load / yaml.safe_load_all.
+      Only yaml.SafeLoader / yaml.CSafeLoader are exempt: yaml.Loader,
+      yaml.UnsafeLoader and positional loader args are still flagged.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+
+  # --- unverified TLS context ---
+  - id: ssl-unverified-context
+    message: >-
+      TLS verification disabled for this connection. Remove it; if a private
+      CA is required, register its bundle explicitly. Matches both spellings:
+      ssl._create_unverified_context(...) and the create_default_context +
+      check_hostname=False / verify_mode=CERT_NONE idiom.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: ssl._create_unverified_context(...)
+          - patterns:
+              - pattern: $CTX.check_hostname = False
+              - pattern-inside: |
+                  $CTX = ssl.create_default_context(...)
+                  ...
+                  $CTX.verify_mode = ssl.CERT_NONE
+                  ...
+
+  # --- advisory (report-only, never gating) ---
+  - id: insecure-tempfile-mktemp
+    message: >-
+      tempfile.mktemp is deprecated and racy; use tempfile.mkstemp or a
+      TemporaryDirectory.
+    severity: WARNING
+    languages: [python]
+    pattern: tempfile.mktemp(...)
+
+  - id: weak-hash-md5-sha1
+    message: >-
+      MD5/SHA-1 are not collision-resistant; do not use them for security
+      decisions (hashing non-security data is acceptable - keep if intentional).
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+
+  - id: dockerfile-unpinned-image
+    message: >-
+      Base image without a pinned digest can drift between builds. Pin with
+      @sha256 once the tag is validated.
+    severity: WARNING
+    languages: [dockerfile]
+    patterns:
+      - pattern: FROM $IMAGE
+      - pattern-not-regex: "FROM .*@sha256:"
+
+  - id: dockerfile-curl-pipe-shell
+    message: >-
+      curl | sh executes remote content as root without verification. Pin the
+      source digest or verify a checksum before execution.
+    severity: WARNING
+    languages: [dockerfile]
+    patterns:
+      - pattern-either:
+          - pattern: RUN curl ... | sh
+          - pattern: RUN wget ... | sh
