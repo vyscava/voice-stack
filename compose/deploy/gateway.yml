@@ -1,0 +1,90 @@
+# Voice Stack Gateway, deployed by CI to the voice host (CT 261 on tower,
+# voice.server.local.vitorgarbim.me). See compose/deploy/asr.yml for how the
+# deploy works.
+#
+# The bus identity, the NATS URL (it carries the credential) and the timeouts
+# come from the vault blob deploys/data-platforms/voice-stack/
+# voice-stack-gateway, copied server-side from the old Portainer stack env;
+# the deployer exports the blob's keys and compose substitutes them below.
+# Everything else is literal here.
+#
+# NETWORKS. The ASR and TTS stacks each create their own network, so this
+# service joins both as external networks and addresses them by container
+# name. The deploy job for this stack runs after both of theirs.
+
+services:
+  gateway:
+    image: ${VOICE_STACK_IMAGE}
+    container_name: voice-stack-gateway
+    restart: unless-stopped
+
+    environment:
+      SERVICE_MODE: gateway
+      ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      GATEWAY_PORT: "5003"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      DEBUGPY_ENABLE: "false"
+
+      GATEWAY_ASR_URL: http://voice-stack-asr:5001
+      GATEWAY_TTS_URL: http://voice-stack-tts:5002
+
+      # GATEWAY_SELF_NAME must match this service's identity on the bus exactly.
+      # Publishing is only permitted under agents.<self>.>, and a mismatch is
+      # rejected asynchronously: the send reports success and the message never
+      # arrives.
+      GATEWAY_SELF_NAME: ${GATEWAY_SELF_NAME}
+      GATEWAY_AGENT: ${GATEWAY_AGENT}
+      GATEWAY_NATS_URL: ${GATEWAY_NATS_URL}
+      GATEWAY_NATS_TOPIC: ${GATEWAY_NATS_TOPIC}
+
+      GATEWAY_AGENT_TIMEOUT_S: ${GATEWAY_AGENT_TIMEOUT_S}
+      GATEWAY_ASR_TIMEOUT_S: ${GATEWAY_ASR_TIMEOUT_S}
+      GATEWAY_TTS_TIMEOUT_S: ${GATEWAY_TTS_TIMEOUT_S}
+
+      # "default" is the TTS engine's own default voice (Kokoro:
+      # TTS_KOKORO_DEFAULT_VOICE in compose/deploy/tts.yml). A stock speaker:
+      # cloned voices of real people stay private.
+      GATEWAY_VOICE: default
+      GATEWAY_AUDIO_FORMAT: ${GATEWAY_AUDIO_FORMAT}
+      GATEWAY_MIN_TRANSCRIPT_CHARS: ${GATEWAY_MIN_TRANSCRIPT_CHARS}
+
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB}
+
+    ports:
+      - "5003:5003"
+
+    # Internal resolver, so nats.local.* resolves.
+    dns:
+      - 10.87.2.4
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - asr
+      - tts
+
+networks:
+  asr:
+    external: true
+    name: voice-stack-asr_default
+  tts:
+    external: true
+    name: voice-stack-tts_default

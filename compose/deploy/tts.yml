@@ -1,0 +1,64 @@
+# Voice Stack TTS, deployed by CI to the voice host (CT 261 on tower,
+# voice.server.local.vitorgarbim.me). See compose/deploy/asr.yml for how the
+# deploy works and why the settings live in this file.
+#
+# Engine: Kokoro-82M on ONNX Runtime, from the slim image. XTTS is not in the
+# slim image; to run it, deploy the full image and set TTS_ENGINE=coqui.
+#
+# Kokoro needs a /tmp that allows exec: espeak-ng loads a temp copy of its
+# library from there. The container's own /tmp does; do not mount a noexec
+# tmpfs over it or make the root filesystem read-only.
+
+services:
+  tts:
+    image: ${VOICE_STACK_IMAGE}
+    container_name: voice-stack-tts
+    restart: unless-stopped
+
+    environment:
+      SERVICE_MODE: tts
+      ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      TTS_PORT: "5002"
+      CORS_ORIGINS: ""
+      DEBUGPY_ENABLE: "false"
+      TTS_ENGINE: kokoro
+      TTS_DEVICE: cpu
+      TTS_KOKORO_MODEL_PATH: /app/models/kokoro/kokoro-v1.0.onnx
+      TTS_KOKORO_VOICES_PATH: /app/models/kokoro/voices-v1.0.bin
+      TTS_KOKORO_DEFAULT_VOICE: af_heart
+      # Explicit, not 0: ONNX Runtime sizes its pool from the host's 24 CPUs,
+      # not the container's 4, and runs 4.7x slower (voice-stack#11).
+      TTS_KOKORO_THREADS: "4"
+      TTS_SAMPLE_RATE: "24000"
+      TTS_DEFAULT_LANG: en
+      TTS_AUTO_LANG: "true"
+      TTS_IDLE_TIMEOUT_MINUTES: "60"
+      TTS_MAX_CONCURRENT_REQUESTS: "2"
+      MAX_UPLOAD_SIZE_MB: "50"
+
+    ports:
+      - "5002:5002"
+
+    dns:
+      - 10.87.2.4
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          # Kokoro idles at ~465 MiB; the 4 GB host also carries ASR (~910 MiB).
+          memory: 1G
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

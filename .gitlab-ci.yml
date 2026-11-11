@@ -38,6 +38,7 @@ stages:
   - coverage
   - security
   - release
+  - deploy
 
 variables:
   # Docker registry configuration
@@ -171,7 +172,13 @@ build:prod-image:
     - docker build --pull --file Dockerfile --target kokoro --tag $KOKORO_IMAGE_SHA --cache-from $KOKORO_IMAGE --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 --build-arg APT_REFRESH=$APT_REFRESH .
     - docker push $KOKORO_IMAGE_SHA
     - echo "Production image built and pushed with SHA tag"
+    # The deploy jobs (.gitlab/ci/deploy.yml) pin exactly this build.
+    - echo "VOICE_STACK_PUBLISHED_IMAGE=${KOKORO_IMAGE_SHA}" > deploy.env
     - echo "Image will be promoted to latest in release stage after all checks pass"
+
+  artifacts:
+    reports:
+      dotenv: deploy.env
 
   tags:
     - docker
@@ -516,3 +523,4 @@ include:
   - template: Security/Secret-Detection.gitlab-ci.yml
   - local: .gitlab/ci/smoke.yml
   - local: .gitlab/ci/security.yml
+  - local: .gitlab/ci/deploy.yml

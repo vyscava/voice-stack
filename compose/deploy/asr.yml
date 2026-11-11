@@ -1,0 +1,83 @@
+# Voice Stack ASR, deployed by CI to the voice host (CT 261 on tower,
+# voice.server.local.vitorgarbim.me) through the shared compose deployer
+# (gitops/ci-templates templates/deploy.yml, wired in .gitlab/ci/deploy.yml).
+#
+# A merge to main IS the deploy: the job pins VOICE_STACK_IMAGE to the slim
+# image this pipeline built (voice-stack:kokoro-<sha>, by digest), runs
+# `compose up -d` over an SSH docker context and asserts digest and health.
+# Portainer does not own this stack; it only shows it.
+#
+# Settings live here, not in a stack env: none of them is a secret, and the
+# repo is the record. The vault blob deploys/data-platforms/voice-stack/
+# voice-stack-asr exists because the deployer requires one; it holds no
+# setting this file reads. Tuning comes from the CT 261 benchmark
+# (voice-stack#10): 4 P-cores, small int8 = RTF ~0.2.
+#
+# The compose project name is voice-stack-asr, so the network is
+# voice-stack-asr_default, which the gateway joins by name.
+
+services:
+  asr:
+    image: ${VOICE_STACK_IMAGE}
+    container_name: voice-stack-asr
+    restart: unless-stopped
+
+    environment:
+      SERVICE_MODE: asr
+      ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      ASR_PORT: "5001"
+      CORS_ORIGINS: ""
+      DEBUGPY_ENABLE: "false"
+      ASR_ENGINE: fasterwhisper
+      ASR_DEVICE: cpu
+      ASR_MODEL: small
+      ASR_COMPUTE_TYPE: int8
+      # Match the container's CPU set (CT 261 is pinned to 4 P-cores). More
+      # threads than cores oversubscribes and gets slower, not faster.
+      ASR_CPU_THREADS: "4"
+      ASR_NUM_OF_WORKERS: "1"
+      ASR_CACHE_ENABLED: "true"
+      ASR_CACHE_MAX_ITEMS: "100"
+      ASR_TRANSCRIBE_BEAM_SIZE: "5"
+      ASR_TRANSCRIBE_TEMPERATURE: "0"
+      ASR_TRANSCRIBE_BEST_OF: "1"
+      ASR_VAD_ENABLED: "true"
+      ASR_IDLE_TIMEOUT_MINUTES: "60"
+      ASR_MAX_CONCURRENT_REQUESTS: "2"
+      MAX_UPLOAD_SIZE_MB: "500"
+      HF_HOME: /app/models
+
+    ports:
+      - "5001:5001"
+
+    volumes:
+      - asr-models:/app/models
+
+    dns:
+      - 10.87.2.4
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Covers a first start that downloads the Whisper model into an empty
+      # asr-models volume (~480 MB); a warm volume is up in seconds.
+      start_period: 240s
+
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  asr-models:
+    driver: local

@@ -1,0 +1,64 @@
+# Deploys: one include of the shared compose deployer per stack
+# (gitops/ci-templates templates/deploy.yml; runbook in that repo,
+# docs/runbook.md). A merge to main IS the deploy. Each job talks to the voice
+# host over an SSH docker context as gitlab-deploy, pins VOICE_STACK_IMAGE to
+# the slim image build:prod-image pushed in this pipeline, runs
+# `compose up -d` under the stack's project name, and asserts the running
+# digest, state and health before it goes green. A failed deploy that touched
+# the host writes a hold; the next deploy of that stack refuses until an owner
+# clears it.
+#
+# The deploy stage comes after release, and these jobs have no `needs` (the
+# gateway's are below), so every gate in the pipeline (tests, smoke, security
+# scans, the :kokoro promotion) must be green before anything reaches the host.
+#
+# `stack` is the compose project name on the host, the docker context name and
+# the vault blob key deploys/data-platforms/voice-stack/<stack>.
+
+include:
+  - project: gitops/ci-templates
+    ref: v1.1.4
+    file: /templates/deploy.yml
+    inputs:
+      stack: voice-stack-asr
+      compose_file: compose/deploy/asr.yml
+      image_var: VOICE_STACK_IMAGE
+      published_var: VOICE_STACK_PUBLISHED_IMAGE
+      image_repository: registry.local.vitorgarbim.me/voice-stack
+      host: voice.server.local.vitorgarbim.me
+      ci_fallback: false
+      health_timeout: 420
+  - project: gitops/ci-templates
+    ref: v1.1.4
+    file: /templates/deploy.yml
+    inputs:
+      stack: voice-stack-tts
+      compose_file: compose/deploy/tts.yml
+      image_var: VOICE_STACK_IMAGE
+      published_var: VOICE_STACK_PUBLISHED_IMAGE
+      image_repository: registry.local.vitorgarbim.me/voice-stack
+      host: voice.server.local.vitorgarbim.me
+      ci_fallback: false
+      health_timeout: 300
+  - project: gitops/ci-templates
+    ref: v1.1.4
+    file: /templates/deploy.yml
+    inputs:
+      stack: voice-stack-gateway
+      compose_file: compose/deploy/gateway.yml
+      image_var: VOICE_STACK_IMAGE
+      published_var: VOICE_STACK_PUBLISHED_IMAGE
+      image_repository: registry.local.vitorgarbim.me/voice-stack
+      host: voice.server.local.vitorgarbim.me
+      ci_fallback: false
+
+# The gateway joins the ASR and TTS networks as external networks, which only
+# exist once those stacks are up, so it deploys after both. A job with `needs`
+# only receives the dotenv of the jobs it names, hence build:prod-image (the
+# pinned image) and release:latest (which keeps every gate upstream of it).
+deploy:voice-stack-gateway:
+  needs:
+    - build:prod-image
+    - release:latest
+    - deploy:voice-stack-asr
+    - deploy:voice-stack-tts
