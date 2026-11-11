@@ -61,7 +61,11 @@ RUN chmod +x scripts/accept_coqui_license.sh
 # torch==2.9.1 from PyPI, which is the CUDA build (~4 GB of nvidia-*-cu12 wheels
 # this CPU-only service never uses). Installing the CPU wheels first means the
 # editable install finds 2.9.1+cpu already satisfying ==2.9.1 and leaves it.
+# pip and setuptools are upgraded first: the venv's bundled copies (pip 24.0,
+# setuptools 79) carry advisories pip-audit fails on, and both ship in the
+# images because the venv is copied whole.
 RUN python -m venv /build/.venv && \
+    /build/.venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
     /build/.venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         torch==2.9.1 torchaudio==2.9.1
@@ -120,7 +124,13 @@ FROM python:3.11-slim AS kokoro
 LABEL description="Voice Stack slim CPU image: ASR + Kokoro TTS + gateway"
 LABEL version="0.1.0"
 
-RUN apt-get update -y && \
+# APT_REFRESH busts the cached apt layer (CI passes the UTC date, or a manual
+# pipeline's APT_REFRESH_FORCE), and the
+# upgrade pulls the base image's security fixes. Without both, a layer cached
+# months ago keeps shipping packages trivy already has fixes for.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
+    apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         libsndfile1 \
@@ -175,7 +185,11 @@ LABEL version="0.1.0"
 
 # Install only runtime system dependencies (no build tools)
 # Note: CUDA and cuDNN are already included in the base image
-RUN apt-get update -y && \
+# APT_REFRESH and the upgrade: see the kokoro stage. The CUDA base image lags
+# Ubuntu's security updates, so the upgrade is what clears its fixed CVEs.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
+    apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         libsndfile1 \

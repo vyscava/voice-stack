@@ -9,7 +9,8 @@
 #   3. test: Unit and integration tests
 #   4. smoke: Boot the PRODUCTION image and check it answers (see .gitlab/ci/smoke.yml)
 #   5. coverage: Coverage report
-#   6. security: Secret detection and security scanning
+#   6. security: Secret detection, gitleaks (MR), semgrep, pip-audit and trivy
+#      of both published images (see .gitlab/ci/security.yml)
 #   7. release: Promote to :latest ONLY if all checks pass
 #
 # The smoke stage exists because everything above it runs against the CI image
@@ -140,6 +141,9 @@ build:prod-image:
         - Dockerfile
         - .gitlab-ci.yml
         - .gitlab/ci/smoke.yml
+        # The image gates in security.yml use the same list and need this job.
+        - .gitlab/ci/security.yml
+        - ci/trivy-guard.tpl
         - scripts/entrypoint.sh
         - scripts/assert_runtime.py
         - scripts/accept_coqui_license.sh
@@ -157,10 +161,14 @@ build:prod-image:
 
   script:
     - echo "Building the full image (ASR + both TTS engines)..."
-    - docker build --file Dockerfile --target full --tag $PROD_IMAGE_SHA --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
+    # --pull and a daily APT_REFRESH keep the base image and OS packages
+    # current, so a CVE trivy reports as fixed is fixed by the next day's
+    # build at the latest. Re-run with APT_REFRESH_FORCE set to rebuild now.
+    - APT_REFRESH="$(date -u +%F)${APT_REFRESH_FORCE:+-$APT_REFRESH_FORCE}"
+    - docker build --pull --file Dockerfile --target full --tag $PROD_IMAGE_SHA --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 --build-arg APT_REFRESH=$APT_REFRESH .
     - docker push $PROD_IMAGE_SHA
     - echo "Building the slim CPU image (ASR + Kokoro + gateway)..."
-    - docker build --file Dockerfile --target kokoro --tag $KOKORO_IMAGE_SHA --cache-from $KOKORO_IMAGE --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 .
+    - docker build --pull --file Dockerfile --target kokoro --tag $KOKORO_IMAGE_SHA --cache-from $KOKORO_IMAGE --cache-from $PROD_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 --build-arg APT_REFRESH=$APT_REFRESH .
     - docker push $KOKORO_IMAGE_SHA
     - echo "Production image built and pushed with SHA tag"
     - echo "Image will be promoted to latest in release stage after all checks pass"
@@ -399,6 +407,13 @@ release:latest:
     - smoke:kokoro-image
     - coverage:report
     - secret_detection
+    # Security gates (.gitlab/ci/security.yml). The needs edge is what makes
+    # a red scan stop promotion to :latest.
+    - test:audit:full
+    - test:audit:kokoro
+    - test:scan:trivy_full
+    - test:scan:trivy_kokoro
+    - test:sast:semgrep
 
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -423,6 +438,13 @@ release:latest:
     - docker pull $KOKORO_IMAGE_SHA
     - docker tag $KOKORO_IMAGE_SHA $KOKORO_IMAGE
     - docker push $KOKORO_IMAGE
+    # Gated markers: only this job, which needs every gate, writes them, and
+    # release:version re-tags only these. A tag on a commit main never
+    # promoted therefore has nothing to release.
+    - docker tag $PROD_IMAGE_SHA $CI_REGISTRY_IMAGE:gated-$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE:gated-$CI_COMMIT_SHA
+    - docker tag $KOKORO_IMAGE_SHA $CI_REGISTRY_IMAGE:kokoro-gated-$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE:kokoro-gated-$CI_COMMIT_SHA
     - echo "Images available at $PROD_IMAGE ($XTTS_IMAGE) and $KOKORO_IMAGE"
 
   tags:
@@ -434,9 +456,25 @@ release:version:
   image: docker:29
   # No services needed - using runner's dind daemon directly
 
+  # A tag pipeline builds nothing: it re-tags the gated-<sha> markers that
+  # release:latest wrote on main after every gate passed. The plain <sha>
+  # images are NOT used: MR pipelines build those too, ungated. So these
+  # edges are optional (a hard need on jobs with no tag rule made every tag
+  # pipeline invalid), and the pull of the marker is the gate: it fails if
+  # main never promoted this commit.
   needs:
-    - build:prod-image
-    - secret_detection
+    - job: build:prod-image
+      optional: true
+    - job: secret_detection
+      optional: true
+    - job: test:audit:full
+      optional: true
+    - job: test:audit:kokoro
+      optional: true
+    - job: test:scan:trivy_full
+      optional: true
+    - job: test:scan:trivy_kokoro
+      optional: true
 
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -453,13 +491,13 @@ release:version:
 
   script:
     - echo "Releasing version $CI_COMMIT_TAG..."
-    - docker pull $PROD_IMAGE_SHA
-    - docker tag $PROD_IMAGE_SHA $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
-    - docker tag $PROD_IMAGE_SHA $PROD_IMAGE
+    - docker pull $CI_REGISTRY_IMAGE:gated-$CI_COMMIT_SHA
+    - docker tag $CI_REGISTRY_IMAGE:gated-$CI_COMMIT_SHA $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+    - docker tag $CI_REGISTRY_IMAGE:gated-$CI_COMMIT_SHA $PROD_IMAGE
     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
     - docker push $PROD_IMAGE
-    - docker pull $KOKORO_IMAGE_SHA
-    - docker tag $KOKORO_IMAGE_SHA $CI_REGISTRY_IMAGE:kokoro-$CI_COMMIT_TAG
+    - docker pull $CI_REGISTRY_IMAGE:kokoro-gated-$CI_COMMIT_SHA
+    - docker tag $CI_REGISTRY_IMAGE:kokoro-gated-$CI_COMMIT_SHA $CI_REGISTRY_IMAGE:kokoro-$CI_COMMIT_TAG
     - docker push $CI_REGISTRY_IMAGE:kokoro-$CI_COMMIT_TAG
     - echo "Released version $CI_COMMIT_TAG"
     - echo "Image available at:"
@@ -477,3 +515,4 @@ release:version:
 include:
   - template: Security/Secret-Detection.gitlab-ci.yml
   - local: .gitlab/ci/smoke.yml
+  - local: .gitlab/ci/security.yml
