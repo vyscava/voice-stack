@@ -46,13 +46,17 @@ if [ "${1:-}" != "--apply" ]; then
   exit 0
 fi
 docker system df
-# Children before parents is not required: prune drops a record once nothing
-# references it, so repeat until a pass removes nothing more.
-for pass in 1 2 3 4 5; do
+# A record referenced by a child survives its prune, so this walks the chains
+# one generation per pass, until a pass removes nothing more (or 20 passes).
+prev=-1
+for pass in $(seq 1 20); do
   ids=$(docker buildx du --verbose | awk '
     /^ID:/ { id = $2 } /^Description:/ { sub(/^Description:[ \t]*/, ""); if ($0 ~ ENVIRON["MATCH"]) print id }')
   [ -n "$ids" ] || break
-  echo "pass ${pass}: $(echo "$ids" | wc -l) records"
+  count=$(echo "$ids" | wc -l)
+  [ "$count" -ne "$prev" ] || { echo "pass ${pass}: ${count} records left, none removable"; break; }
+  prev=$count
+  echo "pass ${pass}: ${count} records"
   # One id per call: never a filter combination whose AND/OR semantics could
   # widen the prune beyond these records.
   for id in $ids; do docker builder prune -f --filter "id=${id}" >/dev/null || true; done
