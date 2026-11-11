@@ -36,8 +36,11 @@
 # Names carry ${CI_JOB_ID} so concurrent jobs cannot collide.
 # ============================================================================
 
+# Stage `security` with `needs: []`: the job still starts at once, but jobs in
+# EARLIER stages (quality, test, smoke) never wait for it. In build-images, a
+# 15-minute GPU build held up the whole MR pipeline behind it.
 .gpu-image:
-  stage: build-images
+  stage: security
   image: docker:29
   needs: []
   before_script: []
@@ -110,7 +113,7 @@ build:gpu-image:rocm:
 # DISK note above). Dry-run listing first, then the prune; scoped to records
 # only these Dockerfiles create (ci/gpu-cache-prune.sh says how).
 cleanup:gpu-build-cache:
-  stage: build-images
+  stage: security
   image: docker:29
   needs: []
   before_script: []

@@ -10,7 +10,8 @@
 #   4. smoke: Boot the PRODUCTION image and check it answers (see .gitlab/ci/smoke.yml)
 #   5. coverage: Coverage report
 #   6. security: Secret detection, gitleaks (MR), semgrep, pip-audit and trivy
-#      of both published images (see .gitlab/ci/security.yml)
+#      of both published images (see .gitlab/ci/security.yml); on MRs also the
+#      GPU image builds (.gitlab/ci/gpu-images.yml, needs: [], start at once)
 #   7. release: Promote to :latest ONLY if all checks pass
 #
 # GPU images (docker/Dockerfile.cuda, docker/Dockerfile.rocm) are built, asserted
