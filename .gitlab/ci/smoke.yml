@@ -33,7 +33,7 @@
 # against older images too.
 # ============================================================================
 
-smoke:image-works:
+.smoke-round-trip:
   stage: smoke
   image: docker:29
   needs:
@@ -63,7 +63,7 @@ smoke:image-works:
       fi
 
   script:
-    - docker pull $PROD_IMAGE_SHA
+    - docker pull $SMOKE_IMAGE
     - |
       set -e
       cleanup() { docker rm -f smoke-tts smoke-asr smoke-gateway >/dev/null 2>&1 || true; docker network rm smoke-net >/dev/null 2>&1 || true; }
@@ -98,21 +98,22 @@ smoke:image-works:
       echo "--- TTS: boots, engine is real, and it SYNTHESISES ---"
       docker run -d --name smoke-tts --network smoke-net \
         -e SERVICE_MODE=tts -e TTS_DEVICE=cpu -e LOG_LEVEL=info \
+        ${SMOKE_TTS_ENGINE:+-e TTS_ENGINE=$SMOKE_TTS_ENGINE} \
         -v "$TTS_MODEL_CACHE":/home/voicestack/.local/share/tts \
-        "$PROD_IMAGE_SHA"
+        "$SMOKE_IMAGE"
       wait_healthy smoke-tts 5002
 
       # Assert on a KNOWN speaker, not on "the response contained letters" --
       # {"detail":"Internal Server Error"} contains letters.
       docker exec smoke-tts curl -fsS http://localhost:5002/v1/audio/voices -o /tmp/voices.json
-      docker exec smoke-tts grep -q 'Claribel Dervla' /tmp/voices.json \
+      docker exec smoke-tts grep -q "$SMOKE_VOICE" /tmp/voices.json \
         || { echo "FAIL: /v1/audio/voices did not list the built-in speakers"; \
              docker exec smoke-tts cat /tmp/voices.json || true; exit 1; }
 
       # The real thing: bytes out of the model, not just a live process.
       docker exec smoke-tts curl -fsS -X POST http://localhost:5002/v1/audio/speech \
         -H 'Content-Type: application/json' \
-        -d '{"model":"tts-1","voice":"Claribel Dervla","input":"Smoke test one two three.","response_format":"opus"}' \
+        -d '{"model":"tts-1","voice":"default","input":"Smoke test one two three.","response_format":"opus"}' \
         -o /tmp/speech.opus
       docker exec smoke-tts sh -c '[ -s /tmp/speech.opus ] && [ "$(wc -c < /tmp/speech.opus)" -gt 2000 ]' \
         || { echo "FAIL: synthesis produced no usable audio"; \
@@ -130,7 +131,7 @@ smoke:image-works:
       docker run -d --name smoke-asr --network smoke-net \
         -e SERVICE_MODE=asr -e LOG_LEVEL=info -e ASR_MODEL_LOCATION=/app/models \
         -v "$ASR_MODEL_CACHE":/app/models \
-        "$PROD_IMAGE_SHA"
+        "$SMOKE_IMAGE"
       wait_healthy smoke-asr 5001
       docker cp /tmp/speech.opus smoke-asr:/tmp/speech.opus
       docker exec smoke-asr curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions \
@@ -156,7 +157,7 @@ smoke:image-works:
         -e GATEWAY_TTS_URL=http://smoke-tts:5002 \
         -e GATEWAY_NATS_URL=nats://127.0.0.1:4222 \
         -e GATEWAY_AGENT_TIMEOUT_S=5 \
-        "$PROD_IMAGE_SHA"
+        "$SMOKE_IMAGE"
       wait_healthy smoke-gateway 5003
 
       docker exec smoke-gateway curl -fsS http://localhost:5003/openapi.json -o /tmp/openapi.json
@@ -186,3 +187,24 @@ smoke:image-works:
   tags:
     - docker
     - nuc
+
+# The full image (both engines), booted on XTTS: the engine production runs today.
+# Synthesises with voice "default", which exercises the alias to
+# TTS_XTTS_DEFAULT_VOICE, and lists the stock XTTS speakers.
+smoke:image-works:
+  extends: .smoke-round-trip
+  variables:
+    SMOKE_IMAGE: $PROD_IMAGE_SHA
+    SMOKE_TTS_ENGINE: coqui
+    SMOKE_VOICE: Claribel Dervla
+
+# The slim image, booted with NO TTS_ENGINE: proves the image defaults to Kokoro
+# and that ASR and the gateway work without coqui, transformers or CUDA.
+smoke:kokoro-image:
+  extends: .smoke-round-trip
+  needs:
+    - build:prod-image
+  variables:
+    SMOKE_IMAGE: $KOKORO_IMAGE_SHA
+    SMOKE_TTS_ENGINE: ""
+    SMOKE_VOICE: pf_dora

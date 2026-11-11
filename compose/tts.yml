@@ -12,7 +12,9 @@
 
 services:
   tts:
-    image: registry.local.vitorgarbim.me/voice-stack:latest
+    # VOICE_STACK_TAG picks the image: kokoro (slim CPU: ASR + Kokoro + gateway)
+    # or latest / xtts (full: both TTS engines). Unset keeps latest.
+    image: registry.local.vitorgarbim.me/voice-stack:${VOICE_STACK_TAG:-latest}
     container_name: voice-stack-tts
     restart: unless-stopped
 
@@ -29,6 +31,13 @@ services:
       TTS_DEVICE: cpu
       TTS_MODEL: ${TTS_MODEL}
       TTS_VOICES_DIR: ${TTS_VOICES_DIR}
+      # Engine-specific settings. Defaults here so a stack env that predates
+      # them still deploys.
+      TTS_KOKORO_MODEL_PATH: ${TTS_KOKORO_MODEL_PATH:-/app/models/kokoro/kokoro-v1.0.onnx}
+      TTS_KOKORO_VOICES_PATH: ${TTS_KOKORO_VOICES_PATH:-/app/models/kokoro/voices-v1.0.bin}
+      TTS_KOKORO_DEFAULT_VOICE: ${TTS_KOKORO_DEFAULT_VOICE:-af_heart}
+      TTS_KOKORO_THREADS: ${TTS_KOKORO_THREADS:-0}
+      TTS_XTTS_DEFAULT_VOICE: ${TTS_XTTS_DEFAULT_VOICE:-Claribel Dervla}
       TTS_SAMPLE_RATE: ${TTS_SAMPLE_RATE}
       TTS_MAX_CHARS: ${TTS_MAX_CHARS}
       TTS_MIN_CHARS: ${TTS_MIN_CHARS}
