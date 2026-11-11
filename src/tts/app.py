@@ -28,15 +28,23 @@ async def idle_timeout_checker() -> None:
     Runs every 60 seconds and checks if the model has been idle for longer than
     TTS_IDLE_TIMEOUT_MINUTES. If so, unloads the model to free resources.
     """
-    from tts.engine_factory import _engine
+    from fastapi.concurrency import run_in_threadpool
+
+    from tts import engine_factory
 
     while True:
         try:
             await asyncio.sleep(60)  # Check every minute
 
-            if _engine is not None and settings.TTS_IDLE_TIMEOUT_MINUTES > 0:
-                # Check and unload if idle
-                was_unloaded = _engine.check_and_unload_if_idle()
+            # Read the engine on every tick: binding it once at task start kept
+            # checking a replaced engine after reset_audio_engine().
+            engine = engine_factory._engine
+            if engine is not None and settings.TTS_IDLE_TIMEOUT_MINUTES > 0:
+                # Off the event loop: the check takes the engine's lifecycle
+                # lock, which a synthesis thread holds for a whole model reload
+                # (tens of seconds for XTTS). Waiting for it here froze /health,
+                # the #8 symptom; an unload itself is slow too.
+                was_unloaded = await run_in_threadpool(engine.check_and_unload_if_idle)
                 if was_unloaded:
                     logger.info("TTS model unloaded due to inactivity")
         except Exception as e:  # noqa: PERF203

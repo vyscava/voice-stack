@@ -154,10 +154,10 @@ class TTSCoqui(TTSBase):
             ...
         }
         """
-        self.voice_to_preset: dict[str, str] = {}
-        if hasattr(self.tts, "speakers") and isinstance(self.tts.speakers, list):
-            for name in self.tts.speakers:
-                self.voice_to_preset[name] = name
+        # Built locally and assigned once: a reload rebuilds this while other
+        # requests may be resolving voices, and they must never see it empty.
+        speakers = self.tts.speakers if isinstance(getattr(self.tts, "speakers", None), list) else []
+        self.voice_to_preset = {name: name for name in speakers}
 
     def _load_custom_voices(self) -> None:
         """Map custom voice ids to the reference audio that clones them.
@@ -174,20 +174,23 @@ class TTSCoqui(TTSBase):
         embedding over them, which is more stable than a single sample. More is
         not automatically better though -- 3 good clips beat 6 mixed ones.
         """
-        self.voice_to_wavs: dict[str, list[str]] = {}
+        # Built locally and assigned once, like the presets (see above).
+        found: dict[str, list[str]] = {}
 
         root = Path(self.voices_dir)
         if not root.is_dir():
+            self.voice_to_wavs = found
             logger.info("No voices dir at %s; only builtin speakers available", root)
             return
 
         for entry in sorted(root.iterdir()):
             if entry.is_file() and entry.suffix.lower() == ".wav":
-                self.voice_to_wavs[entry.stem] = [str(entry)]
+                found[entry.stem] = [str(entry)]
             elif entry.is_dir():
                 wavs = sorted(str(w) for w in entry.glob("*.wav"))
                 if wavs:
-                    self.voice_to_wavs[entry.name] = wavs
+                    found[entry.name] = wavs
+        self.voice_to_wavs = found
 
         overlap = set(self.voice_to_wavs) & set(self.voice_to_preset)
         if overlap:

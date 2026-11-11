@@ -238,3 +238,25 @@ def test_other_voice_ids_pass_through_unchanged() -> None:
     from tts.engine.coqui import TTSCoqui
 
     assert TTSCoqui.canonical_voice("Claribel Dervla") == "Claribel Dervla"
+
+
+def test_a_reload_never_exposes_an_empty_speaker_table(tmp_path: Path) -> None:
+    """_load_model rebuilds the speaker table while other requests may be
+    resolving voices. It used to reset it to {} and then refill it, so a
+    concurrent lookup could see no speakers (500) or miss one (404)."""
+    eng = _make_engine(tmp_path, builtin=["Claribel Dervla"])
+    before = dict(eng.voice_to_preset)
+    observed: list[dict[str, str]] = []
+
+    class Speakers(list):
+        def __iter__(self):
+            observed.append(dict(eng.voice_to_preset))  # what a concurrent reader sees mid-rebuild
+            return super().__iter__()
+
+    class FakeTTS:
+        speakers = Speakers(["Claribel Dervla", "Daisy Studious"])
+
+    eng.tts = FakeTTS()
+    eng._load_voices_presets()
+    assert observed == [before]
+    assert set(eng.voice_to_preset) == {"Claribel Dervla", "Daisy Studious"}

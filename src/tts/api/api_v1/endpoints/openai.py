@@ -189,6 +189,10 @@ async def tts(request: OpenAICreateSpeechRequest) -> Any:
     # Started immediately after acquiring, so nothing between here and the
     # await can leave the slot held with no task to release it.
     job = asyncio.ensure_future(_synthesize_then_release())
+    # If this request is cancelled, nobody awaits job any more; retrieve its
+    # outcome anyway so a failure after a disconnect is not logged as
+    # "Task exception was never retrieved".
+    job.add_done_callback(lambda t: t.cancelled() or t.exception())
 
     try:
         # Log request details

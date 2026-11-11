@@ -761,3 +761,35 @@ def test_coqui_engine_serializes_synthesis() -> None:
 
     assert TTSCoqui.serialize_synthesis is True
     assert TTSKokoro.serialize_synthesis is False  # onnxruntime sessions are thread-safe
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_in_use_releases_its_inflight_slot_when_the_reload_fails() -> None:
+    """A failed reload must not leave the engine counted as in use forever,
+    or the idle unloader would never run again."""
+
+    class FailingLoad(TTSBase):
+        def __init__(self) -> None:
+            self._model_loaded = False
+
+        def _load_model(self):
+            raise RuntimeError("disk gone")
+
+        def _unload_model(self):
+            pass
+
+        def speech(self, **kwargs):
+            with self.in_use():
+                return b"audio"
+
+        def list_voices(self):
+            from tts.schemas.audio_engine import VoicesResponse
+
+            return VoicesResponse(data=[])
+
+    eng = FailingLoad()
+    with pytest.raises(RuntimeError):
+        eng.speech()
+    assert eng._state()["inflight"] == 0
+    assert eng._model_loaded is False  # the next request retries the load

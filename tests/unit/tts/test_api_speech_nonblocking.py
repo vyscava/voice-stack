@@ -143,3 +143,50 @@ async def test_unspeakable_input_is_a_422_not_a_500(monkeypatch: pytest.MonkeyPa
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://tts") as client:
         r = await client.post("/audio/speech", json={"model": "tts-1", "input": "...", "voice": "default"})
     assert r.status_code == 422
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+@pytest.mark.asyncio
+async def test_a_failure_after_a_disconnect_is_not_an_unretrieved_task_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gc
+
+    class FailsAfterRelease(BlockingEngine):
+        def speech(self, **kwargs: object) -> bytes:
+            super().speech(**kwargs)
+            raise RuntimeError("synthesis failed after the client left")
+
+    engine = FailsAfterRelease()
+    monkeypatch.setattr(engine_factory, "_engine", engine)
+    monkeypatch.setattr(engine_factory, "_semaphore", asyncio.Semaphore(1))
+
+    loop = asyncio.get_running_loop()
+    reported: list[dict] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: reported.append(ctx))
+    try:
+        from tts.schemas.openai import OpenAICreateSpeechRequest
+
+        request = OpenAICreateSpeechRequest(model="tts-1", input="hello", voice="default", response_format="wav")
+        handler = asyncio.create_task(openai_endpoints.tts(request))
+        for _ in range(200):
+            if engine.started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        handler.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await handler
+        engine.release.set()
+        for _ in range(200):
+            if not engine_factory._semaphore.locked():
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert not [c for c in reported if "never retrieved" in str(c.get("message", ""))]
