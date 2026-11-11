@@ -28,6 +28,7 @@ from core.settings import get_settings
 from gateway import metrics
 from gateway.api.api_v1.api import api_router
 from gateway.deps import build_agent, shutdown_agent
+from gateway.redact import redact_url
 
 settings = get_settings()
 
@@ -146,7 +147,7 @@ async def detailed_health() -> JSONResponse:
             "asr_url": settings.GATEWAY_ASR_URL,
             "tts_url": settings.GATEWAY_TTS_URL,
             "agent_subject": agent.subject,
-            "nats_url": settings.GATEWAY_NATS_URL,
+            "nats_url": redact_url(settings.GATEWAY_NATS_URL),
         },
         "voice": {
             "voice": settings.GATEWAY_VOICE,
