@@ -56,7 +56,7 @@ The license is accepted by creating a `tos_agreed.txt` file in the TTS cache dir
 - All dev dependencies (pytest, black, ruff, mypy)
 - ASR dependencies (faster-whisper with its bundled Silero ONNX VAD; openai-whisper)
 - TTS dependencies (coqui-tts)
-- PyTorch (CPU or CUDA based on auto-detection)
+- PyTorch, the `+cpu` build (forced from the PyTorch CPU index)
 
 **Build**:
 ```bash
@@ -91,6 +91,19 @@ docker run -e SERVICE_MODE=asr -p 5001:5001 voice-stack:latest
 **Run TTS**:
 ```bash
 docker run -e SERVICE_MODE=tts -p 5002:5002 voice-stack:latest
+```
+
+The same file builds the slim CPU image with `--target kokoro` (ASR + Kokoro +
+gateway, no torch), which is what the homelab deployment runs.
+
+### GPU Images (docker/Dockerfile.cuda, docker/Dockerfile.rocm)
+
+**Purpose**: The full stack on NVIDIA (CUDA) or AMD (ROCm) GPUs. Built and
+checked in CI, never published or deployed by it. See [GPU Support](#gpu-support).
+
+```bash
+docker build -f docker/Dockerfile.cuda -t voice-stack:cuda .
+docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .
 ```
 
 ---
@@ -271,13 +284,15 @@ curl http://localhost:5002/health  # TTS
 
 ### Using Docker Run (Manual)
 
+These use the CPU image; for a GPU use `voice-stack:cuda` / `:rocm` and
+the device flags in [GPU Support](#gpu-support).
+
 **ASR Service**:
 ```bash
 docker run -d \
   --name voice-stack-asr \
   --restart unless-stopped \
   -e SERVICE_MODE=asr \
-  -e ASR_DEVICE=cuda \
   -e ASR_MODEL=base \
   -p 5001:5001 \
   -v asr-models:/app/models \
@@ -290,7 +305,6 @@ docker run -d \
   --name voice-stack-tts \
   --restart unless-stopped \
   -e SERVICE_MODE=tts \
-  -e TTS_DEVICE=cuda \
   -e TTS_MODEL=tts_models/multilingual/multi-dataset/xtts_v2 \
   -p 5002:5002 \
   -v tts-models:/app/models \
@@ -316,39 +330,81 @@ homelab-specific values to change.
 
 ### GPU Support
 
-> Both published images are CPU-only since voice-stack#13: torch is the `+cpu`
-> build, and the full image is based on `python:3.11-slim` (its former
-> `nvidia/cuda` Ubuntu 22.04 base ran Python 3.11.0rc1, the root cause of #4).
-> GPU use needs a custom build with a CUDA torch and CUDA runtime libraries;
-> the steps below are the host side only.
+The root `Dockerfile` images are CPU-only (torch `+cpu`, onnxruntime CPU). GPU
+images are separate Dockerfiles under `docker/`, built from the repository root:
 
-To use NVIDIA GPU with Docker:
+| Image | Build | Base | GPU stack |
+|---|---|---|---|
+| `voice-stack:cuda` | `docker build -f docker/Dockerfile.cuda -t voice-stack:cuda .` | `python:3.11-slim` + CUDA from pip wheels | torch 2.15.0+cu132, CTranslate2 (cuBLAS 12), onnxruntime-gpu |
+| `voice-stack:rocm` | `docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .` | `python:3.11-slim` + ROCm 7.14 from AMD's pip packages | torch 2.15.0+rocm7.14, CTranslate2 ROCm wheel |
 
-1. **Install NVIDIA Container Toolkit**:
+Both use the same final-release Python 3.11 as the CPU images. The old full image
+ran on `nvidia/cuda` Ubuntu 22.04, whose Python 3.11 is 3.11.0rc1, the root cause
+of #4; `scripts/assert_runtime.py` refuses a pre-release interpreter.
+
+**What runs where:**
+
+| Component | `:cuda` | `:rocm` |
+|---|---|---|
+| ASR, faster-whisper / CTranslate2 (`ASR_DEVICE=cuda`) | GPU | GPU |
+| ASR, openai-whisper (`ASR_ENGINE=whisper`) | GPU | GPU |
+| TTS, XTTS v2 (`TTS_ENGINE=coqui`, `TTS_DEVICE=cuda`) | GPU | GPU |
+| TTS, Kokoro (`TTS_ENGINE=kokoro`) | GPU with `TTS_KOKORO_DEVICE=cuda` (the image default) | **CPU**: onnxruntime's AMD path (MIGraphX) needs a system MIGraphX install and its newest wheel trails the pinned onnxruntime |
+| Silero VAD (ONNX) | CPU | CPU |
+
+The GPU images default to `ASR_DEVICE=cuda`, `ASR_COMPUTE_TYPE=float16` and
+`TTS_DEVICE=cuda` (ROCm uses the same `cuda` device name in torch and
+CTranslate2). `TTS_KOKORO_DEVICE=cuda` fails the start if onnxruntime did not
+actually put the session on the GPU, instead of silently running on the CPU;
+`auto` takes the GPU when available and logs which it got.
+
+**What is verified, and what is not.** CI builds both images on every merge
+request that changes their inputs (`.gitlab/ci/gpu-images.yml`). The build runs
+`scripts/assert_runtime.py --variant cuda|rocm`, which checks without a GPU that
+torch, torchaudio and torchcodec are the GPU builds, cuDNN loads (CUDA),
+CTranslate2 is the cuBLAS / HIP build and the libraries it loads resolve,
+onnxruntime-gpu's CUDA provider library loads (CUDA), and the XTTS, Whisper and
+Kokoro imports work. The images are then pip-audited and trivy-scanned and
+deleted. They are never pushed or deployed by this project's CI, and **no CI
+runner has a GPU, so neither image has been run on a GPU there.**
+
+#### NVIDIA (`:cuda`)
+
+Host: an NVIDIA driver >= 580 (CUDA 13) and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
 ```bash
-# Ubuntu/Debian
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
-  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo systemctl restart docker
+docker run --gpus all -e SERVICE_MODE=asr -p 5001:5001 \
+  -e ASR_MODEL_LOCATION=/app/models -v asr-models:/app/models voice-stack:cuda
+docker run --gpus all -e SERVICE_MODE=tts -p 5002:5002 \
+  -v tts-models:/home/voicestack/.local/share/tts voice-stack:cuda
 ```
 
-2. **Update docker-compose.yml**:
-```yaml
-services:
-  asr:
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - ASR_DEVICE=cuda
-```
+With compose: `docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build`.
 
-3. **Or use `--gpus all` flag**:
+#### AMD (`:rocm`)
+
+Host: the `amdgpu` kernel driver (the ROCm user-space libraries are inside the
+image, so the host needs no ROCm install). The container needs `/dev/kfd`,
+`/dev/dri` and membership of the host's `video` and `render` groups:
+
 ```bash
-docker run --gpus all -e ASR_DEVICE=cuda ...
+docker run --device /dev/kfd --device /dev/dri \
+  --group-add video --group-add "$(getent group render | cut -d: -f3)" \
+  -e SERVICE_MODE=asr -p 5001:5001 \
+  -e ASR_MODEL_LOCATION=/app/models -v asr-models:/app/models voice-stack:rocm
 ```
+
+With compose: set `RENDER_GID` in `.env`, then
+`docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build`.
+
+**GPU targets.** ROCm's math libraries ship kernels per GPU architecture, one
+package each, so the image carries only the targets in the `ROCM_GPU_TARGETS`
+build argument (default `gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201`:
+RDNA2, RDNA3 and RDNA4 cards such as the RX 9070 XT and Radeon AI PRO R9700).
+`rocminfo | grep gfx` names yours; add it with
+`--build-arg ROCM_GPU_TARGETS="gfx1100 gfx942"` (or `ROCM_GPU_TARGETS` in `.env`
+for compose). A card outside the list fails at its first GPU operation.
 
 ### Environment Variables
 
@@ -367,9 +423,10 @@ ASR_PORT=5001
 TTS_PORT=5002
 LOG_LEVEL=INFO
 
-# Device
-ASR_DEVICE=cpu    # or 'cuda'
-TTS_DEVICE=cpu    # or 'cuda'
+# Device ('cuda' needs a GPU image; it is also the device name on ROCm)
+ASR_DEVICE=cpu         # or 'cuda'
+TTS_DEVICE=cpu         # or 'cuda'
+TTS_KOKORO_DEVICE=cpu  # or 'cuda' / 'auto' (CUDA image only)
 
 # Models
 ASR_MODEL=base

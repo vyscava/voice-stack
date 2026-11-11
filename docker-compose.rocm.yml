@@ -20,8 +20,9 @@
 #
 # On GPU: faster-whisper (ASR) and XTTS (TTS_ENGINE=coqui). Kokoro stays on the
 # CPU in this image (onnxruntime has no ROCm build here); see
-# DOCKER_DEPLOYMENT.md "GPU Support". A value in .env still wins over the
-# defaults below.
+# DOCKER_DEPLOYMENT.md "GPU Support". The device settings below are literal on
+# purpose: .env.example sets ASR_DEVICE=cpu / TTS_DEVICE=cpu, and an
+# interpolated default would let a copied .env quietly run on the CPU.
 # ============================================================================
 
 services:
@@ -39,8 +40,8 @@ services:
       - "${RENDER_GID:?set RENDER_GID in .env: getent group render | cut -d: -f3}"
     environment:
       # ROCm keeps the "cuda" device name in CTranslate2 and torch.
-      ASR_DEVICE: ${ASR_DEVICE:-cuda}
-      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
+      ASR_DEVICE: cuda
+      ASR_COMPUTE_TYPE: float16
 
   tts:
     build:
@@ -55,5 +56,5 @@ services:
       - video
       - "${RENDER_GID:?set RENDER_GID in .env: getent group render | cut -d: -f3}"
     environment:
-      TTS_DEVICE: ${TTS_DEVICE:-cuda}
+      TTS_DEVICE: cuda
       TTS_KOKORO_DEVICE: cpu

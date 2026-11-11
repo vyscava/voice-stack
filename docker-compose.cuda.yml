@@ -8,9 +8,10 @@
 #   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
 #
 # Compose merges this over docker-compose.yml: every other setting (ports,
-# volumes, limits, your .env) still applies. Note that a value in .env (or
-# exported in your shell) still wins over the defaults below, so remove
-# ASR_DEVICE=cpu / TTS_DEVICE=cpu from .env if you copied them there.
+# volumes, limits, your .env) still applies. The device settings below are
+# literal on purpose: .env.example sets ASR_DEVICE=cpu / TTS_DEVICE=cpu, and an
+# interpolated default here would let a copied .env quietly run the GPU image
+# on the CPU. Edit them here if you want something else.
 #
 # On GPU: faster-whisper (ASR), XTTS (TTS_ENGINE=coqui) and Kokoro
 # (TTS_ENGINE=kokoro, via onnxruntime-gpu). See DOCKER_DEPLOYMENT.md
@@ -23,9 +24,9 @@ services:
       dockerfile: docker/Dockerfile.cuda
     image: voice-stack:cuda
     environment:
-      ASR_DEVICE: ${ASR_DEVICE:-cuda}
+      ASR_DEVICE: cuda
       # CTranslate2's GPU precision; int8 is the CPU default in the base file.
-      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
+      ASR_COMPUTE_TYPE: float16
     deploy:
       resources:
         reservations:
@@ -39,8 +40,8 @@ services:
       dockerfile: docker/Dockerfile.cuda
     image: voice-stack:cuda
     environment:
-      TTS_DEVICE: ${TTS_DEVICE:-cuda}
-      TTS_KOKORO_DEVICE: ${TTS_KOKORO_DEVICE:-cuda}
+      TTS_DEVICE: cuda
+      TTS_KOKORO_DEVICE: cuda
     deploy:
       resources:
         reservations:
