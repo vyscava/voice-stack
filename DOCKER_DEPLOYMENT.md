@@ -298,29 +298,21 @@ docker run -d \
   your-registry/voice-stack:latest
 ```
 
-### Using Portainer (Homelab Production)
+### Separate stacks (homelab production)
 
-The `compose/` directory contains Portainer-ready stack files:
+`compose/deploy/` holds one compose stack per service (`asr.yml`, `tts.yml`,
+`gateway.yml`). Each takes its image from `${VOICE_STACK_IMAGE}` and keeps its
+non-secret settings literal in the file; the gateway's bus identity and NATS URL
+come from the environment. CI deploys them (`.gitlab/ci/deploy.yml`, through the
+shared compose deployer): a merge to main pins the slim image that pipeline
+built, runs `compose up -d` per stack over an SSH docker context, and asserts
+the running digest and health. ASR and TTS deploy before the gateway, which
+joins their networks.
 
-| File | Service | Port |
-|------|---------|------|
-| `compose/asr.yml` | ASR (Faster-Whisper) | 5001 |
-| `compose/tts.yml` | TTS (Coqui XTTS-v2) | 5002 |
-
-Both compose files use `${VAR}` syntax — configure everything through Portainer's stack environment variables.
-
-**Setup in Portainer:**
-1. Create a new stack, point it at this Git repository
-2. Set the compose path to `compose/asr.yml` or `compose/tts.yml`
-3. Fill in environment variables (use `scripts/.env.production.*` as reference)
-4. Deploy
-
-Both stacks include `runtime: nvidia` with GPU reservations, health checks, DNS config, log rotation, and memory limits.
-
-**Redeploying after a new image:**
-1. Push the new image to your registry
-2. Pull on the target host: `docker pull your-registry/voice-stack:latest`
-3. Redeploy the stack in Portainer
+To run them by hand: `VOICE_STACK_IMAGE=<your image> docker compose -p
+voice-stack-asr -f compose/deploy/asr.yml up -d`, the same for `tts`, then the
+gateway with its variables set. See `compose/README.md` for the
+homelab-specific values to change.
 
 ### GPU Support
 

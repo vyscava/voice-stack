@@ -11,7 +11,7 @@ A self-hosted speech stack for homelabs — ASR (speech-to-text) and TTS (text-t
 - NVIDIA GPU acceleration with automatic CUDA detection (XTTS and Whisper)
 - Voice cloning via Coqui XTTS-v2 (drop a .wav file, get a new voice)
 - Built-in concurrency limits, memory guards, and idle model unloading
-- Portainer-ready compose files for homelab deployment
+- A worked production deployment: per-service compose stacks deployed by CI
 
 ---
 
@@ -92,26 +92,19 @@ The default `docker-compose.yml` runs on CPU. To enable GPU, uncomment the `runt
 
 ---
 
-## Deploy with Portainer
+## Deploy as separate stacks
 
-The `compose/` directory contains production-ready stack files designed for Portainer:
+`compose/deploy/` holds the author's production deployment: one compose stack
+per service (`asr.yml`, `tts.yml`, `gateway.yml`), each pinned to an image by
+`${VOICE_STACK_IMAGE}` and deployed by CI over an SSH docker context
+(`.gitlab/ci/deploy.yml`). Any compose-aware tool (`docker compose -p`,
+Portainer, a CI job) can run them the same way: set `VOICE_STACK_IMAGE` to your
+own image and deploy ASR and TTS before the gateway, which joins their
+networks.
 
-| File | Service | Port |
-|------|---------|------|
-| `compose/asr.yml` | ASR (Faster-Whisper) | 5001 |
-| `compose/tts.yml` | TTS (Kokoro or Coqui XTTS-v2) | 5002 |
-
-These use `${VAR}` syntax so you can configure everything through Portainer's stack environment variables — no config files on the host needed.
-
-**To deploy:**
-
-1. Push your built image to a registry (or use a local one)
-2. In Portainer, create a new stack from this Git repository
-3. Set the compose path to `compose/asr.yml` or `compose/tts.yml`
-4. Fill in the environment variables (see [Configuration](#configuration) below)
-5. Deploy
-
-Both stacks include GPU reservations, health checks, log rotation, and memory limits out of the box.
+They carry homelab-specific values (registry, DNS server, tuning for a 4-core
+host); see [compose/README.md](compose/README.md) for what to change. For a
+single-host start, use the root `docker-compose.yml` instead.
 
 ---
 
@@ -418,7 +411,7 @@ voice-stack/
 │   ├── tts/               # TTS microservice (Kokoro, Coqui XTTS-v2)
 │   ├── core/              # Shared settings, logging, middleware
 │   └── utils/             # Audio processing, language detection, text helpers
-├── compose/               # Portainer-ready production stacks (asr.yml, tts.yml)
+├── compose/deploy/        # Production stacks deployed by CI (asr.yml, tts.yml, gateway.yml)
 ├── scripts/               # Installers, systemd helpers, build automation
 ├── docs/                  # Architecture, concurrency, load testing, cheat sheets
 ├── voices/                # Voice samples for TTS cloning

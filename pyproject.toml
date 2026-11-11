@@ -36,7 +36,7 @@ dependencies = [
 #   2. THE INDEX (in Dockerfile / Dockerfile.ci / scripts/common-setup.sh) fixes
 #      the BUILD VARIANT. `torch==2.9.1` on PyPI is the CUDA wheel: installing it
 #      drags in ~15 nvidia-*-cu12 packages plus triton, about 4 GB, for services
-#      that run on CPU (compose/tts.yml pins TTS_DEVICE=cpu). Only
+#      that run on CPU (compose/deploy/tts.yml pins TTS_DEVICE=cpu). Only
 #      --index-url https://download.pytorch.org/whl/cpu gets 2.9.1+cpu. A pin
 #      cannot express this; it is not a version, it is a different artifact.
 #
