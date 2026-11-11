@@ -17,15 +17,17 @@
 # ("mount / from exec /bin/sh -c ...") whose command only these Dockerfiles
 # run: /build/.venv pip installs of +cu132 / rocm7.14 / rocm7.2 /
 # nvidia-cublas-cu12 / the CTranslate2 ROCm wheel, the onnxruntime-gpu swap,
-# the ldconfig lists, the CTranslate2 zip download and the GPU variants of
-# assert_runtime.py. The root Dockerfile's steps never match. Nothing else on
+# the ldconfig lists, the CTranslate2 zip download, the GPU variants of
+# assert_runtime.py and the GPU stages' final chmod/mkdir step (whose
+# command differs from the root Dockerfile's, and which otherwise keeps every
+# parent layer referenced). The root Dockerfile's steps never match. Nothing else on
 # the daemon is touched.
 # ============================================================================
 set -eu
 
 # Passed to awk through ENVIRON, not -v: -v processes backslash escapes and
 # turns "\[" into "[", which is how the first version matched nothing.
-export MATCH='^\[(cuda|rocm|ct2-rocm) +[0-9]+/[0-9]+\]|/build/\.venv/bin/pip .*(\+cu132|rocm7\.14|rocm7\.2|nvidia-cublas-cu12|/tmp/ct2)|ORT_VERSION=.*onnxruntime-gpu|voice-stack-(cuda|rocm)\.conf|ct2-rocm\.zip|accept_coqui_license\.sh && +sed -i|--from=ct2-rocm|assert_runtime\.py --variant (cuda|rocm)'
+export MATCH='^\[(cuda|rocm|ct2-rocm) +[0-9]+/[0-9]+\]|/build/\.venv/bin/pip .*(\+cu132|rocm7\.14|rocm7\.2|nvidia-cublas-cu12|/tmp/ct2)|ORT_VERSION=.*onnxruntime-gpu|voice-stack-(cuda|rocm)\.conf|ct2-rocm\.zip|accept_coqui_license\.sh && +sed -i|--from=ct2-rocm|assert_runtime\.py --variant (cuda|rocm)|chmod \+x /app/entrypoint\.sh && +mkdir -p /app/voices /app/models'
 
 docker buildx du --verbose > buildx-du.txt
 awk '
