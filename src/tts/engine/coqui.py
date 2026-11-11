@@ -276,6 +276,17 @@ class TTSCoqui(TTSBase):
     def list_models(self) -> ModelsResponse:
         return ModelsResponse(data=[ModelResponse(id=model) for model in self.available_models])
 
+    @staticmethod
+    def canonical_voice(voice: str) -> str:
+        """Map the "default" alias to the configured speaker; other ids pass through.
+
+        "default" is an explicit alias, not a fallback: the request layer sends
+        it when no voice is given, and the gateway uses it so that switching
+        TTS_ENGINE needs no voice change. If the configured speaker does not
+        exist, resolve_voice still raises KeyError (404).
+        """
+        return settings.TTS_XTTS_DEFAULT_VOICE if voice == "default" else voice
+
     def resolve_voice(self, voice: str) -> list[str] | None:
         """Resolve a requested voice id.
 
@@ -294,6 +305,7 @@ class TTSCoqui(TTSBase):
         if not self.voice_to_preset and not self.voice_to_wavs:
             raise RuntimeError("No builtin speakers or custom voices available for this model.")
 
+        voice = self.canonical_voice(voice)
         if voice in self.voice_to_preset:
             return None
         if voice in self.voice_to_wavs:
@@ -345,7 +357,8 @@ class TTSCoqui(TTSBase):
             )
 
         # Voice selection: builtin speaker, or a custom voice cloned from wavs.
-        speaker_wav = self.resolve_voice(props.voice)
+        voice_id = self.canonical_voice(props.voice)
+        speaker_wav = self.resolve_voice(voice_id)
 
         # Split long text into manageable chunks
         cur_size = max(1, int(self.max_chars))  # current chunk budget
@@ -371,7 +384,7 @@ class TTSCoqui(TTSBase):
                     else:
                         wav = self.tts.tts(
                             text=chunk,
-                            speaker=props.voice,
+                            speaker=voice_id,
                             language=lang_for_chunk,
                         )
                     wavs.append(np.asarray(wav, dtype=np.float32))

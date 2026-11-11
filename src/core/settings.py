@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     TTS_LANG_HINT: str | None = Field(default=None)
     TTS_FORCE_LANG: str | None = Field(default=None)
 
+    # Coqui/XTTS engine (TTS_ENGINE=coqui): the speaker a request for "default" gets.
+    TTS_XTTS_DEFAULT_VOICE: str = Field(
+        default="Claribel Dervla", description="XTTS speaker used when a request asks for 'default'."
+    )
+
     # Kokoro engine (TTS_ENGINE=kokoro). TTS_MODEL and TTS_DEVICE are Coqui settings and are ignored here.
     TTS_KOKORO_MODEL_PATH: str = Field(
         default="/app/models/kokoro/kokoro-v1.0.onnx", description="Path to the Kokoro ONNX model file."
@@ -159,7 +164,11 @@ class Settings(BaseSettings):
     # The voice the gateway speaks in. Defaults to a STOCK speaker on purpose:
     # cloned voices of real people are private, and a default must never leak
     # one by accident.
-    GATEWAY_VOICE: str = Field(default="Claribel Dervla", description="Voice id used for spoken replies.")
+    GATEWAY_VOICE: str = Field(
+        default="default",
+        description="Voice id used for spoken replies. 'default' is the TTS engine's own default voice, "
+        "so switching TTS_ENGINE does not also require changing this.",
+    )
     GATEWAY_AUDIO_FORMAT: str = Field(default="opus", description="Output format for spoken replies.")
     GATEWAY_LANGUAGE: str | None = Field(default=None, description="Force a language; None auto-detects.")
 
