@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
 from fastapi.responses import Response, StreamingResponse
 
 from core.settings import get_settings
@@ -144,11 +146,16 @@ class TTSBase(ABC):
             logger.info(f"TTS idle timeout enabled: {self.idle_timeout_minutes} minutes")
 
     def _touch(self) -> None:
-        """Update last used timestamp - call this on every synthesis request."""
+        """Update last used timestamp - call this on every synthesis request.
+
+        It must not mark the model as loaded. Engines call _touch() before
+        ensure_model_loaded(), so setting the flag here made the reload check
+        always pass: after an idle unload the next request found no model.
+        Only ensure_model_loaded() (and __init__) may set _model_loaded.
+        """
         from datetime import datetime
 
         self.last_used = datetime.now()
-        self._model_loaded = True
 
     @abstractmethod
     def _load_model(self) -> None:
@@ -243,6 +250,72 @@ class TTSBase(ABC):
         language_hint: str | None = None,
     ) -> Any:
         raise NotImplementedError
+
+    def package_audio(self, wav: npt.NDArray[np.float32], props: PropsConf) -> Any:
+        """Encode synthesized samples to the requested format and transport.
+
+        Shared by every engine: an engine produces float32 samples at
+        self.sample_rate, this turns them into the bytes / chunk iterator the
+        API layer returns. Kept out of the engines so a new engine cannot get
+        the formats subtly different from the others.
+        """
+        import io
+
+        import soundfile as sf
+
+        from utils.audio.audio_helper import wav_bytes_to_pcm16le_bytes
+        from utils.audio.ffmpeg_helper import encode_audio_from_wav_bytes
+
+        buf = io.BytesIO()
+        sf.write(buf, wav, self.sample_rate, subtype="PCM_16", format="WAV")
+        wav_bytes = buf.getvalue()
+
+        if props.response_format == "pcm":
+            encoded = wav_bytes_to_pcm16le_bytes(wav_bytes)  # fast path via soundfile
+        else:
+            encoded = encode_audio_from_wav_bytes(
+                wav_bytes=wav_bytes,
+                target_format=props.response_format,
+                sample_rate=self.sample_rate,
+                channels=1,
+            )
+
+        if props.stream_format == "audio":
+            return encoded
+        if props.stream_format == "sse":
+            return self._sse_base64_chunks(encoded)
+        return self._chunked(encoded)
+
+    @staticmethod
+    def _chunked(b: bytes, *, chunk_size: int = 65536) -> Iterable[bytes]:
+        """
+        Binary chunk generator for streaming audio transport.
+        """
+        view = memoryview(b)
+        n = len(view)
+        i = 0
+        while i < n:
+            yield bytes(view[i : i + chunk_size])
+            i += chunk_size
+
+    @staticmethod
+    def _sse_base64_chunks(b: bytes, *, b64_chunk_size: int = 65536) -> Iterable[bytes]:
+        """
+        SSE-friendly generator: yields lines like b"data: <base64>\n\n".
+        Caller sets the HTTP headers:
+          Content-Type: text/event-stream
+          Cache-Control: no-cache
+          Connection: keep-alive
+        """
+        import base64
+
+        # We base64-encode in chunks to keep each SSE event small-ish.
+        i = 0
+        n = len(b)
+        while i < n:
+            chunk = b[i : i + b64_chunk_size]
+            i += b64_chunk_size
+            yield b"data: " + base64.b64encode(chunk) + b"\n\n"
 
     def helper_return_sse_stream(
         self, *, audio: bytes | bytearray | Iterable[bytes], already_sse: bool = True

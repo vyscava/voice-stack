@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 
 from core.error_handler import ErrorContext
 from core.logging import logger_tts as logger
@@ -23,9 +24,10 @@ from tts.schemas.openai import OpenAICreateSpeechRequest
 router = APIRouter()
 
 settings = get_settings()
-# Note: get_audio_engine() is used for model/voice listing (read-only),
-# but synthesis endpoints use acquire_engine() for concurrency control
-_engine_for_listing = get_audio_engine()
+# Listing endpoints read the engine through get_audio_engine() on every call
+# (read-only, no concurrency slot); synthesis uses acquire_engine(). This used to
+# be a module-level reference built at import time, which went stale after
+# reset_audio_engine() and forced every import of this module to load a model.
 
 
 @router.get("/audio/voices", response_model=VoicesResponse)
@@ -42,7 +44,7 @@ async def list_voices() -> Any:
 
     try:
         logger.info("Listing available voices", extra=ctx.to_log_dict())
-        return _engine_for_listing.list_voices()
+        return get_audio_engine().list_voices()
     except Exception as e:
         logger.error(
             "Failed to list voices",
@@ -75,7 +77,7 @@ async def list_models() -> Any:
 
     try:
         logger.info("Listing available models", extra=ctx.to_log_dict())
-        return _engine_for_listing.list_models()
+        return get_audio_engine().list_models()
     except Exception as e:
         logger.error(
             "Failed to list models",
@@ -109,7 +111,7 @@ async def get_model(model_id: str) -> Any:
 
     try:
         logger.info("Retrieving model info", extra=ctx.to_log_dict())
-        return _engine_for_listing.get_model(model_id=model_id)
+        return get_audio_engine().get_model(model_id=model_id)
     except KeyError as e:
         # Model not found
         logger.warning(
@@ -169,7 +171,11 @@ async def tts(request: OpenAICreateSpeechRequest) -> Any:
         # Log request details
         logger.info("Processing TTS synthesis request", extra=ctx.to_log_dict())
 
-        result = engine.speech(
+        # Synthesis is CPU-bound and synchronous. Called directly from this async
+        # handler it held the event loop for its whole duration, so /health went
+        # unanswered and every long synthesis paged EndpointDown (#8).
+        result = await run_in_threadpool(
+            engine.speech,
             input=request.input,
             voice=request.voice,
             response_format=request.response_format,

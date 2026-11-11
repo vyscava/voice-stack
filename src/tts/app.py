@@ -60,6 +60,14 @@ async def app_init(app: FastAPI) -> AsyncIterator[None]:
     """
     logger.info("Initializing web server...")
 
+    # Build the engine at boot: a wrong TTS_ENGINE or an engine missing from this
+    # image fails the start instead of the first request, and the model is warm
+    # before traffic arrives. (This used to happen as a side effect of importing
+    # the endpoints module.)
+    from tts.engine_factory import get_audio_engine
+
+    get_audio_engine()
+
     # Include API routes
     app.include_router(api_router, prefix=settings.API_V1_STR)
     logger.info("API routes loaded...")

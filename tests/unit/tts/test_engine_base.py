@@ -580,3 +580,59 @@ class TestTTSBase:
             assert response.media_type == "text/event-stream"
             assert "Cache-Control" in response.headers
             assert response.headers["Cache-Control"] == "no-cache"
+
+
+class TestIdleReload:
+    """An idle-unloaded model must be reloaded by the next request.
+
+    Every engine's speech() calls _touch() and then ensure_model_loaded().
+    _touch() used to set _model_loaded = True, so the reload check always
+    passed and the first request after an idle unload ran against no model
+    (Coqui: self.tts is None). This drives the real base-class methods in the
+    order the engines call them.
+    """
+
+    @staticmethod
+    def _engine():
+        from datetime import datetime, timedelta
+
+        class CountingTTS(TTSBase):
+            def __init__(self) -> None:  # skip settings; only the idle state matters here
+                self.loads = 0
+                self.model = "loaded"
+                self.idle_timeout_minutes = 1
+                self.last_used = datetime.now() - timedelta(minutes=5)
+                self._model_loaded = True
+
+            def _load_model(self):
+                self.loads += 1
+                self.model = "loaded"
+
+            def _unload_model(self):
+                self.model = None
+
+            def speech(self, **kwargs):
+                self._touch()
+                self.ensure_model_loaded()
+                assert self.model is not None, "synthesis ran against an unloaded model"
+                return b"audio"
+
+            def list_voices(self):
+                from tts.schemas.audio_engine import VoicesResponse
+
+                return VoicesResponse(data=[])
+
+        return CountingTTS()
+
+    def test_touch_does_not_mark_the_model_loaded(self) -> None:
+        eng = self._engine()
+        assert eng.check_and_unload_if_idle() is True
+        eng._touch()
+        assert eng._model_loaded is False
+
+    def test_request_after_idle_unload_reloads_the_model(self) -> None:
+        eng = self._engine()
+        assert eng.check_and_unload_if_idle() is True
+        assert eng.speech() == b"audio"
+        assert eng.loads == 1
+        assert eng._model_loaded is True

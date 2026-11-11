@@ -177,3 +177,31 @@ class TextValidationError(ValidationError):
             context=context,
             original_exception=original_exception,
         )
+
+
+class EngineUnavailableError(ProcessingError):
+    """
+    Exception raised when TTS_ENGINE names an engine that cannot run here.
+
+    Either the name is unknown, or the engine's dependencies are not installed
+    in this image (each image ships a subset of engines). Raised at startup so
+    a misconfigured deployment fails loudly instead of silently booting a
+    different engine than the one asked for.
+
+    Maps to HTTP 500 (Internal Server Error)
+    """
+
+    def __init__(
+        self,
+        message: str = "TTS engine unavailable",
+        details: str | None = None,
+        context: dict[str, Any] | None = None,
+        original_exception: Exception | None = None,
+    ) -> None:
+        super().__init__(
+            message=message,
+            error_code="ENGINE_UNAVAILABLE",
+            details=details,
+            context=context,
+            original_exception=original_exception,
+        )

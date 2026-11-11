@@ -73,7 +73,10 @@ class Settings(BaseSettings):
     # TTS settings
     # -------------
     TTS_LOG_NAME: str = Field(default="tts.app", description="Python Logger name for the TTS Service.")
-    TTS_ENGINE: str = Field(default="coqui", description="Only Coqui for now.")
+    TTS_ENGINE: str = Field(
+        default="kokoro",
+        description="TTS engine to boot: kokoro (default, ONNX on CPU) or coqui (XTTS-v2; aliases xtts, xtts-2).",
+    )
     TTS_DEVICE: str = Field(default="cpu", description="cuda|cpu|mps")
     TTS_MODEL: str = Field(default="tts_models/multilingual/multi-dataset/xtts_v2")
     TTS_VOICES_DIR: str = Field(default="voices")
@@ -87,6 +90,20 @@ class Settings(BaseSettings):
     TTS_AUTO_LANG: bool = Field(default=True)
     TTS_LANG_HINT: str | None = Field(default=None)
     TTS_FORCE_LANG: str | None = Field(default=None)
+
+    # Kokoro engine (TTS_ENGINE=kokoro). TTS_MODEL and TTS_DEVICE are Coqui settings and are ignored here.
+    TTS_KOKORO_MODEL_PATH: str = Field(
+        default="/app/models/kokoro/kokoro-v1.0.onnx", description="Path to the Kokoro ONNX model file."
+    )
+    TTS_KOKORO_VOICES_PATH: str = Field(
+        default="/app/models/kokoro/voices-v1.0.bin", description="Path to the Kokoro voices archive."
+    )
+    TTS_KOKORO_DEFAULT_VOICE: str = Field(
+        default="af_heart", description="Voice used when a request asks for 'default'."
+    )
+    TTS_KOKORO_THREADS: int = Field(
+        default=0, description="ONNX Runtime intra-op threads for Kokoro (0 = runtime default, all cores)."
+    )
 
     # TTS Resource Management
     TTS_IDLE_TIMEOUT_MINUTES: int = Field(

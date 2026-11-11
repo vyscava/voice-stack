@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import base64
-import io
 import math
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import soundfile as sf
 from torch.serialization import add_safe_globals
 from TTS.api import TTS
 from TTS.config.shared_configs import BaseAudioConfig, BaseDatasetConfig
@@ -28,8 +24,6 @@ from tts.schemas.audio_engine import (
     VoiceResponse,
     VoicesResponse,
 )
-from utils.audio.audio_helper import wav_bytes_to_pcm16le_bytes
-from utils.audio.ffmpeg_helper import encode_audio_from_wav_bytes
 from utils.language.language_codes import LanguageCode
 from utils.language.language_helper import detect_lang, latin_heuristic, script_heuristic
 from utils.text import build_safe_chunks, normalize_text
@@ -403,55 +397,4 @@ class TTSCoqui(TTSBase):
                 )
                 chunks = build_safe_chunks(props.input, cur_size)
 
-        # Always produce WAV internally, then encode to target format
-        buf = io.BytesIO()
-        sf.write(buf, wav, self.sample_rate, subtype="PCM_16", format="WAV")
-        wav_bytes = buf.getvalue()
-
-        # Encode via utils
-        if props.response_format == "pcm":
-            encoded = wav_bytes_to_pcm16le_bytes(wav_bytes)  # fast path via soundfile
-        else:
-            encoded = encode_audio_from_wav_bytes(
-                wav_bytes=wav_bytes,
-                target_format=props.response_format,
-                sample_rate=self.sample_rate,
-                channels=1,
-            )
-
-        # Stream selection
-        if props.stream_format == "audio":
-            return encoded
-        if props.stream_format == "sse":
-            return self._sse_base64_chunks(encoded)
-        return self._chunked(encoded)
-
-    @staticmethod
-    def _chunked(b: bytes, *, chunk_size: int = 65536) -> Iterable[bytes]:
-        """
-        Binary chunk generator for streaming audio transport.
-        """
-        view = memoryview(b)
-        n = len(view)
-        i = 0
-        while i < n:
-            yield bytes(view[i : i + chunk_size])
-            i += chunk_size
-
-    @staticmethod
-    def _sse_base64_chunks(b: bytes, *, b64_chunk_size: int = 65536) -> Iterable[bytes]:
-        """
-        SSE-friendly generator: yields lines like b"data: <base64>\n\n".
-        Caller sets the HTTP headers:
-          Content-Type: text/event-stream
-          Cache-Control: no-cache
-          Connection: keep-alive
-        """
-        # We base64-encode in chunks to keep each SSE event small-ish.
-        i = 0
-        n = len(b)
-        while i < n:
-            chunk = b[i : i + b64_chunk_size]
-            i += b64_chunk_size
-            enc = base64.b64encode(chunk)
-            yield b"data: " + enc + b"\n\n"
+        return self.package_audio(wav, props)
