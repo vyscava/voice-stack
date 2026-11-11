@@ -12,22 +12,31 @@
 # killed job could not remove).
 #
 # Scoped to records only these Dockerfiles create, identified by their build
-# step descriptions: steps of the `cuda`, `rocm` and `ct2-rocm` stages, and
-# steps of a stage named exactly `builder` that work on /build/.venv (the root
-# Dockerfile's stages are builder-base/-kokoro/-full and never match). Nothing
-# else on the daemon is touched.
+# step descriptions (`docker buildx du --verbose`): COPY steps of the `cuda`,
+# `rocm` and `ct2-rocm` stages ("[rocm  5/13] COPY ..."), and RUN steps
+# ("mount / from exec /bin/sh -c ...") whose command only these Dockerfiles
+# run: /build/.venv pip installs of +cu132 / rocm7.14 / rocm7.2 /
+# nvidia-cublas-cu12 / the CTranslate2 ROCm wheel, the onnxruntime-gpu swap,
+# the ldconfig lists, the CTranslate2 zip download and the GPU variants of
+# assert_runtime.py. The root Dockerfile's steps never match. Nothing else on
+# the daemon is touched.
 # ============================================================================
 set -eu
 
-MATCH='^\[(cuda|rocm|ct2-rocm) [0-9]+/[0-9]+\]|^\[builder [0-9]+/[0-9]+\] .*/build/\.venv|\+cu132|rocm7\.14|nvidia-cublas-cu12|onnxruntime-gpu|/tmp/ct2|voice-stack-(cuda|rocm)\.conf'
+# Passed to awk through ENVIRON, not -v: -v processes backslash escapes and
+# turns "\[" into "[", which is how the first version matched nothing.
+export MATCH='^\[(cuda|rocm|ct2-rocm) +[0-9]+/[0-9]+\]|/build/\.venv/bin/pip .*(\+cu132|rocm7\.14|rocm7\.2|nvidia-cublas-cu12|/tmp/ct2)|ORT_VERSION=.*onnxruntime-gpu|voice-stack-(cuda|rocm)\.conf|ct2-rocm\.zip|accept_coqui_license\.sh && +sed -i|--from=ct2-rocm|assert_runtime\.py --variant (cuda|rocm)'
 
 docker buildx du --verbose > buildx-du.txt
-awk -v re="$MATCH" '
+awk '
   /^ID:/          { id = $2 }
   /^Size:/        { size = $2 }
-  /^Description:/ { sub(/^Description:[ \t]*/, ""); if ($0 ~ re) print id, size, $0 }
+  /^Description:/ { sub(/^Description:[ \t]*/, ""); if ($0 ~ ENVIRON["MATCH"]) print id, size, $0 }
 ' buildx-du.txt > gpu-cache-records.txt
 echo "GPU build cache records: $(wc -l < gpu-cache-records.txt)"
+# Fail-closed: a matcher that silently matches nothing looks exactly like a
+# clean daemon. The total of what matched is printed so the log shows it.
+awk '{ v = $2 + 0; if ($2 ~ /GB$/) t += v; else if ($2 ~ /MB$/) t += v / 1000 } END { printf "matched: %.1f GB\n", t }' gpu-cache-records.txt
 cat gpu-cache-records.txt
 
 if [ "${1:-}" != "--apply" ]; then
@@ -38,8 +47,8 @@ docker system df
 # Children before parents is not required: prune drops a record once nothing
 # references it, so repeat until a pass removes nothing more.
 for pass in 1 2 3 4 5; do
-  ids=$(docker buildx du --verbose | awk -v re="$MATCH" '
-    /^ID:/ { id = $2 } /^Description:/ { sub(/^Description:[ \t]*/, ""); if ($0 ~ re) print id }')
+  ids=$(docker buildx du --verbose | awk '
+    /^ID:/ { id = $2 } /^Description:/ { sub(/^Description:[ \t]*/, ""); if ($0 ~ ENVIRON["MATCH"]) print id }')
   [ -n "$ids" ] || break
   echo "pass ${pass}: $(echo "$ids" | wc -l) records"
   # One id per call: never a filter combination whose AND/OR semantics could
