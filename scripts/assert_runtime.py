@@ -81,10 +81,15 @@ VARIANTS = ("full", "kokoro", "cuda", "rocm")
 # Which build of each torch package a variant must carry, as the prefix of the
 # version's local part ("2.15.0+cu132" -> "cu132"), and the index that has it.
 # ROCm torchcodec is "cpu": PyTorch publishes no ROCm torchcodec, and it only
-# decodes audio on the CPU anyway.
+# decodes audio on the CPU anyway. CUDA torchaudio is "cpu" too: torchaudio
+# 2.11 (its last release) stops at cu130, and on import it REFUSES to run
+# against a torch built for another CUDA version ("PyTorch has CUDA version
+# 13.2 whereas TorchAudio has CUDA version 13.0", measured in !77's first
+# pipeline). Its CPU build skips that check, and the two calls coqui-tts makes
+# (MelSpectrogram, resample) are plain torch ops that run on GPU tensors.
 TORCH_BUILDS: dict[str, dict[str, str]] = {
     "full": {"torch": "cpu", "torchaudio": "cpu", "torchcodec": "cpu"},
-    "cuda": {"torch": "cu", "torchaudio": "cu", "torchcodec": "cu"},
+    "cuda": {"torch": "cu", "torchaudio": "cpu", "torchcodec": "cu"},
     "rocm": {"torch": "rocm", "torchaudio": "rocm", "torchcodec": "cpu"},
 }
 INDEX_HINT = {"cpu": "https://download.pytorch.org/whl/cpu", "cu": "a CUDA index", "rocm": "a ROCm index"}
@@ -386,17 +391,46 @@ def check_onnxruntime_variant(failures: list[str], variant: str) -> None:
         failures.append(f"CUDAExecutionProvider missing from onnxruntime-gpu: {providers}")
         return
     # The provider list is static; the provider library is what needs cuBLAS
-    # 13, cuDNN 9, cuFFT and cuRAND. Loading it proves they all resolve, the
-    # same load TTS_KOKORO_DEVICE=cuda triggers.
-    import ctypes
-
+    # 13, cuDNN 9, cuFFT and cuRAND. It also links the DRIVER, libcuda.so.1,
+    # which the NVIDIA container toolkit injects at run time and which no
+    # image (and no GPU-less CI runner) has, so it cannot simply be loaded
+    # here. Instead every library it links must resolve except that one.
     lib = Path(ort.__file__).parent / "capi" / "libonnxruntime_providers_cuda.so"
+    missing = unresolved_libraries(failures, lib)
+    if missing is None:
+        return
+    if missing - DRIVER_PROVIDED:
+        failures.append(f"{lib.name} links libraries that do not resolve: {sorted(missing - DRIVER_PROVIDED)}")
+    else:
+        print(f"{lib.name}: every linked library resolves except the driver ({sorted(missing)})")
+
+
+# Libraries the GPU driver supplies at run time (the NVIDIA container toolkit
+# mounts them in); never present at build time.
+DRIVER_PROVIDED = frozenset({"libcuda.so.1"})
+
+
+def parse_ldd_missing(output: str) -> set[str]:
+    """Sonames ``ldd`` reports as "not found"."""
+    return {line.split("=>")[0].strip() for line in output.splitlines() if "not found" in line}
+
+
+def unresolved_libraries(failures: list[str], lib: Path) -> set[str] | None:
+    """The shared libraries ``lib`` links (directly or not) that do not resolve, per ldd.
+
+    None (with a failure recorded) if ldd itself could not run on it.
+    """
+    import subprocess
+
+    if not lib.is_file():
+        failures.append(f"{lib} does not exist")
+        return None
     try:
-        ctypes.CDLL(str(Path(ort.__file__).parent / "capi" / "libonnxruntime_providers_shared.so"), ctypes.RTLD_GLOBAL)
-        ctypes.CDLL(str(lib))
-        print(f"{lib.name} loads (its CUDA libraries resolve)")
-    except OSError as exc:
-        failures.append(f"onnxruntime CUDA provider library does not load: {exc}")
+        out = subprocess.run(["ldd", str(lib)], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        failures.append(f"ldd {lib.name} failed: {exc!r}")
+        return None
+    return parse_ldd_missing(out)
 
 
 def check_absent(failures: list[str], modules: tuple[str, ...]) -> None:

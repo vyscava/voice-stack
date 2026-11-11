@@ -24,11 +24,17 @@
 # a pre-release interpreter. The driver itself (libcuda.so.1) is injected at run
 # time by the NVIDIA Container Toolkit, so it is not in the image.
 #
-# TWO CUDA MAJORS, on purpose: torch 2.15.0 (cu132), torchcodec (cu132),
-# torchaudio 2.11.0 (cu130, its last release has no cu132 build; same CUDA 13
-# runtime soname) and onnxruntime-gpu 1.31.1 are CUDA 13. CTranslate2 4.x on
+# TWO CUDA MAJORS, on purpose: torch 2.15.0 (cu132), torchcodec (cu132) and
+# onnxruntime-gpu 1.31.1 are CUDA 13. CTranslate2 4.x on
 # PyPI is built against CUDA 12 and dlopen()s libcublas.so.12, so cuBLAS 12 is
 # installed beside cuBLAS 13. The sonames differ (.12 / .13), so they coexist.
+#
+# torchaudio is the +cpu build. 2.11.0 is its last release and has no cu132
+# build, and its cu130 build refuses to import against torch cu132 ("PyTorch
+# has CUDA version 13.2 whereas TorchAudio has CUDA version 13.0", measured in
+# !77's first pipeline). The CPU build skips that check, and what coqui-tts
+# uses from it (MelSpectrogram, resample) is plain torch ops, which run on the
+# GPU when given GPU tensors.
 #
 # NOT DEPLOYED. Homelab CI builds this image and runs the build-time
 # assertions and security scans on it, but never pushes it as a deploy
@@ -79,10 +85,10 @@ RUN python -m venv /build/.venv && \
 # ==2.15.0 and leaves it alone. Exact local versions also stop pip from picking
 # a different CUDA build from either index.
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cu132
-ARG TORCHAUDIO_INDEX=https://download.pytorch.org/whl/cu130
+ARG TORCHAUDIO_INDEX=https://download.pytorch.org/whl/cpu
 RUN /build/.venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" --extra-index-url "$TORCHAUDIO_INDEX" \
-        torch==2.15.0+cu132 torchaudio==2.11.0+cu130 torchcodec==0.17.0+cu132
+        torch==2.15.0+cu132 torchaudio==2.11.0+cpu torchcodec==0.17.0+cu132
 
 # Everything else, plus cuBLAS 12 for CTranslate2 (see the header).
 RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,asr-whisper,tts,gateway]" nvidia-cublas-cu12

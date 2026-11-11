@@ -17,12 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
 
 from assert_runtime import (  # noqa: E402
     CT2_GPU_MARKER,
+    DRIVER_PROVIDED,
     TORCH_BUILDS,
     VARIANTS,
     build_of,
     check_build,
     file_contains,
     main,
+    parse_ldd_missing,
+    unresolved_libraries,
 )
 
 
@@ -70,6 +73,8 @@ def test_every_gpu_variant_has_its_builds_and_ct2_marker() -> None:
     # PyTorch publishes no ROCm torchcodec: the ROCm image ships the CPU one.
     assert TORCH_BUILDS["rocm"]["torchcodec"] == "cpu"
     assert TORCH_BUILDS["full"] == {"torch": "cpu", "torchaudio": "cpu", "torchcodec": "cpu"}
+    # torchaudio 2.11 has no cu132 build and its cu130 one refuses torch cu132.
+    assert TORCH_BUILDS["cuda"]["torchaudio"] == "cpu"
 
 
 @pytest.mark.unit
@@ -93,3 +98,33 @@ def test_file_contains_on_an_empty_file(tmp_path: Path) -> None:
 def test_unknown_variant_is_refused() -> None:
     with pytest.raises(SystemExit):
         main(["--variant", "metal"])
+
+
+LDD_OUTPUT = """\
+\tlinux-vdso.so.1 (0x00007ffd1a3f2000)
+\tlibcublasLt.so.13 => /app/.venv/lib/python3.11/site-packages/nvidia/cu13/lib/libcublasLt.so.13 (0x00007f0)
+\tlibcudnn.so.9 => not found
+\tlibcuda.so.1 => not found
+\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f1)
+"""
+
+
+@pytest.mark.unit
+def test_parse_ldd_missing_reports_only_unresolved_sonames() -> None:
+    assert parse_ldd_missing(LDD_OUTPUT) == {"libcudnn.so.9", "libcuda.so.1"}
+
+
+@pytest.mark.unit
+def test_only_the_driver_may_be_missing() -> None:
+    # The CUDA image gate: libcuda.so.1 comes from the host at run time, but a
+    # missing cuDNN is a broken image and must not be excused with it.
+    assert parse_ldd_missing(LDD_OUTPUT) - DRIVER_PROVIDED == {"libcudnn.so.9"}
+    resolved = LDD_OUTPUT.replace("libcudnn.so.9 => not found", "")
+    assert parse_ldd_missing(resolved) - DRIVER_PROVIDED == set()
+
+
+@pytest.mark.unit
+def test_unresolved_libraries_fails_on_a_missing_file(tmp_path: Path) -> None:
+    failures: list[str] = []
+    assert unresolved_libraries(failures, tmp_path / "nope.so") is None
+    assert failures and "does not exist" in failures[0]
