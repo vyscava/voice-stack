@@ -33,6 +33,9 @@
 # against older images too.
 # ============================================================================
 
+# Container, network and hostname names carry ${CI_JOB_ID}: the runner runs jobs
+# concurrently, and with fixed names one smoke job's cleanup trap deleted the
+# other's network mid-run ("network smoke-net not found").
 .smoke-round-trip:
   stage: smoke
   image: docker:29
@@ -66,14 +69,14 @@
     - docker pull $SMOKE_IMAGE
     - |
       set -e
-      cleanup() { docker rm -f smoke-tts smoke-asr smoke-gateway >/dev/null 2>&1 || true; docker network rm smoke-net >/dev/null 2>&1 || true; }
+      cleanup() { docker rm -f smoke-tts-${CI_JOB_ID} smoke-asr-${CI_JOB_ID} smoke-gateway-${CI_JOB_ID} >/dev/null 2>&1 || true; docker network rm smoke-net-${CI_JOB_ID} >/dev/null 2>&1 || true; }
       trap cleanup EXIT
       cleanup
 
       # A user-defined network so the gateway can reach the other two BY NAME.
-      # The default bridge has no DNS between containers, so http://smoke-tts
+      # The default bridge has no DNS between containers, so http://smoke-tts-${CI_JOB_ID}
       # would not resolve.
-      docker network create smoke-net >/dev/null
+      docker network create smoke-net-${CI_JOB_ID} >/dev/null
 
       # Fail fast and loudly on a container that dies, instead of waiting out
       # the whole budget on a health check that will never answer.
@@ -96,49 +99,49 @@
       }
 
       echo "--- TTS: boots, engine is real, and it SYNTHESISES ---"
-      docker run -d --name smoke-tts --network smoke-net \
+      docker run -d --name smoke-tts-${CI_JOB_ID} --network smoke-net-${CI_JOB_ID} \
         -e SERVICE_MODE=tts -e TTS_DEVICE=cpu -e LOG_LEVEL=info \
         ${SMOKE_TTS_ENGINE:+-e TTS_ENGINE=$SMOKE_TTS_ENGINE} \
         -v "$TTS_MODEL_CACHE":/home/voicestack/.local/share/tts \
         "$SMOKE_IMAGE"
-      wait_healthy smoke-tts 5002
+      wait_healthy smoke-tts-${CI_JOB_ID} 5002
 
       # Assert on a KNOWN speaker, not on "the response contained letters" --
       # {"detail":"Internal Server Error"} contains letters.
-      docker exec smoke-tts curl -fsS http://localhost:5002/v1/audio/voices -o /tmp/voices.json
-      docker exec smoke-tts grep -q "$SMOKE_VOICE" /tmp/voices.json \
+      docker exec smoke-tts-${CI_JOB_ID} curl -fsS http://localhost:5002/v1/audio/voices -o /tmp/voices.json
+      docker exec smoke-tts-${CI_JOB_ID} grep -q "$SMOKE_VOICE" /tmp/voices.json \
         || { echo "FAIL: /v1/audio/voices did not list the built-in speakers"; \
-             docker exec smoke-tts cat /tmp/voices.json || true; exit 1; }
+             docker exec smoke-tts-${CI_JOB_ID} cat /tmp/voices.json || true; exit 1; }
 
       # The real thing: bytes out of the model, not just a live process.
-      docker exec smoke-tts curl -fsS -X POST http://localhost:5002/v1/audio/speech \
+      docker exec smoke-tts-${CI_JOB_ID} curl -fsS -X POST http://localhost:5002/v1/audio/speech \
         -H 'Content-Type: application/json' \
         -d '{"model":"tts-1","voice":"default","input":"Smoke test one two three.","response_format":"opus"}' \
         -o /tmp/speech.opus
-      docker exec smoke-tts sh -c '[ -s /tmp/speech.opus ] && [ "$(wc -c < /tmp/speech.opus)" -gt 2000 ]' \
+      docker exec smoke-tts-${CI_JOB_ID} sh -c '[ -s /tmp/speech.opus ] && [ "$(wc -c < /tmp/speech.opus)" -gt 2000 ]' \
         || { echo "FAIL: synthesis produced no usable audio"; \
-             docker exec smoke-tts sh -c 'wc -c /tmp/speech.opus; head -c 200 /tmp/speech.opus' || true; exit 1; }
-      docker exec smoke-tts sh -c 'head -c 4 /tmp/speech.opus | grep -q OggS' \
+             docker exec smoke-tts-${CI_JOB_ID} sh -c 'wc -c /tmp/speech.opus; head -c 200 /tmp/speech.opus' || true; exit 1; }
+      docker exec smoke-tts-${CI_JOB_ID} sh -c 'head -c 4 /tmp/speech.opus | grep -q OggS' \
         || { echo "FAIL: response is not Ogg audio"; exit 1; }
       echo "OK: TTS booted, listed speakers, and synthesised real audio."
 
       echo "--- ASR: boots, and TRANSCRIBES the audio TTS just produced ---"
-      docker cp smoke-tts:/tmp/speech.opus /tmp/speech.opus
+      docker cp smoke-tts-${CI_JOB_ID}:/tmp/speech.opus /tmp/speech.opus
       # ASR_MODEL_LOCATION is not optional: fasterwhisper.py passes
       # download_root=settings.ASR_MODEL_LOCATION, which defaults to None, so
       # faster-whisper writes to the HF cache under /home/voicestack/.cache and
       # the mount below would be inert -- protection in appearance only.
-      docker run -d --name smoke-asr --network smoke-net \
+      docker run -d --name smoke-asr-${CI_JOB_ID} --network smoke-net-${CI_JOB_ID} \
         -e SERVICE_MODE=asr -e LOG_LEVEL=info -e ASR_MODEL_LOCATION=/app/models \
         -v "$ASR_MODEL_CACHE":/app/models \
         "$SMOKE_IMAGE"
-      wait_healthy smoke-asr 5001
-      docker cp /tmp/speech.opus smoke-asr:/tmp/speech.opus
-      docker exec smoke-asr curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions \
+      wait_healthy smoke-asr-${CI_JOB_ID} 5001
+      docker cp /tmp/speech.opus smoke-asr-${CI_JOB_ID}:/tmp/speech.opus
+      docker exec smoke-asr-${CI_JOB_ID} curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions \
         -F 'file=@/tmp/speech.opus;type=audio/ogg' -F 'model=whisper-1' -o /tmp/asr.json
-      docker exec smoke-asr grep -qi 'smoke' /tmp/asr.json \
+      docker exec smoke-asr-${CI_JOB_ID} grep -qi 'smoke' /tmp/asr.json \
         || { echo "FAIL: transcript did not contain the spoken phrase"; \
-             docker exec smoke-asr cat /tmp/asr.json || true; exit 1; }
+             docker exec smoke-asr-${CI_JOB_ID} cat /tmp/asr.json || true; exit 1; }
       echo "OK: ASR booted and transcribed the synthesised clip."
 
       echo "Round trip complete: text -> TTS -> audio -> ASR -> text."
@@ -151,35 +154,35 @@
       #
       # It also catches what the unit tests cannot: that gateway.app imports
       # inside the shipped image, with the dependencies the image actually has.
-      docker run -d --name smoke-gateway --network smoke-net \
+      docker run -d --name smoke-gateway-${CI_JOB_ID} --network smoke-net-${CI_JOB_ID} \
         -e SERVICE_MODE=gateway -e LOG_LEVEL=info \
-        -e GATEWAY_ASR_URL=http://smoke-asr:5001 \
-        -e GATEWAY_TTS_URL=http://smoke-tts:5002 \
+        -e GATEWAY_ASR_URL=http://smoke-asr-${CI_JOB_ID}:5001 \
+        -e GATEWAY_TTS_URL=http://smoke-tts-${CI_JOB_ID}:5002 \
         -e GATEWAY_NATS_URL=nats://127.0.0.1:4222 \
         -e GATEWAY_AGENT_TIMEOUT_S=5 \
         "$SMOKE_IMAGE"
-      wait_healthy smoke-gateway 5003
+      wait_healthy smoke-gateway-${CI_JOB_ID} 5003
 
-      docker exec smoke-gateway curl -fsS http://localhost:5003/openapi.json -o /tmp/openapi.json
-      docker exec smoke-gateway grep -q '/v1/voice/exchange' /tmp/openapi.json \
+      docker exec smoke-gateway-${CI_JOB_ID} curl -fsS http://localhost:5003/openapi.json -o /tmp/openapi.json
+      docker exec smoke-gateway-${CI_JOB_ID} grep -q '/v1/voice/exchange' /tmp/openapi.json \
         || { echo "FAIL: gateway does not advertise /v1/voice/exchange"; exit 1; }
 
-      docker cp /tmp/speech.opus smoke-gateway:/tmp/speech.opus
+      docker cp /tmp/speech.opus smoke-gateway-${CI_JOB_ID}:/tmp/speech.opus
       # -D writes the headers; the outcome is reported there, not in the body.
-      docker exec smoke-gateway curl -fsS -D /tmp/head.txt \
+      docker exec smoke-gateway-${CI_JOB_ID} curl -fsS -D /tmp/head.txt \
         -X POST http://localhost:5003/v1/voice/exchange \
         -F 'file=@/tmp/speech.opus;type=audio/ogg' -o /tmp/reply.bin
 
-      docker exec smoke-gateway grep -qi 'X-Voice-Outcome: agent_error\|X-Voice-Outcome: agent_timeout' /tmp/head.txt \
+      docker exec smoke-gateway-${CI_JOB_ID} grep -qi 'X-Voice-Outcome: agent_error\|X-Voice-Outcome: agent_timeout' /tmp/head.txt \
         || { echo "FAIL: expected an agent failure outcome with no NATS present"; \
-             docker exec smoke-gateway cat /tmp/head.txt || true; exit 1; }
+             docker exec smoke-gateway-${CI_JOB_ID} cat /tmp/head.txt || true; exit 1; }
 
       # The real assertion: it SPOKE the failure. A caller holding a microphone
       # cannot hear an HTTP status code, and silence is indistinguishable from
       # a crash.
-      docker exec smoke-gateway test -s /tmp/reply.bin \
+      docker exec smoke-gateway-${CI_JOB_ID} test -s /tmp/reply.bin \
         || { echo "FAIL: gateway returned no audio for a failed exchange"; exit 1; }
-      docker exec smoke-gateway sh -c 'head -c 4 /tmp/reply.bin | grep -q OggS' \
+      docker exec smoke-gateway-${CI_JOB_ID} sh -c 'head -c 4 /tmp/reply.bin | grep -q OggS' \
         || { echo "FAIL: the spoken failure is not Ogg audio"; exit 1; }
 
       echo "OK: gateway booted, advertised its routes, and spoke its failure."
