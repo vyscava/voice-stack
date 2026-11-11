@@ -28,22 +28,37 @@ dependencies = [
 # -----------------------------------------------------------------------------
 # torch/torchaudio: three separate mechanisms, do not confuse them.
 #
-#   1. THE PIN (here) fixes the VERSION. 2.13 cannot be imported by the TTS path
-#      at all -- coqui-TTS -> transformers -> torch.compiler.disable ->
-#      import torch._dynamo, which re-registers sys.intern and raises
-#      "Duplicate dispatch rule". That took TTS down for three days (#4).
+# Which images carry torch at all: ONLY the full (XTTS) image. The slim
+# `:kokoro` image (production default) has no torch since voice-stack#13: ASR
+# runs on faster-whisper (CTranslate2) and its VAD is the Silero ONNX model
+# that faster-whisper bundles, on onnxruntime. scripts/assert_runtime.py
+# --variant kokoro fails the build if torch, torchaudio, whisper, TTS or
+# transformers ever come back into that image.
+#
+#   1. THE PIN (here) fixes the VERSION, exact, because the TTS import path is
+#      fragile. #4 (torch 2.13.0, TTS down three days) is now explained
+#      (#13): the full image ran Ubuntu 22.04's python3.11, which is
+#      3.11.0~rc1 and has no sys.get_int_max_str_digits. Newer torch registers
+#      a dynamo polyfill for it behind `sys.version_info >= (3, 11)` (2.9.1
+#      used hasattr), so `import torch._dynamo` died right after registering
+#      the sys.intern polyfill; transformers swallowed that, and the next
+#      import raised the decoy "Duplicate dispatch rule for intern". Pinning
+#      2.9.1 hid it. The full image now runs on python:3.11-slim (the same
+#      interpreter the venv is built with) and assert_runtime.py refuses a
+#      non-final interpreter and imports torch._dynamo directly, first.
 #
 #   2. THE INDEX (in Dockerfile / Dockerfile.ci / scripts/common-setup.sh) fixes
-#      the BUILD VARIANT. `torch==2.9.1` on PyPI is the CUDA wheel: installing it
-#      drags in ~15 nvidia-*-cu12 packages plus triton, about 4 GB, for services
+#      the BUILD VARIANT. `torch==2.15.0` on PyPI is the CUDA wheel: installing
+#      it drags in the nvidia-* packages plus triton, gigabytes, for services
 #      that run on CPU (compose/deploy/tts.yml pins TTS_DEVICE=cpu). Only
-#      --index-url https://download.pytorch.org/whl/cpu gets 2.9.1+cpu. A pin
+#      --index-url https://download.pytorch.org/whl/cpu gets 2.15.0+cpu. A pin
 #      cannot express this; it is not a version, it is a different artifact.
 #
 #   3. THE ASSERTION (scripts/assert_runtime.py, run by both Dockerfiles) proves
-#      the first two actually landed, and that torchcodec's extension LOADS --
-#      transformers reports torchcodec availability with importlib.util.find_spec,
-#      which is metadata only and passes on a completely unloadable install.
+#      the first two actually landed, that torchaudio's ops RUN against this
+#      torch, and that torchcodec's extension LOADS -- transformers reports
+#      torchcodec availability with importlib.util.find_spec, which is metadata
+#      only and passes on a completely unloadable install.
 #
 # Why the pin has to be `==` rather than a floor: pip's `--upgrade` cannot walk
 # BACK from an already-installed CUDA wheel, because by PEP 440 local-version
@@ -52,13 +67,20 @@ dependencies = [
 # installed CUDA first, and the script's `--upgrade 'torch>=2.3' --index-url
 # .../cpu` saw something "newer" and exited happy.
 #
-# torchaudio must move WITH torch -- its compiled extension is ABI-bound, and a
-# mismatched pair fails at `import torchaudio` with
-# "Could not load this library: _torchaudio.abi3.so".
+# torchaudio no longer moves in lockstep: 2.11 is its last release (it is in
+# maintenance; there is no 2.12+), and coqui-tts still imports it for
+# MelSpectrogram and resample. 2.11.0 against torch 2.15.0 is measured, not
+# assumed: assert_runtime.py runs exactly those two ops at build time, and the
+# smoke stage synthesises through them. If a future torch breaks torchaudio's
+# extension it fails there with "Could not load this library:
+# _torchaudio.abi3.so", not in production.
 #
-# Before changing either version: run the TTS import and the ASR VAD path, not
-# just the unit suites. The suites mock torch, so they pass on a torch that
-# cannot be imported.
+# torchcodec >= 0.12 builds against torch's stable ABI (its README: torch
+# >=2.11), so 0.17 is not tied to one torch minor the way 0.9 was.
+#
+# Before changing any of these versions: run the TTS import and an XTTS
+# synthesis, not just the unit suites. The suites mock torch, so they pass on a
+# torch that cannot be imported. The MR pipeline's smoke:image-works does both.
 # -----------------------------------------------------------------------------
 
 [project.optional-dependencies]
@@ -79,31 +101,47 @@ tts-kokoro = [
   "soundfile",
 ]
 tts-xtts = [
-  "coqui-tts[codec]",
-  "transformers<5",
-  "torch==2.9.1",
-  "torchaudio==2.9.1",
-  # coqui-tts[codec] pulls torchcodec UNPINNED, and it is an ABI-bound compiled
-  # extension exactly like torchaudio's. Measured against pinned torch 2.9.1:
-  # 0.8.0/0.8.1/0.9.0 load, 0.9.1 loads AND decodes real audio, 0.10.0 fails on
-  # libtorchcodec, and 0.16.0 -- today's unpinned resolve -- raises
-  # "Could not load this library: libtorchcodec_image.so".
-  "torchcodec==0.9.1",
+  # Exact pins: this is the import chain that broke in #4. coqui-tts 0.28.0 is
+  # the first release written against transformers 5 (its XTTS code carries
+  # 5.3 / 5.4 / 5.18 compatibility branches) and only floors it at >=4.57, so
+  # transformers is pinned here, not left to float. 5.22.2 clears all six
+  # transformers advisories pip-audit reported on 4.57.6 (#13).
+  "coqui-tts[codec]==0.28.0",
+  "transformers==5.22.2",
+  "torch==2.15.0",
+  "torchaudio==2.11.0",
+  # coqui-tts[codec] pulls torchcodec UNPINNED, and it is a compiled extension
+  # that must load against this torch and the image's FFmpeg. Like torch it
+  # needs the CPU INDEX: PyPI's x86_64 0.17.0 wheel is the CUDA build
+  # (libtorchcodec_image.so needs libnvrtc.so.13), so the Dockerfiles install
+  # 0.17.0+cpu first. assert_runtime.py asserts +cpu and decodes real audio.
+  "torchcodec==0.17.0",
+  # coqui-tts imports six (TTS/tts/utils/text/punctuation.py) without
+  # declaring it; today langdetect happens to bring it. Declared so dropping
+  # langdetect cannot break `from TTS.api import TTS`.
+  "six",
   "numpy",
   "soundfile",
   "resampy",
   "langdetect",
 ]
+# Default ASR engine (faster-whisper) and its VAD. No torch: VAD is the Silero
+# ONNX model faster-whisper ships, run on onnxruntime (faster-whisper's own
+# dependency). This is what the slim image installs.
 asr = [
-  "faster-whisper",
-  "openai-whisper",
-  "silero-vad",
-  "torch==2.9.1",
-  "torchaudio==2.9.1",
+  # Floor: the bundled silero_vad_v6.onnx asset and the VadOptions fields the
+  # VAD path passes exist from 1.2.1 (the version the slim image was verified on).
+  "faster-whisper>=1.2.1,<2",
   "numpy",
   "soundfile",
   "resampy",
-  "ipdb",  # Required by silero-vad (undeclared dependency)
+]
+# The PyTorch Whisper engine (ASR_ENGINE=whisper). Full image only; it is the
+# one ASR feature that needs torch.
+asr-whisper = [
+  "voice-stack[asr]",
+  "openai-whisper",
+  "torch==2.15.0",
 ]
 gateway = [
   # The gateway holds no model. It orchestrates the ASR and TTS services over
@@ -153,9 +191,9 @@ packages = ["src"]
 type = "virtual"
 path = ".venv"
 # gateway included so CI installs the same set the production image does
-# (Dockerfile: .[server,asr,tts,gateway]). Without it, any module importing a
+# (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway]). Without it, any module importing a
 # gateway-only dependency passes locally and fails in CI at IMPORT time.
-features = ["dev", "server", "tts", "asr", "gateway"]
+features = ["dev", "server", "tts", "asr", "asr-whisper", "gateway"]
 dependencies = []
 
 [tool.hatch.envs.default.scripts]
@@ -323,7 +361,7 @@ module = [
   "resampy.*",
   "soundfile.*",
   "numpy.*",
-  "silero_vad.*"
+  "faster_whisper.*"
 ]
 ignore_missing_imports = true
 

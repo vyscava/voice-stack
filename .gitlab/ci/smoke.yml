@@ -69,7 +69,7 @@
     - docker pull $SMOKE_IMAGE
     - |
       set -e
-      cleanup() { docker rm -f smoke-tts-${CI_JOB_ID} smoke-asr-${CI_JOB_ID} smoke-gateway-${CI_JOB_ID} >/dev/null 2>&1 || true; docker network rm smoke-net-${CI_JOB_ID} >/dev/null 2>&1 || true; }
+      cleanup() { docker rm -f smoke-warm-${CI_JOB_ID} smoke-tts-${CI_JOB_ID} smoke-asr-${CI_JOB_ID} smoke-gateway-${CI_JOB_ID} >/dev/null 2>&1 || true; docker network rm smoke-net-${CI_JOB_ID} >/dev/null 2>&1 || true; }
       trap cleanup EXIT
       cleanup
 
@@ -97,6 +97,20 @@
         docker logs --tail 40 "$name"
         return 1
       }
+
+      # Warm the XTTS weights OUTSIDE the 360 s boot budget. coqui-tts >= 0.28
+      # downloads them with huggingface_hub into HF_HUB_CACHE (set by the
+      # image to a directory inside this volume), not the old coqui layout,
+      # so the first pipeline after that change pays ~1.8 GB once, here. On a
+      # warm volume this is a few HEAD requests. Same code path the service
+      # uses (ModelManager.download_model), so it also proves the download.
+      if [ "$SMOKE_TTS_ENGINE" = "coqui" ]; then
+        echo "--- TTS: warm the XTTS weights in $TTS_MODEL_CACHE ---"
+        docker run --rm --name smoke-warm-${CI_JOB_ID} -e COQUI_TOS_AGREED=1 \
+          -v "$TTS_MODEL_CACHE":/home/voicestack/.local/share/tts \
+          --entrypoint /app/.venv/bin/python "$SMOKE_IMAGE" \
+          -c 'from TTS.utils.manage import ModelManager; print(ModelManager(progress_bar=False).download_model("tts_models/multilingual/multi-dataset/xtts_v2")[0])'
+      fi
 
       echo "--- TTS: boots, engine is real, and it SYNTHESISES ---"
       docker run -d --name smoke-tts-${CI_JOB_ID} --network smoke-net-${CI_JOB_ID} \
@@ -143,6 +157,30 @@
         || { echo "FAIL: transcript did not contain the spoken phrase"; \
              docker exec smoke-asr-${CI_JOB_ID} cat /tmp/asr.json || true; exit 1; }
       echo "OK: ASR booted and transcribed the synthesised clip."
+
+      echo "--- ASR VAD: really trims silence (voice-stack#13) ---"
+      # The service treats a VAD that fails to load as "transcribe without
+      # VAD" and carries on, so the transcript above passes either way. Pad the
+      # clip with 2 s of silence on each side and require VAD to remove most of
+      # it: input minus post-VAD duration must exceed 2.5 s, and the words must
+      # survive the trim. This is the regression test for moving VAD off
+      # torch/silero-vad onto faster-whisper's ONNX model, in BOTH images.
+      docker exec smoke-asr-${CI_JOB_ID} ffmpeg -hide_banner -loglevel error -y \
+        -f lavfi -t 2 -i anullsrc=r=16000:cl=mono -i /tmp/speech.opus -f lavfi -t 2 -i anullsrc=r=16000:cl=mono \
+        -filter_complex '[1:a]aresample=16000,aformat=channel_layouts=mono[s];[0:a][s][2:a]concat=n=3:v=0:a=1' \
+        /tmp/padded.wav
+      docker exec smoke-asr-${CI_JOB_ID} curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions/verbose \
+        -F 'file=@/tmp/padded.wav;type=audio/wav' -F 'model=whisper-1' -F 'vad=true' -o /tmp/asr-vad.json
+      docker exec smoke-asr-${CI_JOB_ID} python -c '
+      import json, sys
+      r = json.load(open("/tmp/asr-vad.json"))
+      din, dvad = r.get("duration_input_s") or 0, r.get("duration_after_vad_s") or 0
+      print("vad_used=%s input=%.2fs after_vad=%.2fs text=%r" % (r.get("vad_used"), din, dvad, r.get("text")))
+      ok = r.get("vad_used") is True and din - dvad > 2.5 and "smoke" in (r.get("text") or "").lower()
+      sys.exit(0 if ok else "FAIL: VAD did not trim the padded silence, or lost the speech")
+      ' || { docker exec smoke-asr-${CI_JOB_ID} cat /tmp/asr-vad.json || true; \
+             docker logs smoke-asr-${CI_JOB_ID} 2>&1 | grep -i vad | tail -5 || true; exit 1; }
+      echo "OK: VAD removed the padded silence and kept the speech."
 
       echo "Round trip complete: text -> TTS -> audio -> ASR -> text."
 

@@ -277,13 +277,15 @@ nvidia-smi
 2. Install PyTorch with CUDA:
 ```bash
 cd /path/to/voice-stack
-# torch/torchaudio are pinned to 2.9.1 in pyproject.toml. Pick the BUILD
-# VARIANT with the index URL -- a version pin alone gets you the CUDA wheel
-# from PyPI, which is ~4 GB and wrong for a CPU-only host.
-pip install --index-url https://download.pytorch.org/whl/cu124 \
-    torch==2.9.1 torchaudio==2.9.1   # GPU
+# torch 2.15.0 / torchaudio 2.11.0 are pinned in pyproject.toml (torchaudio's
+# last release is 2.11). Pick the BUILD VARIANT with the index URL -- a version
+# pin alone gets you the CUDA wheel from PyPI, which is gigabytes and wrong for
+# a CPU-only host. Only TTS (XTTS) and ASR_ENGINE=whisper need torch; the
+# default fasterwhisper ASR and its VAD do not.
+pip install --index-url https://download.pytorch.org/whl/cu132 \
+    torch==2.15.0 torchaudio==2.11.0   # GPU
 # pip install --index-url https://download.pytorch.org/whl/cpu \
-#     torch==2.9.1 torchaudio==2.9.1 # CPU
+#     torch==2.15.0 torchaudio==2.11.0 # CPU
 ```
 
 3. Update `.env`:
@@ -659,7 +661,7 @@ CORS_ORIGINS=http://your-frontend-domain.com,https://your-frontend-domain.com
 ```bash
 # Verify CUDA is available
 nvidia-smi
-pip install --index-url https://download.pytorch.org/whl/cu124 torch==2.9.1 torchaudio==2.9.1
+pip install --index-url https://download.pytorch.org/whl/cu132 torch==2.15.0 torchaudio==2.11.0
 # Set ASR_DEVICE=cuda and TTS_DEVICE=cuda in .env
 ```
 

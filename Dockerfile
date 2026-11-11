@@ -6,10 +6,11 @@
 #
 # Two images from one file (pick with --target):
 #
-#   full    (default, last stage) ASR + both TTS engines (Kokoro and XTTS).
+#   full    (default, last stage) python:3.11-slim, CPU: ASR + both TTS
+#           engines (Kokoro and XTTS).
 #           docker build -t voice-stack:xtts .
 #   kokoro  slim CPU image on python:3.11-slim: ASR + Kokoro + gateway, no
-#           CUDA, no coqui/transformers.
+#           CUDA, no torch, no coqui/transformers.
 #           docker build --target kokoro -t voice-stack:kokoro .
 #
 # Both images bake in the Kokoro model (checksum-verified), so TTS_ENGINE=kokoro
@@ -21,10 +22,11 @@
 # Run TTS:
 #   docker run -e SERVICE_MODE=tts -p 5002:5002 voice-stack:latest
 #
-# TORCH: pinned by version in pyproject.toml AND by build variant via the CPU
-# index below -- PyPI serves `torch==2.9.1` as the CUDA wheel, and these services
-# run on CPU. scripts/assert_runtime.py then proves what actually landed. Do not
-# add a `pip install --upgrade torch` step; see the comment in pyproject.toml.
+# TORCH (full image only): pinned by version in pyproject.toml AND by build
+# variant via the CPU index below -- PyPI serves `torch==2.15.0` as the CUDA
+# wheel, and these services run on CPU. scripts/assert_runtime.py then proves
+# what actually landed. Do not add a `pip install --upgrade torch` step; see the
+# comment in pyproject.toml.
 # ============================================================================
 
 # -----------------------------------------------------------------------------
@@ -55,20 +57,11 @@ COPY pyproject.toml README.md ./
 COPY scripts/accept_coqui_license.sh scripts/assert_runtime.py ./scripts/
 RUN chmod +x scripts/accept_coqui_license.sh
 
-# Single unified venv: torch FIRST from the CPU index, then everything else.
-#
-# Order matters. `pip install -e '.[server,asr,tts]'` on its own resolves
-# torch==2.9.1 from PyPI, which is the CUDA build (~4 GB of nvidia-*-cu12 wheels
-# this CPU-only service never uses). Installing the CPU wheels first means the
-# editable install finds 2.9.1+cpu already satisfying ==2.9.1 and leaves it.
 # pip and setuptools are upgraded first: the venv's bundled copies (pip 24.0,
 # setuptools 79) carry advisories pip-audit fails on, and both ship in the
 # images because the venv is copied whole.
 RUN python -m venv /build/.venv && \
-    /build/.venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
-    /build/.venv/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.9.1 torchaudio==2.9.1
+    /build/.venv/bin/pip install --no-cache-dir --upgrade pip setuptools
 
 # Shared venv cleanup, run by both builders after their install.
 RUN printf '%s\n' '#!/bin/sh' 'set -e' \
@@ -79,9 +72,10 @@ RUN printf '%s\n' '#!/bin/sh' 'set -e' \
       > /usr/local/bin/finish-venv && chmod +x /usr/local/bin/finish-venv
 
 # -----------------------------------------------------------------------------
-# Builder for the slim image: ASR + Kokoro + gateway. torch stays (CPU wheel)
-# because the ASR path needs it for silero-vad and openai-whisper; coqui-tts
-# and transformers do not come in.
+# Builder for the slim image: ASR + Kokoro + gateway, and NO torch. ASR is
+# faster-whisper (CTranslate2) with the Silero ONNX VAD it bundles; the
+# PyTorch Whisper engine (asr-whisper extra), coqui-tts and transformers do not
+# come in (voice-stack#13). assert_runtime.py --variant kokoro enforces it.
 # -----------------------------------------------------------------------------
 FROM builder-base AS builder-kokoro
 RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts-kokoro,gateway]" && finish-venv
@@ -89,8 +83,21 @@ RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts-kokoro,gate
 # -----------------------------------------------------------------------------
 # Builder for the full image: everything, both TTS engines.
 # -----------------------------------------------------------------------------
+#
+# torch FIRST from the CPU index, then everything else. Order matters:
+# `pip install -e '.[...,tts]'` on its own resolves torch==2.15.0 from PyPI,
+# which is the CUDA build (gigabytes of nvidia-* wheels plus triton this
+# CPU-only service never uses). Installing the CPU wheels first means the
+# editable install finds 2.15.0+cpu already satisfying ==2.15.0 and leaves it.
+# torchaudio is 2.11.0, its last release; see pyproject.toml for why that pair
+# is asserted rather than assumed. torchcodec comes from the CPU index too:
+# PyPI's x86_64 torchcodec 0.17.0 is a CUDA build whose libtorchcodec_image.so
+# needs libnvrtc.so.13 and libtorch_cuda.so (measured in !76's first pipeline).
 FROM builder-base AS builder-full
-RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts,gateway]"
+RUN /build/.venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.15.0 torchaudio==2.11.0 torchcodec==0.17.0
+RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,asr-whisper,tts,gateway]"
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
 RUN bash scripts/accept_coqui_license.sh && finish-venv
@@ -117,7 +124,7 @@ RUN curl -fsSL -o kokoro-v1.0.onnx "$KOKORO_RELEASE/kokoro-v1.0.onnx" && \
       | sha256sum -c -
 
 # -----------------------------------------------------------------------------
-# Slim CPU image: ASR + Kokoro + gateway. No CUDA base, no coqui.
+# Slim CPU image: ASR + Kokoro + gateway. No CUDA base, no torch, no coqui.
 # -----------------------------------------------------------------------------
 FROM python:3.11-slim AS kokoro
 
@@ -175,18 +182,33 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 # -----------------------------------------------------------------------------
 # Stage 2: Production - Minimal Runtime
 # -----------------------------------------------------------------------------
-# Using nvidia/cuda base image which includes libcublas, libcublas.so.12, and cuDNN
-# This fixes the "Library libcublas.so.12 is not found" error for ASR GPU inference
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS full
+# python:3.11-slim, the SAME image the venv is built in. This is the root cause
+# of #4, found in voice-stack#13: the full image used to run on
+# nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04, whose only python3.11 is
+# Ubuntu's 3.11.0~rc1 (jammy-updates still ships the release candidate). The
+# venv was built on python:3.11-slim's 3.11 final and then run on rc1, which
+# predates sys.get_int_max_str_digits. torch 2.9.1 guards that polyfill with
+# hasattr(); newer torch (2.13 in #4, 2.15 here) guards it with
+# sys.version_info >= (3, 11), which rc1 satisfies. So the first
+# `import torch._dynamo` died with AttributeError right AFTER registering the
+# sys.intern polyfill, transformers swallowed it, and the next import raised
+# "Duplicate dispatch rule for <built-in function intern>". The torch pin hid
+# it; it did not fix it. Building and running on one interpreter removes the
+# whole class, and assert_runtime.py now refuses a non-final interpreter.
+#
+# Trade-off: the CUDA base also carried libcublas/cuDNN for faster-whisper on a
+# GPU (ASR_DEVICE=cuda). torch here is the +cpu build either way, production
+# runs ASR on CPU from the :kokoro image, and no deploy sets ASR_DEVICE=cuda, so
+# that capability is dropped from this image rather than kept on an rc
+# interpreter. Tracked in voice-stack#13.
+FROM python:3.11-slim AS full
 
 LABEL maintainer="vyscava@gmail.com"
 LABEL description="Voice Stack unified ASR + TTS service"
 LABEL version="0.1.0"
 
-# Install only runtime system dependencies (no build tools)
-# Note: CUDA and cuDNN are already included in the base image
-# APT_REFRESH and the upgrade: see the kokoro stage. The CUDA base image lags
-# Ubuntu's security updates, so the upgrade is what clears its fixed CVEs.
+# Install only runtime system dependencies (no build tools).
+# APT_REFRESH and the upgrade: see the kokoro stage.
 ARG APT_REFRESH=unset
 RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
     apt-get upgrade -y --no-install-recommends && \
@@ -196,8 +218,6 @@ RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
         libportaudio2 \
         curl \
         ca-certificates \
-        python3.11 \
-        python3.11-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
@@ -254,6 +274,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ENV=production \
     LOG_LEVEL=info \
     HOST=0.0.0.0
+
+# coqui-tts >= 0.28 fetches XTTS v2 with huggingface_hub.snapshot_download
+# (repo tts-hub/XTTS-v2) into the HF cache instead of ~/.local/share/tts.
+# Point that cache INSIDE the directory every deployment already mounts as the
+# TTS models volume, so the 1.8 GB download persists across containers instead
+# of landing in an ephemeral ~/.cache (voice-stack#13). A separate ENV, not a
+# commented line inside the one above: semgrep's Dockerfile parser rejects that.
+ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
 
 # Health check (will be service-specific via entrypoint)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

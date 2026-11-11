@@ -5,9 +5,13 @@
 set -e
 
 # Pinned torch build. Must match pyproject.toml and both Dockerfiles.
-# The CPU index is not optional: PyPI serves torch==2.9.1 as the CUDA wheel, and
+# The CPU index is not optional: PyPI serves torch==2.15.0 as the CUDA wheel, and
 # these services run on CPU. See the comment block in pyproject.toml.
-TORCH_VERSION="2.9.1"
+# torchaudio is pinned separately: 2.11 is its last release, there is no 2.15.
+TORCH_VERSION="2.15.0"
+TORCHAUDIO_VERSION="2.11.0"
+# torchcodec too: PyPI's x86_64 wheel is a CUDA build that cannot load on CPU.
+TORCHCODEC_VERSION="0.17.0"
 TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
 
 # Color codes for output
@@ -215,7 +219,7 @@ setup_hatch_environment() {
 # 2.13.0+cu130 sorts ABOVE 2.13.0+cpu, so its `--upgrade` never did anything.
 #
 # The version pin lives in pyproject.toml; the CPU INDEX is what selects the
-# build variant, because PyPI serves torch==2.9.1 as the CUDA wheel. This
+# build variant, because PyPI serves torch==2.15.0 as the CUDA wheel. This
 # function fails loudly rather than skipping.
 install_pytorch() {
     log_info "Installing PyTorch ${TORCH_VERSION} (CPU build) ..."
@@ -236,6 +240,12 @@ install_pytorch() {
     fi
 
     for venv in "${venvs[@]}"; do
+        # The ASR-only venv (prod-asr: server + asr) has no torch since
+        # voice-stack#13: faster-whisper and its ONNX VAD do not use it.
+        if [ "$venv" = ".venv-asr" ]; then
+            log_info "  -> $venv: no torch needed (faster-whisper + ONNX VAD), skipping"
+            continue
+        fi
         log_info "  -> $venv"
         local pip_bin="$REPO_ROOT/$venv/bin/pip"
         local py_bin="$REPO_ROOT/$venv/bin/python"
@@ -243,11 +253,13 @@ install_pytorch() {
         if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
             sudo -u "$SUDO_USER" "$pip_bin" install --force-reinstall --no-deps \
                 --index-url "$TORCH_INDEX_URL" \
-                "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}"
+                "torch==${TORCH_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}" \
+                "torchcodec==${TORCHCODEC_VERSION}"
         else
             "$pip_bin" install --force-reinstall --no-deps \
                 --index-url "$TORCH_INDEX_URL" \
-                "torch==${TORCH_VERSION}" "torchaudio==${TORCH_VERSION}"
+                "torch==${TORCH_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}" \
+                "torchcodec==${TORCHCODEC_VERSION}"
         fi
 
         # Prove the variant rather than assume it: a version pin can be

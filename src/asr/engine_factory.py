@@ -25,7 +25,14 @@ def _create_engine_from_settings() -> ASRBase:
 
     if engine in {"whisper", "whisper-torch"}:
         logger.info("ASR backend selected: OpenAI Whisper")
-        from asr.engine.whisper import ASRWhisperTorch
+        try:
+            from asr.engine.whisper import ASRWhisperTorch
+        except ImportError as exc:
+            # The slim :kokoro image ships without torch (voice-stack#13).
+            raise RuntimeError(
+                f"ASR_ENGINE={engine!r} needs torch and openai-whisper (the 'asr-whisper' extra), "
+                "which this image does not include. Use ASR_ENGINE=fasterwhisper or the full image."
+            ) from exc
 
         return ASRWhisperTorch()
 
