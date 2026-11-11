@@ -96,6 +96,30 @@ class TestHealth:
         assert "agent_subject" in body["routes"]
         assert body["routes"]["agent_subject"].startswith("agents.")
 
+    def test_detailed_health_never_returns_the_nats_password(self, client, monkeypatch):
+        import gateway.app as app_mod
+
+        secret = "s3ntinel-PW-do-not-leak"
+        monkeypatch.setattr(
+            app_mod.settings,
+            "GATEWAY_NATS_URL",
+            f"tls://voice-gateway:{secret}@nats.local.vitorgarbim.me:4222",
+        )
+        response = client.get("/health/detailed")
+        assert response.status_code == 200
+        assert secret not in response.text
+        assert response.json()["routes"]["nats_url"] == "tls://voice-gateway:***@nats.local.vitorgarbim.me:4222"
+
+    def test_transcribe_only_error_has_no_nats_password(self, client):
+        """An exception that quotes the NATS URL must not echo the password over HTTP."""
+        secret = "s3ntinel-PW-do-not-leak"
+        client.state["transcriber"] = FakeTranscriber(
+            exc=OSError(f"bad route tls://voice-gateway:{secret}@nats.local:4222")
+        )
+        response = client.post("/v1/voice/transcribe-only", files={"file": ("a.wav", b"RIFF", "audio/wav")})
+        assert response.status_code == 502
+        assert secret not in response.text
+
 
 class TestExchangeEndpoint:
     def test_route_exists_after_startup(self, client):

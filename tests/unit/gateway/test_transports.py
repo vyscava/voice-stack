@@ -249,3 +249,136 @@ class TestAgentDurationIsActuallyRecorded:
         src = inspect.getsource(agent_mod.NatsAgent.ask)
         before_raise = src.split("raise TimeoutError")[0]
         assert "AGENT_DURATION.observe" in before_raise, "timeouts must be observed before raising"
+
+
+class TestNatsTls:
+    """messaging#7: under `allow_non_tls` nats-py with a tls:// URL stays plaintext
+    unless the client asks for a handshake-first connection."""
+
+    def test_tls_url_asks_for_handshake_first(self):
+        from gateway.agent import nats_tls_kwargs
+
+        assert nats_tls_kwargs("tls://u:p@nats.local.vitorgarbim.me:4222") == {"tls_handshake_first": True}
+        assert nats_tls_kwargs("TLS://nats.local.vitorgarbim.me:4222") == {"tls_handshake_first": True}
+
+    def test_nats_url_keeps_todays_behaviour(self):
+        from gateway.agent import nats_tls_kwargs
+
+        assert nats_tls_kwargs("nats://u:p@nats.local.vitorgarbim.me:4222") == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("url", "expect_handshake_first"),
+        [
+            ("tls://voice-gateway:pw@nats.local.vitorgarbim.me:4222", True),
+            ("nats://voice-gateway:pw@nats.local.vitorgarbim.me:4222", False),
+        ],
+    )
+    async def test_connect_passes_the_option_through(self, monkeypatch, url, expect_handshake_first):
+        import nats
+
+        seen: dict = {}
+
+        class FakeConn:
+            is_connected = True
+
+        async def fake_connect(servers, **kwargs):
+            seen["servers"] = servers
+            seen["kwargs"] = kwargs
+            return FakeConn()
+
+        monkeypatch.setattr(nats, "connect", fake_connect)
+        await NatsAgent(servers=url, self_name="voice-gateway", peer="you").connect()
+
+        assert seen["servers"] == url  # credentials stay in the URL, untouched
+        assert ("tls_handshake_first" in seen["kwargs"]) is expect_handshake_first
+        assert seen["kwargs"].get("tls_handshake_first", False) is expect_handshake_first
+
+    @pytest.mark.parametrize("scheme", ["tls", "nats"])
+    def test_nats_py_still_reads_url_credentials_for_either_scheme(self, scheme):
+        """Pins the real library: userinfo is parsed for tls:// as for nats://,
+        so the flip needs no separate user/password options."""
+        from nats.aio.client import Client
+
+        nc = Client()
+        nc._setup_server_pool(f"{scheme}://voice-gateway:pw@nats.local.vitorgarbim.me:4222")
+        uri = nc._server_pool[0].uri
+        assert uri.scheme == scheme
+        assert (uri.username, uri.password) == ("voice-gateway", "pw")
+        assert uri.hostname == "nats.local.vitorgarbim.me" and uri.port == 4222
+
+
+SECRET = "s3ntinel-PW-do-not-leak"
+
+
+class TestRedactUrl:
+    """The gateway URL embeds the NATS password; it must never reach a log or a response."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (
+                f"nats://voice-gateway:{SECRET}@nats.local.vitorgarbim.me:4222",
+                "nats://voice-gateway:***@nats.local.vitorgarbim.me:4222",
+            ),
+            (
+                f"tls://voice-gateway:{SECRET}@nats.local.vitorgarbim.me:4222",
+                "tls://voice-gateway:***@nats.local.vitorgarbim.me:4222",
+            ),
+            ("nats://nats.local.vitorgarbim.me:4222", "nats://nats.local.vitorgarbim.me:4222"),
+            ("nats.local.vitorgarbim.me", "nats.local.vitorgarbim.me"),
+            (f"voice-gateway:{SECRET}@nats-a:4222", "voice-gateway:***@nats-a:4222"),
+            (f"nats://u:{SECRET}@a:4222, nats://u:{SECRET}@b:4222", "nats://u:***@a:4222,nats://u:***@b:4222"),
+            (f"nats://u:{SECRET}@a:4222,nats://b:4222", "nats://u:***@a:4222,nats://b:4222"),
+            # user-only: nats-py treats it as an auth TOKEN, so it is masked too
+            (f"nats://{SECRET}@a:4222", "nats://***@a:4222"),
+            # password containing @ and :
+            (f"nats://u:{SECRET}@x:y@a:4222", "nats://u:***@a:4222"),
+        ],
+    )
+    def test_cases(self, raw, expected):
+        from gateway.agent import redact_url
+
+        out = redact_url(raw)
+        assert out == expected
+        assert SECRET not in out and "x:y" not in out
+
+    @pytest.mark.parametrize(
+        "raw",
+        [f"nats://u:{SECRET}@a:notaport", f"nats://u:{SECRET}@", f"nats://u:{SECRET}@[::1", ""],
+    )
+    def test_malformed_fails_safe(self, raw):
+        from gateway.agent import redact_url
+
+        out = redact_url(raw)
+        assert SECRET not in out
+        assert out == "***"
+
+    @pytest.mark.asyncio
+    async def test_connect_log_line_has_no_password(self, monkeypatch):
+        import nats
+
+        import gateway.agent as agent_mod
+
+        lines: list[str] = []
+
+        class Rec:
+            def info(self, msg, *a, **k):
+                lines.append(str(msg))
+
+            debug = info
+
+        class FakeConn:
+            is_connected = True
+
+        async def fake_connect(servers, **kwargs):
+            return FakeConn()
+
+        monkeypatch.setattr(nats, "connect", fake_connect)
+        monkeypatch.setattr(agent_mod, "logger", Rec())
+        url = f"tls://voice-gateway:{SECRET}@nats.local.vitorgarbim.me:4222"
+        await NatsAgent(servers=url, self_name="voice-gateway", peer="you").connect()
+
+        assert any("NATS connected" in line for line in lines)
+        assert not any(SECRET in line for line in lines)
+        assert any("voice-gateway:***@nats.local.vitorgarbim.me:4222" in line for line in lines)

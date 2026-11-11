@@ -35,6 +35,21 @@ from typing import Any
 
 from core.logging import logger_gateway as logger
 from gateway import metrics
+from gateway.redact import redact_url, scrub_urls
+
+
+def nats_tls_kwargs(servers: str) -> dict[str, Any]:
+    """Extra ``nats.connect`` options for a ``tls://`` URL, none for ``nats://``.
+
+    nats-py upgrades an INFO-first connection only when the server says
+    ``tls_required``. Under ``allow_non_tls`` (messaging#7 R1) it does not, so a
+    ``tls://`` URL alone stays plaintext and still sends the password in clear.
+    Handshake-first is the option that gives real TLS in that window. A
+    ``nats://`` URL keeps today's behaviour exactly.
+    """
+    if servers.lower().startswith("tls://"):
+        return {"tls_handshake_first": True}
+    return {}
 
 
 class NatsAgent:
@@ -80,15 +95,16 @@ class NatsAgent:
                 connect_timeout=self._connect_timeout_s,
                 allow_reconnect=True,
                 max_reconnect_attempts=self._max_reconnect_attempts,
+                **nats_tls_kwargs(self._servers),
             )
-            logger.info(f"NATS connected: {self._servers}, publishing on {self.subject}")
+            logger.info(f"NATS connected: {redact_url(self._servers)}, publishing on {self.subject}")
 
     async def close(self) -> None:
         if self._nc is not None:
             try:
                 await self._nc.drain()
             except Exception as exc:
-                logger.debug(f"NATS drain skipped: {exc}")
+                logger.debug(f"NATS drain skipped: {scrub_urls(exc)}")
             self._nc = None
 
     async def ask(self, text: str, *, timeout_s: float) -> str:

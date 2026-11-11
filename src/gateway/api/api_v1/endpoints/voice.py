@@ -12,6 +12,7 @@ from core.settings import get_settings
 from gateway import metrics
 from gateway.deps import build_agent, build_gate, build_policy, build_speaker, build_transcriber
 from gateway.exchange import Outcome, run_exchange
+from gateway.redact import scrub_urls
 
 router = APIRouter()
 settings = get_settings()
@@ -108,6 +109,6 @@ async def transcribe_only(file: UploadFile = File(...)) -> JSONResponse:
     try:
         text = await transcriber.transcribe(audio, filename=file.filename or "utterance.wav")
     except Exception as exc:
-        logger.warning(f"transcribe-only failed: {type(exc).__name__}: {exc}")
-        return JSONResponse(status_code=502, content={"error": f"{type(exc).__name__}: {exc}"})
+        logger.warning(f"transcribe-only failed: {type(exc).__name__}: {scrub_urls(exc)}")
+        return JSONResponse(status_code=502, content={"error": f"{type(exc).__name__}: {scrub_urls(exc)}"})
     return JSONResponse({"text": text})

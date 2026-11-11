@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from gateway.redact import scrub_urls
+
 
 class Outcome(str, Enum):
     """How an exchange ended. Every value is a normal, handled result."""
@@ -154,7 +156,7 @@ async def run_exchange(
             outcome=Outcome.ASR_FAILED,
             reply_text=policy.msg_no_speech,
             audio=await _try_speak(speaker, policy.msg_no_speech),
-            detail=f"{type(exc).__name__}: {exc}",
+            detail=f"{type(exc).__name__}: {scrub_urls(exc)}",
         )
 
     # 2. Decide whether that was speech at all. The agent is never asked about
@@ -198,7 +200,7 @@ async def run_exchange(
             transcript=transcript,
             reply_text=policy.msg_agent_error,
             audio=await _try_speak(speaker, policy.msg_agent_error),
-            detail=f"{type(exc).__name__}: {exc}",
+            detail=f"{type(exc).__name__}: {scrub_urls(exc)}",
         )
 
     # An agent that replies with nothing is an agent failure, not a silence to
@@ -222,7 +224,7 @@ async def run_exchange(
             transcript=transcript,
             reply_text=reply,
             audio=None,
-            detail=f"{type(exc).__name__}: {exc}",
+            detail=f"{type(exc).__name__}: {scrub_urls(exc)}",
         )
 
     return ExchangeResult(outcome=Outcome.OK, transcript=transcript, reply_text=reply, audio=spoken)
