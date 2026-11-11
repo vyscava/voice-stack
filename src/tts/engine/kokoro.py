@@ -25,7 +25,7 @@ import numpy.typing as npt
 from core.logging import logger_tts as logger
 from core.settings import get_settings
 from tts.engine.base import TTSBase, languange_canonical_str, speech_effective_options
-from tts.exceptions import ModelLoadError
+from tts.exceptions import ModelLoadError, TextValidationError
 from tts.schemas.audio_engine import (
     AudioFormat,
     ModelResponse,
@@ -61,6 +61,9 @@ CANONICAL_TO_ESPEAK: dict[str, str] = {
     "pt": "pt-br",
 }
 
+# Kokoro always produces 24 kHz audio.
+KOKORO_SAMPLE_RATE = 24000
+
 # Kokoro rejects speeds outside this range with a ValueError.
 MIN_SPEED = 0.5
 MAX_SPEED = 2.0
@@ -87,6 +90,13 @@ class TTSKokoro(TTSBase):
     # ------------------------------------------------------------------ model
 
     def _load_model(self) -> None:
+        if self.sample_rate != KOKORO_SAMPLE_RATE:
+            # TTS_SAMPLE_RATE labels the output; Kokoro cannot produce anything
+            # else, so a mismatch would fail every request. Fail the start instead.
+            raise ModelLoadError(
+                message="Kokoro sample rate mismatch",
+                details=f"Kokoro produces {KOKORO_SAMPLE_RATE} Hz but TTS_SAMPLE_RATE={self.sample_rate}",
+            )
         for path, what in ((self.model_path, "model"), (self.voices_path, "voices archive")):
             if not path.is_file():
                 raise ModelLoadError(
@@ -147,14 +157,28 @@ class TTSKokoro(TTSBase):
     # --------------------------------------------------------------- language
 
     def choose_lang(self, voice: str, requested: str | None) -> str:
-        """espeak tag to phonemize with: TTS_FORCE_LANG, then the request, then the voice's own language."""
-        for source in (self.force_language, languange_canonical_str(requested)):
-            if source and source in CANONICAL_TO_ESPEAK:
-                return CANONICAL_TO_ESPEAK[source]
-        lang = voice_language(voice)
-        if lang is None:  # resolve_voice only returns voices with a known language
+        """espeak tag to phonemize with: TTS_FORCE_LANG, then the request, then the voice's own language.
+
+        "en" means English, not American English: a British voice asked for
+        "en" keeps en-gb. A forced or requested language Kokoro cannot speak is
+        logged and the voice's own language used, rather than dropped silently.
+        """
+        own = voice_language(voice)
+        if own is None:  # resolve_voice only returns voices with a known language
             raise KeyError(voice)
-        return lang
+        for label, source in (
+            ("TTS_FORCE_LANG", self.force_language),
+            ("requested", languange_canonical_str(requested)),
+        ):
+            if not source:
+                continue
+            if source not in CANONICAL_TO_ESPEAK:
+                logger.warning("tts.kokoro | %s language %r is not supported by Kokoro; using %s", label, source, own)
+                continue
+            if source == "en" and own.startswith("en-"):
+                return own
+            return CANONICAL_TO_ESPEAK[source]
+        return own
 
     # ----------------------------------------------------------------- speech
 
@@ -178,9 +202,6 @@ class TTSKokoro(TTSBase):
             requested_language=requested_language,
             language_hint=language_hint,
         )
-        self._touch()
-        self.ensure_model_loaded()
-
         voice_id = self.resolve_voice(props.voice)
         lang = self.choose_lang(voice_id, props.requested_language)
         clamped = min(MAX_SPEED, max(MIN_SPEED, float(props.speed)))
@@ -189,7 +210,18 @@ class TTSKokoro(TTSBase):
                 "speed=%.2f outside Kokoro's %.1f-%.1f range; using %.2f", props.speed, MIN_SPEED, MAX_SPEED, clamped
             )
 
-        samples, sample_rate = self.kokoro.create(props.input, voice=voice_id, speed=clamped, lang=lang)
+        with self.in_use():
+            try:
+                samples, sample_rate = self.kokoro.create(props.input, voice=voice_id, speed=clamped, lang=lang)
+            except ValueError as e:
+                # kokoro-onnx raises ValueError for input with nothing to say
+                # ("...", emoji only). That is the caller's input, not a server
+                # fault: 422, not 500.
+                raise TextValidationError(
+                    message="Nothing to synthesize",
+                    details=f"The input produced no speakable text: {e}",
+                    original_exception=e,
+                ) from e
         wav: npt.NDArray[np.float32] = np.asarray(samples, dtype=np.float32)
         if sample_rate != self.sample_rate:
             # Kokoro always produces 24 kHz; TTS_SAMPLE_RATE describes the output,

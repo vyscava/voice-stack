@@ -251,6 +251,7 @@ def _unloaded(
     eng.threads = threads
     eng.kokoro = None
     eng.voices = []
+    eng.sample_rate = 24000
     return eng
 
 
@@ -290,3 +291,62 @@ def test_default_voice_must_exist(tmp_path: Path, fake_runtime: dict[str, Any]) 
     with pytest.raises(ModelLoadError) as exc:
         _unloaded(tmp_path, default="Claribel Dervla")._load_model()
     assert "Claribel Dervla" in (exc.value.details or "")
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_wrong_sample_rate_fails_the_start_not_every_request(tmp_path: Path, fake_runtime: dict[str, Any]) -> None:
+    eng = _unloaded(tmp_path)
+    eng.sample_rate = 22050
+    with pytest.raises(ModelLoadError) as exc:
+        eng._load_model()
+    assert "22050" in (exc.value.details or "")
+    assert "session" not in fake_runtime
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_english_keeps_a_british_voices_dialect() -> None:
+    assert _engine(force="en").choose_lang("bf_emma", None) == "en-gb"
+    assert _engine().choose_lang("bf_emma", "en") == "en-gb"
+    assert _engine().choose_lang("af_heart", "en") == "en-us"
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_unsupported_forced_language_is_logged_not_silently_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        assert _engine(force="ja").choose_lang("pf_dora", None) == "pt-br"
+    assert any("TTS_FORCE_LANG" in r.getMessage() and "ja" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_unspeakable_input_raises_text_validation_error() -> None:
+    from tts.exceptions import TextValidationError
+
+    class Silent(StubKokoro):
+        def create(self, text: str, voice: str, speed: float = 1.0, lang: str = "en-us"):
+            raise ValueError("Nothing to synthesize: phonemes are empty")
+
+    with pytest.raises(TextValidationError):
+        _engine(Silent()).speech(input="...", voice="af_heart", response_format="wav")
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_speech_marks_the_engine_in_use_while_synthesising() -> None:
+    eng = _engine()
+    seen: list[int] = []
+
+    class Peek(StubKokoro):
+        def create(self, text: str, voice: str, speed: float = 1.0, lang: str = "en-us"):
+            seen.append(eng._state()["inflight"])
+            return super().create(text, voice, speed, lang)
+
+    eng.kokoro = Peek()
+    eng.speech(input="hi", voice="af_heart", response_format="wav")
+    assert seen == [1]
+    assert eng._state()["inflight"] == 0

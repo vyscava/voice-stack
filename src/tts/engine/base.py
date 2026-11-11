@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -114,6 +116,49 @@ def speech_effective_options(
 
 
 class TTSBase(ABC):
+    # Engines whose model must not run two syntheses at once set this to True:
+    # in_use() then serialises synthesis on the engine. Synthesis left the event
+    # loop for #8, which removed the accidental serialisation the loop provided.
+    serialize_synthesis: bool = False
+
+    def _state(self) -> dict[str, Any]:
+        """Lifecycle lock, synthesis lock and in-flight count, created on first use.
+
+        Created lazily (dict.setdefault is atomic in CPython) so engines built
+        with __new__ in tests, which skip __init__, still get them.
+        """
+        state: dict[str, Any] = self.__dict__.setdefault(
+            "_lifecycle_state",
+            {"lock": threading.RLock(), "synth": threading.Lock(), "inflight": 0},
+        )
+        return state
+
+    @contextmanager
+    def in_use(self) -> Iterator[None]:
+        """Hold the model for one synthesis.
+
+        Marks the engine in use, (re)loads the model under the lifecycle lock so
+        two requests after an idle unload cannot both load it, and keeps the
+        idle unloader away until the synthesis finishes. Engines wrap their
+        model calls in this instead of calling _touch()/ensure_model_loaded().
+        """
+        state = self._state()
+        with state["lock"]:
+            state["inflight"] += 1
+            self._touch()
+        try:
+            with state["lock"]:
+                self.ensure_model_loaded()
+            if self.serialize_synthesis:
+                with state["synth"]:
+                    yield
+            else:
+                yield
+        finally:
+            with state["lock"]:
+                state["inflight"] -= 1
+                self._touch()  # idle time counts from the END of the last synthesis
+
     def __init__(self) -> None:
         # Retrieving requested settings
         self.model_id = settings.TTS_MODEL
@@ -209,23 +254,29 @@ class TTSBase(ABC):
         Returns:
             bool: True if model was unloaded, False otherwise
         """
-        if self.idle_timeout_minutes <= 0 or not self._model_loaded:
+        if self.idle_timeout_minutes <= 0:
             return False
 
         from datetime import datetime, timedelta
 
         from core.logging import logger_tts as logger
 
-        idle_time = datetime.now() - self.last_used
-        timeout = timedelta(minutes=self.idle_timeout_minutes)
+        state = self._state()
+        with state["lock"]:
+            # Under the lock, and never while a synthesis holds the model: the
+            # idle checker runs concurrently with synthesis threads, and
+            # unloading mid-synthesis left the engine calling a None model.
+            if not self._model_loaded or state["inflight"] > 0:
+                return False
 
-        if idle_time > timeout:
+            idle_time = datetime.now() - self.last_used
+            if idle_time <= timedelta(minutes=self.idle_timeout_minutes):
+                return False
+
             logger.info(f"Model idle for {idle_time}, unloading...")
             self._unload_model()
             self._model_loaded = False
             return True
-
-        return False
 
     def get_model(self, model_id: str) -> ModelResponse:
         return ModelResponse(id=model_id)
