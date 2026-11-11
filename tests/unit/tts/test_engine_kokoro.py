@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from tts.engine.kokoro import TTSKokoro, voice_language
+from tts.engine.kokoro import TTSKokoro, kokoro_providers, voice_language
 from tts.exceptions import ModelLoadError
 
 VOICES = ["af_heart", "am_adam", "bf_emma", "pf_dora", "pm_alex", "jf_alpha", "zf_xiaobei"]
@@ -212,15 +212,32 @@ def test_unloaded_model_is_reloaded_before_speech(monkeypatch: pytest.MonkeyPatc
 
 @pytest.fixture
 def fake_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Fake onnxruntime + kokoro_onnx so _load_model runs without the real model."""
-    seen: dict[str, Any] = {}
+    """Fake onnxruntime + kokoro_onnx so _load_model runs without the real model.
+
+    ``seen["available"]`` is what get_available_providers() reports and
+    ``seen["active"]`` what the built session says it runs on (default: the
+    providers it was asked for, i.e. no fallback). ``seen["probed"]`` counts
+    get_available_providers() calls, so the CPU path can prove it never probes.
+    """
+    seen: dict[str, Any] = {"available": ["CPUExecutionProvider"], "probed": 0}
 
     class SessionOptions:
         intra_op_num_threads = 0
 
-    def InferenceSession(path: str, sess_options: Any = None, providers: Any = None) -> object:
+    class Session:
+        def __init__(self, providers: list[str]) -> None:
+            self._providers = providers
+
+        def get_providers(self) -> list[str]:
+            return list(seen.get("active", self._providers))
+
+    def InferenceSession(path: str, sess_options: Any = None, providers: Any = None) -> Session:
         seen["session"] = {"path": path, "threads": sess_options.intra_op_num_threads, "providers": providers}
-        return object()
+        return Session(providers)
+
+    def get_available_providers() -> list[str]:
+        seen["probed"] += 1
+        return list(seen["available"])
 
     class Kokoro:
         @classmethod
@@ -231,14 +248,24 @@ def fake_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setitem(
         sys.modules,
         "onnxruntime",
-        types.SimpleNamespace(SessionOptions=SessionOptions, InferenceSession=InferenceSession),
+        types.SimpleNamespace(
+            SessionOptions=SessionOptions,
+            InferenceSession=InferenceSession,
+            get_available_providers=get_available_providers,
+        ),
     )
     monkeypatch.setitem(sys.modules, "kokoro_onnx", types.SimpleNamespace(Kokoro=Kokoro))
     return seen
 
 
 def _unloaded(
-    tmp_path: Path, *, model: bool = True, voices: bool = True, default: str = "af_heart", threads: int = 0
+    tmp_path: Path,
+    *,
+    model: bool = True,
+    voices: bool = True,
+    default: str = "af_heart",
+    threads: int = 0,
+    device: str = "cpu",
 ) -> TTSKokoro:
     eng = TTSKokoro.__new__(TTSKokoro)
     eng.model_path = tmp_path / "kokoro.onnx"
@@ -249,6 +276,7 @@ def _unloaded(
         eng.voices_path.write_bytes(b"x")
     eng.default_voice = default
     eng.threads = threads
+    eng.device = device
     eng.kokoro = None
     eng.voices = []
     eng.sample_rate = 24000
@@ -262,6 +290,8 @@ def test_load_builds_a_cpu_session_with_the_configured_threads(tmp_path: Path, f
     eng._load_model()
     assert fake_runtime["session"] == {"path": str(eng.model_path), "threads": 4, "providers": ["CPUExecutionProvider"]}
     assert fake_runtime["voices_path"] == str(eng.voices_path)
+    # The default path is the session the CPU images always built: no probing.
+    assert fake_runtime["probed"] == 0
     assert "pf_dora" in eng.voices and "jf_alpha" not in eng.voices
 
 
@@ -350,3 +380,86 @@ def test_speech_marks_the_engine_in_use_while_synthesising() -> None:
     eng.speech(input="hi", voice="af_heart", response_format="wav")
     assert seen == [1]
     assert eng._state()["inflight"] == 0
+
+
+# ------------------------------------------------------------ execution device
+
+CUDA_ORT = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+@pytest.mark.parametrize(
+    ("device", "available", "expected"),
+    [
+        ("cpu", CUDA_ORT, ["CPUExecutionProvider"]),
+        ("cuda", CUDA_ORT, ["CUDAExecutionProvider", "CPUExecutionProvider"]),
+        (" CUDA ", CUDA_ORT, ["CUDAExecutionProvider", "CPUExecutionProvider"]),
+        ("auto", CUDA_ORT, ["CUDAExecutionProvider", "CPUExecutionProvider"]),
+        ("auto", ["CPUExecutionProvider"], ["CPUExecutionProvider"]),
+    ],
+)
+def test_kokoro_providers_per_device(device: str, available: list[str], expected: list[str]) -> None:
+    assert kokoro_providers(device, available) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_cuda_without_onnxruntime_gpu_is_a_startup_error_not_a_cpu_downgrade() -> None:
+    with pytest.raises(ModelLoadError) as exc:
+        kokoro_providers("cuda", ["AzureExecutionProvider", "CPUExecutionProvider"])
+    assert "CUDAExecutionProvider" in (exc.value.details or "")
+    assert "onnxruntime-gpu" in (exc.value.details or "")
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+@pytest.mark.parametrize("device", ["rocm", "migraphx", "mps", ""])
+def test_unsupported_device_is_rejected(device: str) -> None:
+    with pytest.raises(ModelLoadError) as exc:
+        kokoro_providers(device, CUDA_ORT)
+    assert "expected one of cpu, cuda, auto" in (exc.value.details or "")
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_load_on_cuda_builds_a_cuda_session(tmp_path: Path, fake_runtime: dict[str, Any]) -> None:
+    fake_runtime["available"] = CUDA_ORT
+    _unloaded(tmp_path, device="cuda")._load_model()
+    assert fake_runtime["session"]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert fake_runtime["probed"] == 1
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_load_on_cuda_fails_when_onnxruntime_silently_fell_back_to_cpu(
+    tmp_path: Path, fake_runtime: dict[str, Any]
+) -> None:
+    # What onnxruntime-gpu does on a host with no usable GPU: it builds the
+    # session anyway, on CPU, and only logs a warning.
+    fake_runtime["available"] = CUDA_ORT
+    fake_runtime["active"] = ["CPUExecutionProvider"]
+    eng = _unloaded(tmp_path, device="cuda")
+    with pytest.raises(ModelLoadError) as exc:
+        eng._load_model()
+    assert "did not start on the requested device" in exc.value.message
+    assert eng.kokoro is None
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_load_on_auto_accepts_cpu_when_there_is_no_cuda(tmp_path: Path, fake_runtime: dict[str, Any]) -> None:
+    eng = _unloaded(tmp_path, device="auto")
+    eng._load_model()
+    assert fake_runtime["session"]["providers"] == ["CPUExecutionProvider"]
+    assert eng.kokoro is not None
+
+
+@pytest.mark.unit
+@pytest.mark.tts
+def test_load_on_cuda_without_the_gpu_build_never_builds_a_session(
+    tmp_path: Path, fake_runtime: dict[str, Any]
+) -> None:
+    with pytest.raises(ModelLoadError):
+        _unloaded(tmp_path, device="cuda")._load_model()
+    assert "session" not in fake_runtime

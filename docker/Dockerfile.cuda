@@ -1,0 +1,188 @@
+# ============================================================================
+# Voice Stack, NVIDIA CUDA image (ASR + both TTS engines on the GPU)
+# ============================================================================
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.cuda -t voice-stack:cuda .
+# Run (NVIDIA driver >= 580 and the NVIDIA Container Toolkit on the host):
+#   docker run --gpus all -e SERVICE_MODE=asr -p 5001:5001 voice-stack:cuda
+#   docker run --gpus all -e SERVICE_MODE=tts -p 5002:5002 voice-stack:cuda
+#
+# What runs on the GPU here:
+#   ASR  faster-whisper / CTranslate2   ASR_DEVICE=cuda (cuBLAS 12)
+#   ASR  openai-whisper (ASR_ENGINE=whisper), torch, picks CUDA itself
+#   TTS  XTTS v2 (TTS_ENGINE=coqui)     TTS_DEVICE=cuda (torch 2.15.0+cu132)
+#   TTS  Kokoro (TTS_ENGINE=kokoro)     TTS_KOKORO_DEVICE=cuda (onnxruntime-gpu)
+# The Silero VAD stays on the CPU: faster-whisper builds that ONNX session on
+# the CPU provider itself, and it is a ~2 MB model.
+#
+# BASE: python:3.11-slim, the same interpreter as the CPU images, NOT an
+# nvidia/cuda image. Every CUDA library comes from pip wheels (the nvidia-*
+# packages torch and onnxruntime-gpu depend on, plus nvidia-cublas-cu12 for
+# CTranslate2), which is how faster-whisper documents a CUDA install. The
+# nvidia/cuda Ubuntu 22.04 bases ship python3.11 as 3.11.0rc1, the root cause of
+# voice-stack#4 (see the root Dockerfile), and scripts/assert_runtime.py refuses
+# a pre-release interpreter. The driver itself (libcuda.so.1) is injected at run
+# time by the NVIDIA Container Toolkit, so it is not in the image.
+#
+# TWO CUDA MAJORS, on purpose: torch 2.15.0 (cu132), torchcodec (cu132),
+# torchaudio 2.11.0 (cu130, its last release has no cu132 build; same CUDA 13
+# runtime soname) and onnxruntime-gpu 1.31.1 are CUDA 13. CTranslate2 4.x on
+# PyPI is built against CUDA 12 and dlopen()s libcublas.so.12, so cuBLAS 12 is
+# installed beside cuBLAS 13. The sonames differ (.12 / .13), so they coexist.
+#
+# NOT DEPLOYED. Homelab CI builds this image and runs the build-time
+# assertions and security scans on it, but never pushes it as a deploy
+# candidate. Nothing in CI has a GPU, so it has not been run on one there.
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# Kokoro model files (identical to the root Dockerfile's models-kokoro stage;
+# upstream publishes no checksums, these were measured 2026-11-10).
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS models-kokoro
+ARG KOKORO_RELEASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
+RUN apt-get update -y && apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /models/kokoro
+RUN curl -fsSL -o kokoro-v1.0.onnx "$KOKORO_RELEASE/kokoro-v1.0.onnx" && \
+    curl -fsSL -o kokoro-v1.0.int8.onnx "$KOKORO_RELEASE/kokoro-v1.0.int8.onnx" && \
+    curl -fsSL -o voices-v1.0.bin "$KOKORO_RELEASE/voices-v1.0.bin" && \
+    printf '%s\n' \
+      '7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5  kokoro-v1.0.onnx' \
+      '6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb  kokoro-v1.0.int8.onnx' \
+      'bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d  voices-v1.0.bin' \
+      | sha256sum -c -
+
+# -----------------------------------------------------------------------------
+# Builder
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends python3-dev build-essential git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+COPY pyproject.toml README.md ./
+COPY scripts/accept_coqui_license.sh scripts/assert_runtime.py ./scripts/
+
+RUN python -m venv /build/.venv && \
+    /build/.venv/bin/pip install --no-cache-dir --upgrade pip setuptools
+
+# torch FIRST, from the CUDA index, by exact local version, for the same reason
+# the CPU image installs +cpu first (see the root Dockerfile and pyproject.toml):
+# the editable install below then finds 2.15.0+cu132 already satisfying
+# ==2.15.0 and leaves it alone. Exact local versions also stop pip from picking
+# a different CUDA build from either index.
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu132
+ARG TORCHAUDIO_INDEX=https://download.pytorch.org/whl/cu130
+RUN /build/.venv/bin/pip install --no-cache-dir \
+        --index-url "$TORCH_INDEX" --extra-index-url "$TORCHAUDIO_INDEX" \
+        torch==2.15.0+cu132 torchaudio==2.11.0+cu130 torchcodec==0.17.0+cu132
+
+# Everything else, plus cuBLAS 12 for CTranslate2 (see the header).
+RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,asr-whisper,tts,gateway]" nvidia-cublas-cu12
+
+# onnxruntime -> onnxruntime-gpu, same version. Both distributions install the
+# same `onnxruntime` package directory, so the CPU one (pulled in by
+# faster-whisper and kokoro-onnx) is removed first; installing over it would
+# leave whichever files were written last. The version is read from what
+# pyproject.toml resolved, so the two images cannot drift apart.
+# assert_runtime.py --variant cuda requires exactly one of the two.
+RUN ORT_VERSION="$(/build/.venv/bin/python -c 'import importlib.metadata as m; print(m.version("onnxruntime"))')" && \
+    echo "onnxruntime ${ORT_VERSION} -> onnxruntime-gpu ${ORT_VERSION}" && \
+    /build/.venv/bin/pip uninstall -y onnxruntime && \
+    /build/.venv/bin/pip install --no-cache-dir "onnxruntime-gpu[cuda,cudnn]==${ORT_VERSION}"
+
+RUN bash scripts/accept_coqui_license.sh && \
+    sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' /build/.venv/bin/* && \
+    (find /build/.venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true) && \
+    (find /build/.venv -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true) && \
+    (find /build/.venv -name '*.py[co]' -delete 2>/dev/null || true)
+
+# -----------------------------------------------------------------------------
+# Runtime
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS cuda
+
+LABEL description="Voice Stack CUDA image: ASR + Kokoro + XTTS on NVIDIA GPUs"
+LABEL version="0.1.0"
+
+# APT_REFRESH and the upgrade: see the root Dockerfile's kokoro stage.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        libportaudio2 \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash voicestack
+WORKDIR /app
+
+COPY --from=builder --chown=voicestack:voicestack /build/.venv /app/.venv
+COPY --chown=voicestack:voicestack src/ /app/src/
+COPY --chown=voicestack:voicestack scripts/.env.production.* /app/config/
+COPY --chown=voicestack:voicestack scripts/assert_runtime.py /app/scripts/
+COPY --from=models-kokoro --chown=voicestack:voicestack /models/kokoro /app/models/kokoro
+
+# Put every pip-installed CUDA library directory in the dynamic linker cache.
+# torch finds its own, but CTranslate2 dlopen()s libcublas.so.12 by soname and
+# onnxruntime's CUDA provider links cuBLAS 13 / cuDNN 9 / cuFFT / cuRAND by
+# soname, and neither searches site-packages. A list generated from what was
+# actually installed, rather than hard-coded paths that a wheel layout change
+# would silently orphan; assert_runtime.py then proves the sonames resolve.
+RUN find /app/.venv/lib/python3.11/site-packages/nvidia -type f -name 'lib*.so*' -printf '%h\n' \
+        | sort -u > /etc/ld.so.conf.d/voice-stack-cuda.conf && \
+    cat /etc/ld.so.conf.d/voice-stack-cuda.conf && \
+    test -s /etc/ld.so.conf.d/voice-stack-cuda.conf && \
+    ldconfig
+
+# Fail the BUILD if the image that ships is not the CUDA build it claims to be.
+# Runs without a GPU: see scripts/assert_runtime.py for exactly what is checked.
+RUN /app/.venv/bin/python /app/scripts/assert_runtime.py --variant cuda
+
+COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
+RUN chmod +x /app/entrypoint.sh && \
+    mkdir -p /app/voices /app/models && \
+    chown voicestack:voicestack /app/voices /app/models && \
+    mkdir -p /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2 && \
+    echo "1" > /home/voicestack/.local/share/tts/tos_agreed.txt && \
+    echo "1" > /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2/tos_agreed.txt && \
+    chown -R voicestack:voicestack /home/voicestack/.local
+
+USER voicestack
+
+# GPU defaults, so `docker run --gpus all` uses the GPU with no extra flags.
+# Every one can be overridden; ASR_COMPUTE_TYPE=float16 is CTranslate2's GPU
+# precision (int8 is the CPU default). NVIDIA_* tell the container toolkit to
+# expose the GPUs and the compute libraries when the runtime is "nvidia".
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    ENV=production \
+    LOG_LEVEL=info \
+    HOST=0.0.0.0 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    ASR_DEVICE=cuda \
+    ASR_COMPUTE_TYPE=float16 \
+    TTS_DEVICE=cuda \
+    TTS_KOKORO_DEVICE=cuda
+
+# XTTS weights into the mounted TTS models volume (see the root Dockerfile).
+ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${ASR_PORT:-5001}/health || curl -f http://localhost:${TTS_PORT:-5002}/health || exit 1
+
+EXPOSE 5001 5002
+ENTRYPOINT ["/app/entrypoint.sh"]

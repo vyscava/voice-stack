@@ -1,0 +1,220 @@
+# ============================================================================
+# Voice Stack, AMD ROCm image (ASR + XTTS on the GPU, Kokoro on the CPU)
+# ============================================================================
+# Build from the repository root:
+#   docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .
+#   # other GPUs: --build-arg ROCM_GPU_TARGETS="gfx1100 gfx942"
+# Run (amdgpu kernel driver on the host; no container toolkit needed):
+#   docker run --device /dev/kfd --device /dev/dri --group-add video \
+#     -e SERVICE_MODE=asr -p 5001:5001 voice-stack:rocm
+#
+# What runs on the GPU here (ROCm keeps the "cuda" device name):
+#   ASR  faster-whisper / CTranslate2   ASR_DEVICE=cuda (CTranslate2 ROCm wheel)
+#   ASR  openai-whisper (ASR_ENGINE=whisper), torch, picks the GPU itself
+#   TTS  XTTS v2 (TTS_ENGINE=coqui)     TTS_DEVICE=cuda (torch 2.15.0+rocm7.14)
+# What stays on the CPU, and why:
+#   TTS  Kokoro (TTS_ENGINE=kokoro)     onnxruntime's AMD path is the MIGraphX
+#        execution provider, which needs a system MIGraphX install from AMD's
+#        apt repository and whose newest wheel (onnxruntime-migraphx 1.27.1)
+#        trails the pinned onnxruntime 1.31.1. TTS_KOKORO_DEVICE stays "cpu".
+#   VAD  Silero ONNX, CPU in every image (faster-whisper's own choice).
+#   torchcodec  CPU build: PyTorch publishes no ROCm torchcodec; it only
+#        decodes audio on the CPU anyway.
+#
+# BASE: python:3.11-slim, the same interpreter as the CPU images. ROCm itself
+# comes from AMD's pip packages (`rocm[libraries,device-gfx...]`, the runtime
+# torch's ROCm wheels are built against) rather than a 7-8 GB rocm/dev image.
+# The ROCm user-space libraries are therefore in the venv; only the amdgpu
+# kernel driver comes from the host.
+#
+# GPU TARGETS: ROCm's math libraries (rocBLAS, hipBLASLt, MIOpen) ship kernels
+# per GPU architecture, one pip package each, 200 MB to 1.6 GB apiece. All of
+# them would make the image tens of GB, so ROCM_GPU_TARGETS picks the set:
+# by default RDNA2 (gfx1030), RDNA3 (gfx1100/1101/1102) and RDNA4
+# (gfx1200/1201: RX 9070 XT, Radeon AI PRO R9700). A GPU outside the list
+# needs its target added, or GPU math fails at the first call. `rocminfo` on
+# the host prints your card's gfx name.
+#
+# NOT DEPLOYED. Homelab CI builds this image and runs the build-time
+# assertions and security scans on it, but never pushes it as a deploy
+# candidate. Nothing in CI has a GPU, so it has not been run on one there.
+# ============================================================================
+
+# -----------------------------------------------------------------------------
+# Kokoro model files (identical to the root Dockerfile's models-kokoro stage;
+# upstream publishes no checksums, these were measured 2026-11-10).
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS models-kokoro
+ARG KOKORO_RELEASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
+RUN apt-get update -y && apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /models/kokoro
+RUN curl -fsSL -o kokoro-v1.0.onnx "$KOKORO_RELEASE/kokoro-v1.0.onnx" && \
+    curl -fsSL -o kokoro-v1.0.int8.onnx "$KOKORO_RELEASE/kokoro-v1.0.int8.onnx" && \
+    curl -fsSL -o voices-v1.0.bin "$KOKORO_RELEASE/voices-v1.0.bin" && \
+    printf '%s\n' \
+      '7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5  kokoro-v1.0.onnx' \
+      '6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb  kokoro-v1.0.int8.onnx' \
+      'bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d  voices-v1.0.bin' \
+      | sha256sum -c -
+
+# -----------------------------------------------------------------------------
+# CTranslate2's ROCm wheel. PyPI only carries the CUDA/CPU build; the ROCm
+# wheels are a zip on the CTranslate2 GitHub release. Pinned by version AND by
+# the zip's sha256 (measured 2026-11-11), so a replaced asset fails the build.
+# Keep CT2_VERSION within faster-whisper's ctranslate2 range (<5).
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS ct2-rocm
+ARG CT2_VERSION=4.9.0
+ARG CT2_ROCM_ZIP_SHA256=0a9ad24145fe671628d7524602241b3743a12d1487489f075f5de91f68aa2837
+RUN apt-get update -y && apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /wheels
+RUN curl -fsSL -o ct2-rocm.zip \
+        "https://github.com/OpenNMT/CTranslate2/releases/download/v${CT2_VERSION}/rocm-python-wheels-Linux.zip" && \
+    echo "${CT2_ROCM_ZIP_SHA256}  ct2-rocm.zip" | sha256sum -c - && \
+    python -c "import sys, zipfile; z = zipfile.ZipFile('ct2-rocm.zip'); \
+names = [n for n in z.namelist() if n.endswith('-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl')]; \
+assert len(names) == 1, names; \
+open('/wheels/' + names[0].rsplit('/', 1)[1], 'wb').write(z.read(names[0]))" && \
+    rm ct2-rocm.zip && ls -la /wheels
+
+# -----------------------------------------------------------------------------
+# Builder
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends python3-dev build-essential git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+COPY pyproject.toml README.md ./
+COPY scripts/accept_coqui_license.sh scripts/assert_runtime.py ./scripts/
+
+RUN python -m venv /build/.venv && \
+    /build/.venv/bin/pip install --no-cache-dir --upgrade pip setuptools
+
+# Step 1: resolve the project against the CPU torch wheels, exactly like the
+# CPU full image. The ROCm torch wheel cannot be installed with its
+# dependencies: it requires `rocm[device-all,libraries]`, i.e. the kernels for
+# every AMD GPU architecture (tens of GB), and pip would also re-resolve that
+# for every later install that touches torch.
+RUN /build/.venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.15.0 torchaudio==2.11.0 torchcodec==0.17.0
+RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,asr-whisper,tts,gateway]"
+
+# Step 2: swap in the ROCm builds without re-resolving, the same correction
+# Dockerfile.ci makes for the CPU wheels (--force-reinstall because the +cpu
+# install already satisfies ==2.15.0; --no-deps so torch's rocm[device-all]
+# requirement is not followed). torchaudio 2.11 has no rocm7.14 build; its
+# rocm7.2 build links the same ROCm 7 HIP runtime soname. torchcodec stays
+# +cpu (no ROCm build exists). The ROCm runtime is then installed explicitly,
+# with the libraries and only the selected GPU targets' kernels. triton-rocm,
+# which torch also lists, is left out: it is only used by torch.compile.
+ARG ROCM_VERSION=7.14.1
+ARG ROCM_GPU_TARGETS="gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201"
+RUN /build/.venv/bin/pip install --no-cache-dir --no-deps --force-reinstall \
+        --index-url https://download.pytorch.org/whl/rocm7.14 torch==2.15.0+rocm7.14 && \
+    /build/.venv/bin/pip install --no-cache-dir --no-deps --force-reinstall \
+        --index-url https://download.pytorch.org/whl/rocm7.2 torchaudio==2.11.0+rocm7.2 && \
+    EXTRAS="libraries$(for t in $ROCM_GPU_TARGETS; do printf ',device-%s' "$t"; done)" && \
+    echo "rocm[${EXTRAS}]==${ROCM_VERSION}" && \
+    /build/.venv/bin/pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/rocm7.14 "rocm[${EXTRAS}]==${ROCM_VERSION}"
+
+# Step 3: CTranslate2's ROCm build over the PyPI one faster-whisper pulled in.
+COPY --from=ct2-rocm /wheels/ /tmp/ct2/
+RUN /build/.venv/bin/pip install --no-cache-dir --no-deps --force-reinstall /tmp/ct2/ctranslate2-*.whl && \
+    rm -rf /tmp/ct2
+
+RUN bash scripts/accept_coqui_license.sh && \
+    sed -i 's|#!/build/.venv/bin/python|#!/app/.venv/bin/python|g' /build/.venv/bin/* && \
+    (find /build/.venv -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true) && \
+    (find /build/.venv -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true) && \
+    (find /build/.venv -name '*.py[co]' -delete 2>/dev/null || true)
+
+# -----------------------------------------------------------------------------
+# Runtime
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim AS rocm
+
+LABEL description="Voice Stack ROCm image: ASR + XTTS on AMD GPUs, Kokoro on CPU"
+LABEL version="0.1.0"
+
+# APT_REFRESH and the upgrade: see the root Dockerfile's kokoro stage.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        libportaudio2 \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash voicestack
+WORKDIR /app
+
+COPY --from=builder --chown=voicestack:voicestack /build/.venv /app/.venv
+COPY --chown=voicestack:voicestack src/ /app/src/
+COPY --chown=voicestack:voicestack scripts/.env.production.* /app/config/
+COPY --chown=voicestack:voicestack scripts/assert_runtime.py /app/scripts/
+COPY --from=models-kokoro --chown=voicestack:voicestack /models/kokoro /app/models/kokoro
+
+# The ROCm runtime and math libraries live in the venv (_rocm_sdk_core,
+# _rocm_sdk_libraries). torch locates them itself; CTranslate2's ROCm build
+# links libamdhip64.so.7 / libhipblas.so.3 / libhiprand.so.1 by soname and does
+# not. Registering the directories with the dynamic linker is what makes
+# `import ctranslate2` work, which assert_runtime.py then proves. rocBLAS finds
+# its per-GPU kernels relative to its own location (lib/rocblas/library), where
+# the device packages put them.
+RUN find /app/.venv/lib/python3.11/site-packages/_rocm_sdk_core /app/.venv/lib/python3.11/site-packages/_rocm_sdk_libraries \
+        -maxdepth 2 -type d -name lib > /etc/ld.so.conf.d/voice-stack-rocm.conf && \
+    cat /etc/ld.so.conf.d/voice-stack-rocm.conf && \
+    test "$(wc -l < /etc/ld.so.conf.d/voice-stack-rocm.conf)" -ge 2 && \
+    ldconfig
+
+# Fail the BUILD if the image that ships is not the ROCm build it claims to be.
+# Runs without a GPU: see scripts/assert_runtime.py for exactly what is checked.
+RUN /app/.venv/bin/python /app/scripts/assert_runtime.py --variant rocm
+
+COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
+RUN chmod +x /app/entrypoint.sh && \
+    mkdir -p /app/voices /app/models && \
+    chown voicestack:voicestack /app/voices /app/models && \
+    mkdir -p /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2 && \
+    echo "1" > /home/voicestack/.local/share/tts/tos_agreed.txt && \
+    echo "1" > /home/voicestack/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2/tos_agreed.txt && \
+    chown -R voicestack:voicestack /home/voicestack/.local
+
+USER voicestack
+
+# GPU defaults ("cuda" is also ROCm's device name in torch and CTranslate2).
+# TTS_KOKORO_DEVICE is deliberately cpu: see the header.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    ENV=production \
+    LOG_LEVEL=info \
+    HOST=0.0.0.0 \
+    ASR_DEVICE=cuda \
+    ASR_COMPUTE_TYPE=float16 \
+    TTS_DEVICE=cuda \
+    TTS_KOKORO_DEVICE=cpu
+
+# XTTS weights into the mounted TTS models volume (see the root Dockerfile).
+ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${ASR_PORT:-5001}/health || curl -f http://localhost:${TTS_PORT:-5002}/health || exit 1
+
+EXPOSE 5001 5002
+ENTRYPOINT ["/app/entrypoint.sh"]

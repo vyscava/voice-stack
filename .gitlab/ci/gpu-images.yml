@@ -1,0 +1,97 @@
+# ============================================================================
+# GPU images: build-only proof (docker/Dockerfile.cuda, docker/Dockerfile.rocm)
+# ============================================================================
+# Included from .gitlab-ci.yml. The GPU images exist for people running
+# voice-stack on their own NVIDIA or AMD hardware. Homelab production runs the
+# slim CPU :kokoro image, so these jobs:
+#
+#   - BUILD the image (which runs scripts/assert_runtime.py --variant cuda|rocm)
+#   - pip-audit and trivy it with the same pins and policy as the CPU gates
+#   - and then DELETE it (after_script, also on failure or cancel)
+#
+# They never log in to a registry, never push, are not needed by release:*
+# or deploy:*, and never run on main or on tags, so they can neither publish
+# a GPU image nor hold up a production deploy. The image tag deliberately has
+# no registry host in it. Everything is in ci/gpu-image-check.sh.
+#
+# WHEN THEY RUN
+#   merge requests that change what goes into the image: automatically
+#   any other merge request: manual (play the job to rebuild on demand)
+#   scheduled pipelines: automatically (none is configured today; see the
+#     tracking issue before adding one on main, whose pipeline deploys)
+#
+# Nothing on the runner has a GPU. These jobs prove the images BUILD and are
+# the GPU builds they claim to be; they do not prove inference on a GPU.
+#
+# The runner is one shared docker daemon. Names carry ${CI_JOB_ID} so
+# concurrent jobs cannot collide, and the image is removed when the job ends.
+# BuildKit's layer cache is kept (it is what makes a rebuild minutes rather
+# than an hour); it is the daemon's to garbage-collect.
+# ============================================================================
+
+.gpu-image:
+  stage: build-images
+  image: docker:29
+  needs: []
+  before_script: []
+  timeout: 3 hours
+  variables:
+    GPU_IMAGE: "voice-stack-gpu-${GPU_VARIANT}:job-${CI_JOB_ID}"
+  script:
+    - sh ci/gpu-image-check.sh "$GPU_VARIANT"
+  after_script:
+    - docker rm -f "freeze-${GPU_VARIANT}-${CI_JOB_ID}" "meta-${GPU_VARIANT}-${CI_JOB_ID}" "trivy-${GPU_VARIANT}-${CI_JOB_ID}" "audit-${GPU_VARIANT}-${CI_JOB_ID}-report" "audit-${GPU_VARIANT}-${CI_JOB_ID}-gate" >/dev/null 2>&1 || true
+    - docker rmi -f "$GPU_IMAGE" || true
+  artifacts:
+    when: always
+    expire_in: 1 month
+    paths:
+      - gpu-image-metrics.txt
+      - requirements.freeze.txt
+      - pip-audit-all.json
+      - trivy-report.json
+  tags:
+    - docker
+    - nuc
+
+# The shared inputs of both images. Each job adds its own Dockerfile.
+.gpu-image-inputs: &gpu-image-inputs
+  - pyproject.toml
+  - src/**/*
+  - scripts/assert_runtime.py
+  - scripts/accept_coqui_license.sh
+  - scripts/entrypoint.sh
+  - scripts/.env.production.*
+  - ci/gpu-image-check.sh
+  - ci/trivy-guard.tpl
+  - .gitlab/ci/gpu-images.yml
+
+build:gpu-image:cuda:
+  extends: .gpu-image
+  variables:
+    GPU_VARIANT: cuda
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - docker/Dockerfile.cuda
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *gpu-image-inputs
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true
+
+build:gpu-image:rocm:
+  extends: .gpu-image
+  variables:
+    GPU_VARIANT: rocm
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - docker/Dockerfile.rocm
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes: *gpu-image-inputs
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true

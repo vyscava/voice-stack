@@ -1,0 +1,59 @@
+# ============================================================================
+# AMD ROCm GPU override for docker-compose.yml
+# ============================================================================
+# Builds docker/Dockerfile.rocm instead of the CPU image and passes the AMD GPU
+# devices to ASR and TTS. Needs the amdgpu kernel driver on the host (no
+# container toolkit). Usage, from the repository root:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
+#
+# The device nodes are owned by the host's `video` and `render` groups. The
+# container user must be in both; `render`'s number differs between distros,
+# so RENDER_GID is required (compose refuses to start without it). Set it in
+# .env to the output of:
+#   getent group render | cut -d: -f3
+#
+# GPU targets: the image carries ROCm kernels for the architectures in
+# ROCM_GPU_TARGETS only (default: gfx1030, gfx1100-gfx1102, gfx1200-gfx1201).
+# Find yours with `rocminfo | grep gfx` and set ROCM_GPU_TARGETS in .env if it
+# is not in the default list.
+#
+# On GPU: faster-whisper (ASR) and XTTS (TTS_ENGINE=coqui). Kokoro stays on the
+# CPU in this image (onnxruntime has no ROCm build here); see
+# DOCKER_DEPLOYMENT.md "GPU Support". A value in .env still wins over the
+# defaults below.
+# ============================================================================
+
+services:
+  asr:
+    build:
+      dockerfile: docker/Dockerfile.rocm
+      args:
+        ROCM_GPU_TARGETS: ${ROCM_GPU_TARGETS:-gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201}
+    image: voice-stack:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - "${RENDER_GID:?set RENDER_GID in .env: getent group render | cut -d: -f3}"
+    environment:
+      # ROCm keeps the "cuda" device name in CTranslate2 and torch.
+      ASR_DEVICE: ${ASR_DEVICE:-cuda}
+      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
+
+  tts:
+    build:
+      dockerfile: docker/Dockerfile.rocm
+      args:
+        ROCM_GPU_TARGETS: ${ROCM_GPU_TARGETS:-gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201}
+    image: voice-stack:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - "${RENDER_GID:?set RENDER_GID in .env: getent group render | cut -d: -f3}"
+    environment:
+      TTS_DEVICE: ${TTS_DEVICE:-cuda}
+      TTS_KOKORO_DEVICE: cpu

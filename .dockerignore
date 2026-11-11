@@ -115,3 +115,6 @@ scripts/SERVICE_INSTALLATION.md
 tmp/
 temp/
 *.tmp
+
+# GPU Dockerfiles live in docker/ and are passed with -f; they are not build context.
+docker/

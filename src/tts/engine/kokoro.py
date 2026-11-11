@@ -1,4 +1,4 @@
-"""Kokoro-82M TTS engine on ONNX Runtime (CPU).
+"""Kokoro-82M TTS engine on ONNX Runtime (CPU by default, CUDA opt-in).
 
 Kokoro is small (82M parameters) and fast enough on a CPU to answer in well under
 real time, which is why it is the default engine. It has no voice cloning: each
@@ -11,6 +11,16 @@ a Brazilian accent, not like an English voice. So the language comes from, in
 order: TTS_FORCE_LANG, the request, then the voice's own language. There is no
 per-chunk auto-detection, because a detected language that does not match the
 voice produces worse audio than the voice's own language would.
+
+Execution provider: TTS_KOKORO_DEVICE picks it. "cpu" (the default, and what
+every CPU image runs) builds exactly the CPU session it always did. "cuda" needs
+onnxruntime-gpu (the docker/Dockerfile.cuda image) and fails the start if the
+session did not actually land on the GPU: onnxruntime silently falls back to CPU
+when the CUDA provider cannot initialise, and a "GPU" engine quietly running on
+CPU is the claim this refuses to make. "auto" takes CUDA when this onnxruntime
+offers it and the CPU otherwise, and logs which one it got. There is no ROCm
+option: onnxruntime's AMD path (MIGraphX) is not shipped in any image, so the
+ROCm image runs Kokoro on the CPU.
 """
 
 from __future__ import annotations
@@ -64,6 +74,12 @@ CANONICAL_TO_ESPEAK: dict[str, str] = {
 # Kokoro always produces 24 kHz audio.
 KOKORO_SAMPLE_RATE = 24000
 
+# TTS_KOKORO_DEVICE -> the onnxruntime providers asked for, in priority order.
+KOKORO_DEVICE_PROVIDERS: dict[str, list[str]] = {
+    "cpu": ["CPUExecutionProvider"],
+    "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+}
+
 # Kokoro rejects speeds outside this range with a ValueError.
 MIN_SPEED = 0.5
 MAX_SPEED = 2.0
@@ -76,6 +92,34 @@ def voice_language(voice: str) -> str | None:
     return VOICE_PREFIX_TO_LANG.get(voice[0])
 
 
+def kokoro_providers(device: str, available: list[str]) -> list[str]:
+    """Providers to build the Kokoro session with, for TTS_KOKORO_DEVICE.
+
+    ``available`` is ``onnxruntime.get_available_providers()``. An explicit
+    device whose provider this onnxruntime does not have is a start-up error
+    naming both, never a quiet downgrade to CPU.
+    """
+    choice = device.lower().strip()
+    if choice == "auto":
+        return KOKORO_DEVICE_PROVIDERS["cuda" if "CUDAExecutionProvider" in available else "cpu"]
+    if choice not in KOKORO_DEVICE_PROVIDERS:
+        raise ModelLoadError(
+            message="Unsupported TTS_KOKORO_DEVICE",
+            details=f"TTS_KOKORO_DEVICE={device!r}; expected one of cpu, cuda, auto",
+        )
+    wanted = KOKORO_DEVICE_PROVIDERS[choice]
+    missing = [p for p in wanted if p not in available]
+    if missing:
+        raise ModelLoadError(
+            message="Kokoro execution provider not available",
+            details=(
+                f"TTS_KOKORO_DEVICE={choice} needs {missing}, but this onnxruntime only has {available}. "
+                "CUDA needs the onnxruntime-gpu build (docker/Dockerfile.cuda)."
+            ),
+        )
+    return wanted
+
+
 class TTSKokoro(TTSBase):
     def __init__(self) -> None:
         super().__init__()
@@ -83,6 +127,7 @@ class TTSKokoro(TTSBase):
         self.voices_path = Path(settings.TTS_KOKORO_VOICES_PATH)
         self.default_voice = settings.TTS_KOKORO_DEFAULT_VOICE
         self.threads = int(settings.TTS_KOKORO_THREADS)
+        self.device = settings.TTS_KOKORO_DEVICE
         self.kokoro: Any = None
         self.voices: list[str] = []
         self._load_model()
@@ -110,7 +155,24 @@ class TTSKokoro(TTSBase):
         opts = ort.SessionOptions()
         if self.threads > 0:
             opts.intra_op_num_threads = self.threads
-        session = ort.InferenceSession(str(self.model_path), sess_options=opts, providers=["CPUExecutionProvider"])
+        if self.device.lower().strip() == "cpu":
+            # The default, and the only path the CPU images take: the exact
+            # session this engine has always built, with no provider probing.
+            session = ort.InferenceSession(
+                str(self.model_path), sess_options=opts, providers=KOKORO_DEVICE_PROVIDERS["cpu"]
+            )
+        else:
+            providers = kokoro_providers(self.device, list(ort.get_available_providers()))
+            session = ort.InferenceSession(str(self.model_path), sess_options=opts, providers=providers)
+            active = list(session.get_providers())
+            # onnxruntime falls back to CPU, with only a log line, when the CUDA
+            # provider cannot initialise (no GPU, driver too old, missing libs).
+            if providers[0] != "CPUExecutionProvider" and (not active or active[0] != providers[0]):
+                raise ModelLoadError(
+                    message="Kokoro session did not start on the requested device",
+                    details=f"TTS_KOKORO_DEVICE={self.device} asked for {providers[0]}, onnxruntime is using {active}",
+                )
+            logger.info("Kokoro onnxruntime providers: %s (TTS_KOKORO_DEVICE=%s)", active, self.device)
         self.kokoro = Kokoro.from_session(session, str(self.voices_path))
 
         self.voices = sorted(v for v in self.kokoro.get_voices() if voice_language(v) is not None)

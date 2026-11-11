@@ -13,6 +13,10 @@
 #      of both published images (see .gitlab/ci/security.yml)
 #   7. release: Promote to :latest ONLY if all checks pass
 #
+# GPU images (docker/Dockerfile.cuda, docker/Dockerfile.rocm) are built, asserted
+# and scanned on merge requests by .gitlab/ci/gpu-images.yml, then deleted. They
+# are never pushed, never released and never deployed.
+#
 # The smoke stage exists because everything above it runs against the CI image
 # with torch mocked, so a production image that cannot even start passes the
 # whole suite. That happened, and cost three days of TTS downtime (#4).
@@ -524,3 +528,4 @@ include:
   - local: .gitlab/ci/smoke.yml
   - local: .gitlab/ci/security.yml
   - local: .gitlab/ci/deploy.yml
+  - local: .gitlab/ci/gpu-images.yml
