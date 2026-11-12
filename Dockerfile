@@ -283,6 +283,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # commented line inside the one above: semgrep's Dockerfile parser rejects that.
 ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
 
+# Coqui's XTTS asks for its non-commercial licence on stdin unless it finds
+# tos_agreed.txt under ~/.local/share/tts or COQUI_TOS_AGREED=1. The file is
+# written above, but a bind mount over that directory hides it, and the
+# container then dies at start-up with "EOFError: EOF when reading a line"
+# (only Docker named volumes copy the image's files in). The image has already
+# accepted the licence at build time, so state it in the environment as well.
+ENV COQUI_TOS_AGREED=1
+
 # Health check (will be service-specific via entrypoint)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${ASR_PORT:-5001}/health || curl -f http://localhost:${TTS_PORT:-5002}/health || exit 1
