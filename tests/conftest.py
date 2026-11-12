@@ -23,6 +23,20 @@ from fastapi.testclient import TestClient
 os.environ["DEBUGPY_ENABLE"] = "false"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_cgroup(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the memory guard off the test host's real cgroup.
+
+    core.memory measures against the container's cgroup limit when it has one.
+    CI runs inside containers with limits, so without this
+    the guard would read the runner's real memory instead of the psutil mocks
+    the client fixtures install. Tests of core.memory point it at a fake tree.
+    """
+    import core.memory
+
+    monkeypatch.setattr(core.memory, "CGROUP_ROOT", tmp_path_factory.mktemp("no-cgroup") / "absent")
+
+
 # =============================================================================
 # Coqui TTS License Agreement Setup
 # =============================================================================

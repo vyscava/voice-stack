@@ -127,7 +127,11 @@ class Settings(BaseSettings):
     # -------------
     MAX_UPLOAD_SIZE_MB: int = Field(default=100, description="Maximum file upload size in MB")
     MEMORY_THRESHOLD_PERCENT: int = Field(
-        default=90, description="Reject requests when RAM usage exceeds this percentage"
+        default=90,
+        description=(
+            "Reject requests when RAM usage exceeds this percentage: of the container's"
+            " cgroup memory limit when one is set, otherwise of host RAM"
+        ),
     )
     SWAP_THRESHOLD_PERCENT: int = Field(
         default=80, description="Reject requests when swap usage exceeds this percentage"

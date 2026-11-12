@@ -17,13 +17,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-import psutil
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from core.error_handler import register_exception_handlers
 from core.logging import logger_gateway as logger
+from core.memory import memory_snapshot
 from core.settings import get_settings
 from gateway import metrics
 from gateway.api.api_v1.api import api_router
@@ -133,7 +133,7 @@ async def prometheus_metrics() -> Response:
 @app.get("/health/detailed")
 async def detailed_health() -> JSONResponse:
     """What the gateway is configured to talk to, plus local resources."""
-    mem = psutil.virtual_memory()
+    mem = memory_snapshot()
     agent = build_agent()
 
     data: dict[str, Any] = {
@@ -142,6 +142,7 @@ async def detailed_health() -> JSONResponse:
         "memory": {
             "percent": round(mem.percent, 1),
             "available_mb": round(mem.available / (1024 * 1024), 1),
+            "source": mem.source,
         },
         "routes": {
             "asr_url": settings.GATEWAY_ASR_URL,

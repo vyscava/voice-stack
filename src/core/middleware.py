@@ -5,7 +5,8 @@ This middleware provides the first line of defense against resource exhaustion
 by checking system resources BEFORE accepting requests.
 
 Checks performed:
-1. Memory usage (RAM) - Rejects if > configured threshold (default 90%)
+1. Memory usage (RAM) - Rejects if > configured threshold (default 90%), measured
+   against the container's cgroup memory limit when one is set (core.memory)
 2. Memory pressure - Rejects if RAM > 70% AND swap > threshold (default 80%)
    (High swap alone is not a concern if there's plenty of free RAM)
 3. File upload size - Rejects if Content-Length > configured max (default 100MB)
@@ -23,6 +24,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from core import memory
 from core.logging import logger_asr as logger
 from core.settings import get_settings
 
@@ -67,18 +69,21 @@ class ResourceGuardMiddleware(BaseHTTPMiddleware):
         Returns:
             Response: Either an error response (503/413) or the result of call_next()
         """
-        # 1. Check memory availability
-        mem = psutil.virtual_memory()
+        # 1. Check memory availability. Measured against the container's
+        # cgroup limit when it has one, not the host (core.memory).
+        mem = memory.memory_snapshot()
 
         if mem.percent > self.memory_threshold:
             logger.warning(
-                f"Memory usage critical: {mem.percent:.1f}% > {self.memory_threshold}% threshold - rejecting request"
+                f"Memory usage critical: {mem.percent:.1f}% ({mem.source}) > {self.memory_threshold}% threshold"
+                " - rejecting request"
             )
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={
                     "detail": "Insufficient memory available",
                     "memory_percent": round(mem.percent, 1),
+                    "memory_source": mem.source,
                     "threshold": self.memory_threshold,
                 },
                 headers={"Retry-After": "60"},  # Try again in 60 seconds
