@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     TTS_KOKORO_THREADS: int = Field(
         default=0, description="ONNX Runtime intra-op threads for Kokoro (0 = runtime default, all cores)."
     )
+    TTS_KOKORO_DEVICE: str = Field(
+        default="cpu",
+        description="cpu|cuda|auto: ONNX Runtime provider for Kokoro. cuda needs the onnxruntime-gpu (CUDA) image.",
+    )
 
     # TTS Resource Management
     TTS_IDLE_TIMEOUT_MINUTES: int = Field(

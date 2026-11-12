@@ -8,7 +8,7 @@ A self-hosted speech stack for homelabs — ASR (speech-to-text) and TTS (text-t
 - Bazarr-native subtitle endpoints (SRT, VTT, JSON, JSONL)
 - Two TTS engines, picked at boot with `TTS_ENGINE`: **Kokoro** (default, fast on CPU) and **Coqui XTTS-v2** (voice cloning)
 - One image runs ASR, TTS or the gateway via `SERVICE_MODE`; a slim CPU image (`:kokoro`) and a full image (`:xtts` / `:latest`)
-- NVIDIA GPU acceleration with automatic CUDA detection (XTTS and Whisper)
+- GPU images for NVIDIA (CUDA: ASR, XTTS and Kokoro) and AMD (ROCm: ASR and XTTS), built from `docker/`
 - Voice cloning via Coqui XTTS-v2 (drop a .wav file, get a new voice)
 - Built-in concurrency limits, memory guards, and idle model unloading
 - A worked production deployment: per-service compose stacks deployed by CI
@@ -17,26 +17,40 @@ A self-hosted speech stack for homelabs — ASR (speech-to-text) and TTS (text-t
 
 ## Quick Start (Docker)
 
-The fastest way to get running. Requires Docker and optionally an NVIDIA GPU.
+The fastest way to get running. Requires Docker; a GPU is optional.
 
 ### Build
+
+Pick the image for your hardware. All four serve the same API.
 
 ```bash
 git clone https://github.com/vyscava/voice-stack.git
 cd voice-stack
-docker build -t voice-stack:latest .                    # full: ASR + both TTS engines
-docker build --target kokoro -t voice-stack:kokoro .    # slim CPU: ASR + Kokoro + gateway
+docker build -t voice-stack:latest .                          # CPU, full: ASR + both TTS engines
+docker build --target kokoro -t voice-stack:kokoro .          # CPU, slim: ASR + Kokoro + gateway
+docker build -f docker/Dockerfile.cuda -t voice-stack:cuda .  # NVIDIA GPU (driver >= 580)
+docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .  # AMD GPU (ROCm 7)
 ```
+
+| Image | Dockerfile | ASR (faster-whisper) | XTTS | Kokoro |
+|---|---|---|---|---|
+| `:kokoro` | `Dockerfile --target kokoro` | CPU | not included | CPU |
+| `:latest` / `:xtts` | `Dockerfile` | CPU | CPU | CPU |
+| `:cuda` | `docker/Dockerfile.cuda` | GPU | GPU | GPU (`TTS_KOKORO_DEVICE=cuda`) |
+| `:rocm` | `docker/Dockerfile.rocm` | GPU | GPU | CPU (no onnxruntime ROCm build) |
+
+The GPU images default to the GPU (`ASR_DEVICE=cuda`, `TTS_DEVICE=cuda`; ROCm uses the
+same `cuda` device name). They are built and checked in CI on every change but have
+not been run on a GPU there; see [`DOCKER_DEPLOYMENT.md`](DOCKER_DEPLOYMENT.md#gpu-support)
+for host setup, GPU targets and what is verified.
 
 ### Run Both Services
 
 ```bash
 # ASR on port 5001
 docker run -d --name voice-stack-asr \
-  --gpus all \
   -p 5001:5001 \
   -e SERVICE_MODE=asr \
-  -e ASR_DEVICE=cuda \
   -e ASR_MODEL=base \
   -e ASR_MODEL_LOCATION=/app/models \
   -v asr-models:/app/models \
@@ -44,15 +58,24 @@ docker run -d --name voice-stack-asr \
 
 # TTS on port 5002
 docker run -d --name voice-stack-tts \
-  --gpus all \
   -p 5002:5002 \
   -e SERVICE_MODE=tts \
-  -e TTS_DEVICE=cuda \
   -v tts-models:/home/voicestack/.local/share/tts \
   voice-stack:latest
 ```
 
-No GPU? Replace `--gpus all` with nothing and set `ASR_DEVICE=cpu` / `TTS_DEVICE=cpu`.
+On a GPU, run the matching image and give the container the GPU:
+
+```bash
+# NVIDIA (NVIDIA Container Toolkit installed)
+docker run -d --gpus all -p 5001:5001 -e SERVICE_MODE=asr \
+  -e ASR_MODEL_LOCATION=/app/models -v asr-models:/app/models voice-stack:cuda
+
+# AMD
+docker run -d --device /dev/kfd --device /dev/dri --group-add video \
+  --group-add "$(getent group render | cut -d: -f3)" -p 5001:5001 -e SERVICE_MODE=asr \
+  -e ASR_MODEL_LOCATION=/app/models -v asr-models:/app/models voice-stack:rocm
+```
 
 ### Verify
 
@@ -88,7 +111,13 @@ docker-compose logs -f      # View logs
 docker-compose down         # Stop
 ```
 
-The default `docker-compose.yml` runs on CPU. To enable GPU, uncomment the `runtime: nvidia` and device lines in the compose file.
+The default `docker-compose.yml` runs on CPU. For a GPU, add the vendor override, which
+builds the GPU image and passes the device through:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build   # NVIDIA
+docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build   # AMD (set RENDER_GID in .env)
+```
 
 ---
 
@@ -154,7 +183,8 @@ Bare-metal/systemd installs use the per-service templates instead:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SERVICE_MODE` | _(required)_ | `asr` or `tts` — selects which service the container runs |
-| `ASR_DEVICE` / `TTS_DEVICE` | `cpu` | Set to `cuda` for GPU acceleration |
+| `ASR_DEVICE` / `TTS_DEVICE` | `cpu` (`cuda` in the GPU images) | `cuda` runs on the GPU, NVIDIA or AMD; needs a GPU image |
+| `TTS_KOKORO_DEVICE` | `cpu` (`cuda` in the CUDA image) | `cpu`, `cuda` or `auto` for Kokoro's ONNX Runtime; `cuda` fails the start if the GPU is not used |
 | `ASR_MODEL` | `base` | Whisper model: `tiny`, `base`, `small`, `medium`, `large-v3` |
 | `ASR_ENGINE` | `fasterwhisper` | `fasterwhisper` (recommended) or `whisper` |
 | `TTS_ENGINE` | `kokoro` | `kokoro` or `coqui` (aliases `xtts`, `xtts-2`); see [TTS Engines](#tts-engines) |
@@ -322,7 +352,8 @@ The engine is chosen once, at boot, with `TTS_ENGINE`. The API (`/v1/audio/speec
 | Speed on CPU | faster than real time | seconds per sentence |
 | Voice cloning | no | yes, from `.wav` samples |
 | Languages | en-US, en-GB, pt-BR, es, fr, it, hi | 16 incl. pt, ja, zh |
-| Image | `:kokoro` (slim) and `:xtts` / `:latest` | `:xtts` / `:latest` only |
+| Image | `:kokoro` (slim), `:xtts` / `:latest`, `:cuda`, `:rocm` | `:xtts` / `:latest`, `:cuda`, `:rocm` |
+| GPU | `:cuda` (`TTS_KOKORO_DEVICE=cuda`); CPU in `:rocm` | `:cuda` and `:rocm` (`TTS_DEVICE=cuda`) |
 | `default` voice | `TTS_KOKORO_DEFAULT_VOICE` (`af_heart`) | `TTS_XTTS_DEFAULT_VOICE` (`Claribel Dervla`) |
 
 Kokoro voices are bound to a language (`pf_dora`, `pm_alex` and `pm_santa` are Brazilian
@@ -416,9 +447,11 @@ voice-stack/
 ├── docs/                  # Architecture, concurrency, load testing, cheat sheets
 ├── voices/                # Voice samples for TTS cloning
 ├── tests/                 # Unit + integration test suites
-├── Dockerfile             # Unified production image (~6 GB)
+├── Dockerfile             # CPU images: full (default target) and slim (--target kokoro)
+├── docker/                # GPU images: Dockerfile.cuda (NVIDIA), Dockerfile.rocm (AMD)
 ├── Dockerfile.ci          # CI image with dev dependencies
-├── docker-compose.yml     # Local development compose
+├── docker-compose.yml     # Local compose (CPU)
+├── docker-compose.{cuda,rocm}.yml  # GPU overrides for docker-compose.yml
 ├── pyproject.toml         # Hatch project configuration
 └── .gitlab-ci.yml         # CI/CD pipeline
 ```

@@ -10,8 +10,13 @@
 #   4. smoke: Boot the PRODUCTION image and check it answers (see .gitlab/ci/smoke.yml)
 #   5. coverage: Coverage report
 #   6. security: Secret detection, gitleaks (MR), semgrep, pip-audit and trivy
-#      of both published images (see .gitlab/ci/security.yml)
+#      of both published images (see .gitlab/ci/security.yml); on MRs also the
+#      GPU image builds (.gitlab/ci/gpu-images.yml, needs: [], start at once)
 #   7. release: Promote to :latest ONLY if all checks pass
+#
+# GPU images (docker/Dockerfile.cuda, docker/Dockerfile.rocm) are built, asserted
+# and scanned on merge requests by .gitlab/ci/gpu-images.yml, then deleted. They
+# are never pushed, never released and never deployed.
 #
 # The smoke stage exists because everything above it runs against the CI image
 # with torch mocked, so a production image that cannot even start passes the
@@ -524,3 +529,4 @@ include:
   - local: .gitlab/ci/smoke.yml
   - local: .gitlab/ci/security.yml
   - local: .gitlab/ci/deploy.yml
+  - local: .gitlab/ci/gpu-images.yml

@@ -11,7 +11,11 @@
 #   docker compose down               # Stop services
 #
 # Build:
-#   docker compose build              # Build production image
+#   docker compose build              # Build production image (CPU)
+#
+# GPU (builds docker/Dockerfile.cuda or docker/Dockerfile.rocm instead):
+#   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build
 # ============================================================================
 
 services:
@@ -48,7 +52,7 @@ services:
 
       # ASR Engine settings
       ASR_ENGINE: ${ASR_ENGINE:-fasterwhisper}
-      ASR_DEVICE: ${ASR_DEVICE:-cpu}  # Change to 'cuda' if you have GPU
+      ASR_DEVICE: ${ASR_DEVICE:-cpu}  # 'cuda' needs a GPU image: see docker-compose.cuda.yml / .rocm.yml
       ASR_MODEL: ${ASR_MODEL:-base}
       ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
       # NOT overridable on purpose: this must equal the asr-models volume
@@ -89,12 +93,9 @@ services:
           cpus: '1.0'
           memory: 2G
 
-    # GPU support: the published images are CPU-only since voice-stack#13
-    # (see DOCKER_DEPLOYMENT.md "GPU Support"); this needs a custom CUDA build.
-    # runtime: nvidia
-    # environment:
-    #   - NVIDIA_VISIBLE_DEVICES=all
-    #   - ASR_DEVICE=cuda
+    # GPU: this file builds the CPU image. Add docker-compose.cuda.yml (NVIDIA)
+    # or docker-compose.rocm.yml (AMD) with a second -f to build the GPU image
+    # and pass the device through (see DOCKER_DEPLOYMENT.md "GPU Support").
 
   # -------------------------------------------------------------------------
   # TTS Service (Text-to-Speech)
@@ -129,7 +130,7 @@ services:
 
       # TTS Engine settings
       TTS_ENGINE: ${TTS_ENGINE:-coqui}
-      TTS_DEVICE: ${TTS_DEVICE:-cpu}  # Change to 'cuda' if you have GPU
+      TTS_DEVICE: ${TTS_DEVICE:-cpu}  # 'cuda' needs a GPU image: see docker-compose.cuda.yml / .rocm.yml
       TTS_MODEL: ${TTS_MODEL:-tts_models/multilingual/multi-dataset/xtts_v2}
 
       # Audio settings
@@ -177,12 +178,9 @@ services:
           cpus: '2.0'
           memory: 4G
 
-    # GPU support: the published images are CPU-only since voice-stack#13
-    # (see DOCKER_DEPLOYMENT.md "GPU Support"); this needs a custom CUDA build.
-    # runtime: nvidia
-    # environment:
-    #   - NVIDIA_VISIBLE_DEVICES=all
-    #   - TTS_DEVICE=cuda
+    # GPU: this file builds the CPU image. Add docker-compose.cuda.yml (NVIDIA)
+    # or docker-compose.rocm.yml (AMD) with a second -f to build the GPU image
+    # and pass the device through (see DOCKER_DEPLOYMENT.md "GPU Support").
 
   # -------------------------------------------------------------------------
   # Gateway (spoken exchanges with an agent)

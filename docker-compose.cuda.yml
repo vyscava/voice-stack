@@ -1,0 +1,51 @@
+# ============================================================================
+# NVIDIA GPU override for docker-compose.yml
+# ============================================================================
+# Builds docker/Dockerfile.cuda instead of the CPU image and gives ASR and TTS
+# the GPU. Needs an NVIDIA driver >= 580 (CUDA 13) and the NVIDIA Container
+# Toolkit on the host. Usage, from the repository root:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d --build
+#
+# Compose merges this over docker-compose.yml: every other setting (ports,
+# volumes, limits, your .env) still applies. The device settings below are
+# literal on purpose: .env.example sets ASR_DEVICE=cpu / TTS_DEVICE=cpu, and an
+# interpolated default here would let a copied .env quietly run the GPU image
+# on the CPU. Edit them here if you want something else.
+#
+# On GPU: faster-whisper (ASR), XTTS (TTS_ENGINE=coqui) and Kokoro
+# (TTS_ENGINE=kokoro, via onnxruntime-gpu). See DOCKER_DEPLOYMENT.md
+# "GPU Support". To pin a GPU, replace `count: all` with `device_ids: ["0"]`.
+# ============================================================================
+
+services:
+  asr:
+    build:
+      dockerfile: docker/Dockerfile.cuda
+    image: voice-stack:cuda
+    environment:
+      ASR_DEVICE: cuda
+      # CTranslate2's GPU precision; int8 is the CPU default in the base file.
+      ASR_COMPUTE_TYPE: float16
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  tts:
+    build:
+      dockerfile: docker/Dockerfile.cuda
+    image: voice-stack:cuda
+    environment:
+      TTS_DEVICE: cuda
+      TTS_KOKORO_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
