@@ -1,27 +1,43 @@
 # ============================================================================
-# GPU images: build-only proof (docker/Dockerfile.cuda, docker/Dockerfile.rocm)
+# GPU images (docker/Dockerfile.cuda, docker/Dockerfile.rocm): check + publish
 # ============================================================================
-# Included from .gitlab-ci.yml. The GPU images exist for people running
-# voice-stack on their own NVIDIA or AMD hardware. Homelab production runs the
-# slim CPU :kokoro image, so these jobs:
+# Included from .gitlab-ci.yml. The GPU images exist for running voice-stack on
+# NVIDIA or AMD hardware. The deploy jobs in this pipeline use the slim CPU
+# :kokoro image, so no deploy uses them. Every job here:
 #
-#   - BUILD the image (which runs scripts/assert_runtime.py --variant cuda|rocm)
-#   - pip-audit and trivy it with the same pins and policy as the CPU gates
-#   - and then DELETE it (after_script, also on failure or cancel)
+#   - BUILDS the image (which runs scripts/assert_runtime.py --variant cuda|rocm)
+#   - pip-audits and trivies it with the same pins and policy as the CPU gates
+#     (ci/gpu-image-check.sh)
+#   - and DELETES it at the end (after_script, also on failure or cancel)
 #
-# They never log in to a registry, never push, are not needed by release:*
-# or deploy:*, and never run on main or on tags, so they can neither publish
-# a GPU image nor hold up a production deploy. The image tag deliberately has
-# no registry host in it. Everything is in ci/gpu-image-check.sh.
+# TWO KINDS OF JOB
+#   build:gpu-image:*    merge requests. Check only: no registry login, no push.
+#   publish:gpu-image:*  main, after the deploy. The same check, then the image
+#                        that passed it is pushed as
+#                        ${DOCKER_REGISTRY}/voice-stack:cuda / :rocm
+#                        (ci/gpu-image-publish.sh, moving tags only).
+#
+# WHY PUBLISH SITS AFTER THE DEPLOY. The deploy jobs have no `needs`, so they
+# wait for every job in an earlier stage. A GPU build in any stage before
+# `deploy` would hold every production deploy for ~20 minutes, and stop it if
+# it failed. The `publish` stage comes after `deploy`, and the publish jobs
+# have no `needs` either, so they start only once the deploy is done (and not
+# at all if it failed), and they are allow_failure: a red GPU build marks the
+# pipeline with a warning but cannot undo or block anything.
 #
 # WHEN THEY RUN
-#   merge requests that change what goes into the image: automatically
-#   any other merge request: manual (play the job to rebuild on demand)
-#   scheduled pipelines: automatically (none is configured today; see the
-#     tracking issue before adding one on main, whose pipeline deploys)
+#   merge requests that change what goes into the image: build, automatically
+#   any other merge request: build, manual (play it to rebuild on demand)
+#   main: publish, MANUAL only (play the job to publish). Each publish is two
+#     cold ~20-minute builds and ~20 GB of pushes, and src/ is an image input,
+#     so publishing on every merge costs more runner time than it is worth.
+#     The automatic rules are kept below, commented out, to turn back on.
+#   scheduled pipelines: build, automatically (none is configured; a schedule
+#     on main would also run the deploy jobs, which do not exclude schedules)
 #
 # Nothing on the runner has a GPU. These jobs prove the images BUILD and are
-# the GPU builds they claim to be; they do not prove inference on a GPU.
+# the GPU builds they claim to be. Inference was verified by hand on an
+# RTX 5090 and on an AMD Radeon 8060S (gfx1151) on 2026-11-12.
 #
 # DISK. The runner is one shared docker daemon on one disk, and these builds
 # are big (images 9-12 GB, builder stages as large again). The first version
@@ -36,13 +52,10 @@
 # Names carry ${CI_JOB_ID} so concurrent jobs cannot collide.
 # ============================================================================
 
-# Stage `security` with `needs: []`: the job still starts at once, but jobs in
-# EARLIER stages (quality, test, smoke) never wait for it. In build-images, a
-# 15-minute GPU build held up the whole MR pipeline behind it.
-.gpu-image:
-  stage: security
+# What every GPU job shares: one build at a time, a throwaway builder, and
+# cleanup of everything the job created.
+.gpu-image-base:
   image: docker:29
-  needs: []
   before_script: []
   timeout: 3 hours
   resource_group: gpu-image-build
@@ -55,6 +68,7 @@
     - docker rm -f "freeze-${GPU_VARIANT}-${CI_JOB_ID}" "meta-${GPU_VARIANT}-${CI_JOB_ID}" "trivy-${GPU_VARIANT}-${CI_JOB_ID}" "audit-${GPU_VARIANT}-${CI_JOB_ID}-report" "audit-${GPU_VARIANT}-${CI_JOB_ID}-gate" >/dev/null 2>&1 || true
     - docker buildx rm -f "$GPU_BUILDER" || true
     - docker rmi -f "$GPU_IMAGE" || true
+    - '[ -z "${DOCKER_REGISTRY:-}" ] || docker rmi -f "${DOCKER_REGISTRY}/voice-stack:${GPU_VARIANT}" || true'
   artifacts:
     when: always
     expire_in: 1 month
@@ -67,6 +81,33 @@
     - docker
     - nuc
 
+# Merge-request check. Stage `security` with `needs: []`: the job still starts
+# at once, but jobs in EARLIER stages (quality, test, smoke) never wait for it.
+# In build-images, a 15-minute GPU build held up the whole MR pipeline.
+.gpu-image:
+  extends: .gpu-image-base
+  stage: security
+  needs: []
+
+# Publish on main. No `needs`: stage order puts it after deploy (see above).
+.gpu-image-publish:
+  extends: .gpu-image-base
+  stage: publish
+  allow_failure: true
+  script:
+    - sh ci/gpu-image-check.sh "$GPU_VARIANT"
+    - sh ci/gpu-image-publish.sh "$GPU_VARIANT"
+  artifacts:
+    when: always
+    expire_in: 1 month
+    paths:
+      - gpu-image-metrics.txt
+      - gpu-image-published.txt
+      - gpu-image-push.log
+      - requirements.freeze.txt
+      - pip-audit-all.json
+      - trivy-report.json
+
 # The shared inputs of both images. Each job adds its own Dockerfile.
 .gpu-image-inputs: &gpu-image-inputs
   - pyproject.toml
@@ -76,6 +117,7 @@
   - scripts/entrypoint.sh
   - scripts/.env.production.*
   - ci/gpu-image-check.sh
+  - ci/gpu-image-publish.sh
   - ci/trivy-guard.tpl
   - .gitlab/ci/gpu-images.yml
 
@@ -108,6 +150,36 @@ build:gpu-image:rocm:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: manual
       allow_failure: true
+
+publish:gpu-image:cuda:
+  extends: .gpu-image-publish
+  variables:
+    GPU_VARIANT: cuda
+  rules:
+    # Automatic publish on a push to main that changes an image input. Off: see
+    # WHEN THEY RUN above. Uncomment to publish on every such merge.
+    # - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+    #   changes:
+    #     - docker/Dockerfile.cuda
+    # - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+    #   changes: *gpu-image-inputs
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"'
+      when: manual
+
+publish:gpu-image:rocm:
+  extends: .gpu-image-publish
+  variables:
+    GPU_VARIANT: rocm
+  rules:
+    # Automatic publish on a push to main that changes an image input. Off: see
+    # WHEN THEY RUN above. Uncomment to publish on every such merge.
+    # - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+    #   changes:
+    #     - docker/Dockerfile.rocm
+    # - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"'
+    #   changes: *gpu-image-inputs
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"'
+      when: manual
 
 # Manual: remove GPU-build cache left on the daemon's default builder (see the
 # DISK note above). Dry-run listing first, then the prune; scoped to records
