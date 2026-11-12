@@ -64,7 +64,7 @@ RUN curl -fsSL -o kokoro-v1.0.onnx "$KOKORO_RELEASE/kokoro-v1.0.onnx" && \
 # the zip's sha256 (measured 2026-11-11), so a replaced asset fails the build.
 # Keep CT2_VERSION within faster-whisper's ctranslate2 range (<5).
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS ct2-rocm
+FROM python:3.11-slim AS voice-stack-ct2-rocm
 ARG CT2_VERSION=4.9.0
 ARG CT2_ROCM_ZIP_SHA256=0a9ad24145fe671628d7524602241b3743a12d1487489f075f5de91f68aa2837
 RUN apt-get update -y && apt-get install -y --no-install-recommends curl ca-certificates && \
@@ -129,7 +129,7 @@ RUN /build/.venv/bin/pip install --no-cache-dir --no-deps --force-reinstall \
         --index-url https://download.pytorch.org/whl/rocm7.14 "rocm[${EXTRAS}]==${ROCM_VERSION}"
 
 # Step 3: CTranslate2's ROCm build over the PyPI one faster-whisper pulled in.
-COPY --from=ct2-rocm /wheels/ /tmp/ct2/
+COPY --from=voice-stack-ct2-rocm /wheels/ /tmp/ct2/
 RUN /build/.venv/bin/pip install --no-cache-dir --no-deps --force-reinstall /tmp/ct2/ctranslate2-*.whl && \
     rm -rf /tmp/ct2
 
@@ -142,7 +142,7 @@ RUN bash scripts/accept_coqui_license.sh && \
 # -----------------------------------------------------------------------------
 # Runtime
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS rocm
+FROM python:3.11-slim AS voice-stack-rocm
 
 LABEL description="Voice Stack ROCm image: ASR + XTTS on AMD GPUs, Kokoro on CPU"
 LABEL version="0.1.0"
