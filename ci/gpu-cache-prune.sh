@@ -54,7 +54,7 @@ cat gpu-cache-records.txt
 # them gpu-<variant>-<CI_JOB_ID>, and buildx runs each as a container named
 # buildx_buildkit_<builder>0 with a <container>_state volume holding its cache.
 # The job's after_script removes them, but a CANCELLED job can skip it (seen
-# 2026-11-12: job 89334's builder was still up 5 hours later). This job shares
+# 2026-11-11: job 89334's builder was still up 5 hours later). This job shares
 # resource_group gpu-image-build with the builds, so no GPU build is running
 # while it does and every such builder is an orphan.
 ORPHAN_RE='^buildx_buildkit_gpu-(cuda|rocm)-[0-9]+$'
