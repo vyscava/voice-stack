@@ -3,7 +3,7 @@
 # Vendored instead of registry packs (p/python, p/bandit, p/dockerfile): a
 # merge gate that depends on semgrep.dev being reachable mid-scan is
 # nondeterministic, and a local ruleset is reproducible from git and immune to
-# rule drift. Copied from the homelab kb-mcp ruleset.
+# rule drift. Shared with sibling projects' rulesets.
 #
 # The CI job scans ALL rules (no severity filter at scan time); the job's JSON
 # guard fails only on ERROR-severity findings, so WARNING rules are genuinely

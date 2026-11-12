@@ -37,12 +37,12 @@
 # the host prints your card's gfx name. Strix Halo (Ryzen AI Max, Radeon
 # 8050S/8060S) is gfx1151 and is NOT in the default set.
 #
-# NOT DEPLOYED. Homelab CI builds this image and runs the build-time
+# NOT DEPLOYED. The project's CI builds this image and runs the build-time
 # assertions and security scans on it, but never pushes it as a deploy
 # candidate. Nothing in CI has a GPU, so it has not been run on one there.
 # Run by hand on 2026-11-12 on a Strix Halo Radeon 8060S (gfx1151 build):
 # faster-whisper and XTTS ran on the GPU, XTTS slower than real time there.
-# The default RDNA2/3/4 targets have not been run on a GPU (voice-stack#14).
+# The default RDNA2/3/4 targets have not been run on a GPU.
 # ============================================================================
 
 # -----------------------------------------------------------------------------

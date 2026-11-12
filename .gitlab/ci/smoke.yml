@@ -6,7 +6,7 @@
 # before anyone edits it.
 #
 # WHY: on 2026-08-13 CI was fully green on an image that could not boot, and TTS
-# stayed down for three days (#4). Every other gate runs against the CI image
+# stayed down for three days (the torch 2.13 outage). Every other gate runs against the CI image
 # with torch MOCKED in the TTS conftest -- so a torch that cannot be imported at
 # all passes the entire suite. Nothing in the pipeline had ever started the thing
 # we publish.
@@ -29,7 +29,7 @@
 # regression.
 #
 # LOG_LEVEL=info is passed explicitly. uvicorn rejects "INFO" and exits; the
-# image default was uppercase until !46 fixed it, so this keeps the gate working
+# image default was uppercase until a later fix, so this keeps the gate working
 # against older images too.
 # ============================================================================
 
@@ -158,7 +158,7 @@
              docker exec smoke-asr-${CI_JOB_ID} cat /tmp/asr.json || true; exit 1; }
       echo "OK: ASR booted and transcribed the synthesised clip."
 
-      echo "--- ASR VAD: really trims silence (voice-stack#13) ---"
+      echo "--- ASR VAD: really trims silence ---"
       # The service treats a VAD that fails to load as "transcribe without
       # VAD" and carries on, so the transcript above passes either way. Pad the
       # clip with 2 s of silence on each side and require VAD to remove most of

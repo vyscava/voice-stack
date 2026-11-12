@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     GATEWAY_TTS_URL: str = Field(default="http://localhost:5002", description="Base URL of the TTS service.")
 
     # Which agent an utterance is routed to, and as whom.
-    GATEWAY_AGENT: str = Field(default="claude-code-channel", description="Peer agent that answers utterances.")
+    GATEWAY_AGENT: str = Field(default="assistant", description="Peer agent that answers utterances.")
     GATEWAY_SELF_NAME: str = Field(
         default="voice-gateway",
         description="Our own name on the bus. NATS ACLs allow publishing only under agents.<self>.>, "

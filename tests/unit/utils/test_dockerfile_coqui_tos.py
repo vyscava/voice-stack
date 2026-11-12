@@ -3,7 +3,7 @@
 The images also write tos_agreed.txt under ~/.local/share/tts, but deployments
 mount the TTS models volume over that directory. A bind mount hides the file,
 and XTTS then prompts on stdin and the container dies at start-up with
-"EOFError: EOF when reading a line" (voice-stack#14). COQUI_TOS_AGREED=1 in the
+"EOFError: EOF when reading a line". COQUI_TOS_AGREED=1 in the
 runtime stage is what survives the mount, so it is asserted per image here.
 """
 

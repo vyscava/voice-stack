@@ -20,7 +20,7 @@
 #
 # The smoke stage exists because everything above it runs against the CI image
 # with torch mocked, so a production image that cannot even start passes the
-# whole suite. That happened, and cost three days of TTS downtime (#4).
+# whole suite. That happened, and cost three days of TTS downtime (the torch 2.13 outage).
 #
 # Docker Images:
 #   - CI Image: Contains all dev dependencies for running tests
@@ -140,7 +140,7 @@ build:prod-image:
     # ALSO on merge requests that change what goes INTO the image, so the smoke
     # stage can boot-test a dependency change BEFORE it is merged. Previously
     # this was main-only, which meant a build that could not start was only
-    # discovered after it had been promoted to :latest (#4).
+    # discovered after it had been promoted to :latest (the torch 2.13 outage).
     # Keep this list a SUPERSET of smoke:image-works' changes: rules. smoke
     # `needs` this job without optional:true, so any path that creates smoke
     # without also creating its dependency makes the pipeline invalid.

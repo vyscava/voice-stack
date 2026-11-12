@@ -20,7 +20,7 @@
 # packages torch and onnxruntime-gpu depend on, plus nvidia-cublas-cu12 for
 # CTranslate2), which is how faster-whisper documents a CUDA install. The
 # nvidia/cuda Ubuntu 22.04 bases ship python3.11 as 3.11.0rc1, the root cause of
-# voice-stack#4 (see the root Dockerfile), and scripts/assert_runtime.py refuses
+# the torch 2.13 outage (see the root Dockerfile), and scripts/assert_runtime.py refuses
 # a pre-release interpreter. The driver itself (libcuda.so.1) is injected at run
 # time by the NVIDIA Container Toolkit, so it is not in the image.
 #
@@ -32,15 +32,15 @@
 # torchaudio is the +cpu build. 2.11.0 is its last release and has no cu132
 # build, and its cu130 build refuses to import against torch cu132 ("PyTorch
 # has CUDA version 13.2 whereas TorchAudio has CUDA version 13.0", measured in
-# !77's first pipeline). The CPU build skips that check, and what coqui-tts
+# the first CI pipeline of this build). The CPU build skips that check, and what coqui-tts
 # uses from it (MelSpectrogram, resample) is plain torch ops, which run on the
 # GPU when given GPU tensors.
 #
-# NOT DEPLOYED. Homelab CI builds this image and runs the build-time
+# NOT DEPLOYED. The project's CI builds this image and runs the build-time
 # assertions and security scans on it, but never pushes it as a deploy
 # candidate. Nothing in CI has a GPU, so it has not been run on one there.
 # Run by hand on 2026-11-12 on an RTX 5090 (driver 615.71.09): faster-whisper,
-# openai-whisper, Kokoro and XTTS all ran on the GPU (voice-stack#14).
+# openai-whisper, Kokoro and XTTS all ran on the GPU.
 # ============================================================================
 
 # -----------------------------------------------------------------------------

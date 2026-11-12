@@ -9,7 +9,7 @@ whose timings are hardcoded in the fixture, so those tests exercise routing and
 the formatters -- never the engine contract.
 
 Proven, not assumed: zeroing ``start``/``end`` in ``mock_asr_engine`` (simulating
-a timestamp-less engine) left all 16 passing. See voice-stack#6.
+a timestamp-less engine) left all 16 passing.
 
 Without timestamps Bazarr still gets a 200 and still writes a subtitle file, but
 every cue reads ``00:00:00,000 --> 00:00:00,001``. The failure is silent all the

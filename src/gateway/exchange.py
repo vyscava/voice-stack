@@ -5,7 +5,7 @@
 This module is deliberately free of HTTP, NATS and FastAPI. It talks to three
 protocols, so every branch below is reachable in a unit test without a network,
 a model, or a message bus. The failure policy is the valuable part of the
-gateway and it should not require a running homelab to verify.
+gateway and it should not require running infrastructure to verify.
 
 Two invariants worth stating out loud
 -------------------------------------

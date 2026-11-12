@@ -46,7 +46,7 @@ def test_build_of(version: str, build: str) -> None:
         ("2.15.0+cu132", "cu", True),
         ("2.11.0+cu130", "cu", True),
         ("2.15.0+rocm7.14", "rocm", True),
-        # The failure #4's class of bug hides behind: right version, wrong build.
+        # The class of bug behind the torch 2.13 outage hides here: right version, wrong build.
         ("2.15.0", "cpu", False),
         ("2.15.0+cu132", "cpu", False),
         ("2.15.0+cpu", "cu", False),

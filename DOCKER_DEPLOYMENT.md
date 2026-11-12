@@ -94,7 +94,7 @@ docker run -e SERVICE_MODE=tts -p 5002:5002 voice-stack:latest
 ```
 
 The same file builds the slim CPU image with `--target kokoro` (ASR + Kokoro +
-gateway, no torch), which is what the homelab deployment runs.
+gateway, no torch), which is what `compose/deploy/` runs in production.
 
 ### GPU Images (docker/Dockerfile.cuda, docker/Dockerfile.rocm)
 
@@ -312,7 +312,7 @@ docker run -d \
   your-registry/voice-stack:latest
 ```
 
-### Separate stacks (homelab production)
+### Separate stacks (production)
 
 `compose/deploy/` holds one compose stack per service (`asr.yml`, `tts.yml`,
 `gateway.yml`). Each takes its image from `${VOICE_STACK_IMAGE}` and keeps its
@@ -326,7 +326,7 @@ joins their networks.
 To run them by hand: `VOICE_STACK_IMAGE=<your image> docker compose -p
 voice-stack-asr -f compose/deploy/asr.yml up -d`, the same for `tts`, then the
 gateway with its variables set. See `compose/README.md` for the
-homelab-specific values to change.
+deployment-specific values to change.
 
 ### GPU Support
 
@@ -339,8 +339,9 @@ images are separate Dockerfiles under `docker/`, built from the repository root:
 | `voice-stack:rocm` | `docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .` | `python:3.11-slim` + ROCm 7.14 from AMD's pip packages | torch 2.15.0+rocm7.14, CTranslate2 ROCm wheel |
 
 Both use the same final-release Python 3.11 as the CPU images. The old full image
-ran on `nvidia/cuda` Ubuntu 22.04, whose Python 3.11 is 3.11.0rc1, the root cause
-of #4; `scripts/assert_runtime.py` refuses a pre-release interpreter.
+ran on `nvidia/cuda` Ubuntu 22.04, whose Python 3.11 is 3.11.0rc1: that broke
+torch 2.13 at import and took TTS down for three days. `scripts/assert_runtime.py`
+refuses a pre-release interpreter.
 
 **What runs where:**
 

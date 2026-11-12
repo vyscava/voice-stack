@@ -1,23 +1,19 @@
-# `compose/deploy/`: the author's homelab deployment
+# `compose/deploy/`: a real production deployment
 
 **These files are not a template. They will not work for you unmodified.**
 
-They are the real stack definitions running voice-stack in the author's
-homelab, deployed by CI (`.gitlab/ci/deploy.yml`) to a 4-core CPU host. They
-are kept in the repository as a worked example of a production deployment.
+They are the stack definitions of a real voice-stack deployment, deployed by
+CI (`.gitlab/ci/deploy.yml`) to a 4-core CPU host. They are kept in the
+repository as a worked example of a production deployment.
 
 ## What is in them that will not work for you
 
 | reference | where | what it is |
 |---|---|---|
 | `${VOICE_STACK_IMAGE}` | all three | the image, pinned by digest by the deploy job from a private registry |
-| `10.87.2.4` | all three (`dns:`) | an internal DNS server |
 | `ASR_CPU_THREADS: "4"`, `TTS_KOKORO_THREADS: "4"` | `asr.yml`, `tts.yml` | sized to the host's 4 CPUs; set yours to the cores the container gets |
-| `${GATEWAY_*}` | `gateway.yml` | bus identity, NATS URL and timeouts, supplied by the deployer from a vault |
+| `${GATEWAY_*}` | `gateway.yml` | bus identity, NATS URL and timeouts, supplied by the deployer from its secret store |
 | external networks | `gateway.yml` | joins the ASR and TTS stacks' own networks, which must already exist |
-
-The addresses are private-network (RFC 1918) values. They are not secrets and
-not reachable from the internet, but they will not resolve for you.
 
 ### A note on `gateway.yml`
 

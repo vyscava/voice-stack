@@ -1,4 +1,4 @@
-"""Silero VAD on faster-whisper's bundled ONNX model (voice-stack#13).
+"""Silero VAD on faster-whisper's bundled ONNX model.
 
 These run the REAL model where they can: the point of the change is that VAD no
 longer needs torch, and a mocked VAD would pass whether or not that is true.
@@ -38,8 +38,8 @@ def test_vad_path_never_imports_torch() -> None:
 
     A fresh interpreter with torch made unimportable (sys.modules[name] = None
     makes `import torch` raise ImportError) must still load and run VAD. Before
-    #13 load_silero_model imported torch and silero_vad, and returned (None,
-    None) here: transcription silently lost VAD.
+    the slim image became torch-free, load_silero_model imported torch and
+    silero_vad, and returned (None, None) here: transcription silently lost VAD.
     """
     code = textwrap.dedent(f"""
         import logging, sys
@@ -63,7 +63,7 @@ def test_vad_path_never_imports_torch() -> None:
 def test_timestamps_fn_passes_silero_defaults_not_faster_whisper_defaults() -> None:
     """faster-whisper's own VadOptions default to 2 s silence / 400 ms padding.
 
-    The service used silero-vad's defaults before #13; swapping the runtime must
+    The service used silero-vad's defaults before the move to faster-whisper's bundled VAD; swapping the runtime must
     not silently change what gets trimmed.
     """
     _, ts_fn = load_silero_model(log)

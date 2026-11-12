@@ -199,7 +199,7 @@ def test_get_audio_engine_lazy_initialization() -> None:
 @pytest.mark.unit
 @pytest.mark.asr
 def test_whisper_engine_without_torch_raises_a_clear_error() -> None:
-    """The slim image has no torch (voice-stack#13). ASR_ENGINE=whisper there must
+    """The slim image has no torch. ASR_ENGINE=whisper there must
     fail with a message naming the fix, not a bare ImportError from deep inside."""
     import sys
 

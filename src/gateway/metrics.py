@@ -8,9 +8,8 @@ nothing else -- so a gateway that is up and failing EVERY exchange looks
 identical to a healthy one, and did.
 
 The three-day TTS outage in August was invisible to Prometheus for its whole
-duration because nothing was watched. Liveness probes (gitops/portainer!996)
-fixed the crude half. This is the half that catches a service that is running
-and useless.
+duration because nothing was watched. Liveness probes fixed the crude half.
+This is the half that catches a service that is running and useless.
 
 Deliberately kept out of exchange.py, which stays free of I/O so its failure
 policy can be tested without a metrics registry.

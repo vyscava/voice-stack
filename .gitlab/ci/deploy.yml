@@ -1,19 +1,21 @@
-# Deploys: one include of the shared compose deployer per stack
-# (gitops/ci-templates templates/deploy.yml; runbook in that repo,
-# docs/runbook.md). A merge to main IS the deploy. Each job talks to the voice
-# host over an SSH docker context as gitlab-deploy, pins VOICE_STACK_IMAGE to
-# the slim image build:prod-image pushed in this pipeline, runs
-# `compose up -d` under the stack's project name, and asserts the running
-# digest, state and health before it goes green. A failed deploy that touched
-# the host writes a hold; the next deploy of that stack refuses until an owner
-# clears it.
+# Deploys: one include of a shared compose deployer template per stack. A
+# merge to main IS the deploy. Each job talks to the deploy host over an SSH
+# docker context, pins VOICE_STACK_IMAGE to the slim image build:prod-image
+# pushed in this pipeline, runs `compose up -d` under the stack's project name,
+# and asserts the running digest, state and health before it goes green. A
+# failed deploy that touched the host writes a hold; the next deploy of that
+# stack refuses until it is cleared.
 #
 # The deploy stage comes after release, and these jobs have no `needs` (the
 # gateway's are below), so every gate in the pipeline (tests, smoke, security
 # scans, the :kokoro promotion) must be green before anything reaches the host.
 #
-# `stack` is the compose project name on the host, the docker context name and
-# the vault blob key deploys/data-platforms/voice-stack/<stack>.
+# Where to deploy is configuration, not code: the host comes from the
+# DEPLOY_HOST CI/CD variable (the template's fallback when `host` is empty) and
+# the image repository from DOCKER_REGISTRY. These jobs run on the default
+# branch only; a fork that does not deploy sets DEPLOY_DISABLED=true.
+#
+# `stack` is the compose project name on the host and the docker context name.
 
 include:
   - project: gitops/ci-templates
@@ -24,8 +26,7 @@ include:
       compose_file: compose/deploy/asr.yml
       image_var: VOICE_STACK_IMAGE
       published_var: VOICE_STACK_PUBLISHED_IMAGE
-      image_repository: registry.local.vitorgarbim.me/voice-stack
-      host: voice.server.local.vitorgarbim.me
+      image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
       health_timeout: 420
   - project: gitops/ci-templates
@@ -36,8 +37,7 @@ include:
       compose_file: compose/deploy/tts.yml
       image_var: VOICE_STACK_IMAGE
       published_var: VOICE_STACK_PUBLISHED_IMAGE
-      image_repository: registry.local.vitorgarbim.me/voice-stack
-      host: voice.server.local.vitorgarbim.me
+      image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
       health_timeout: 300
   - project: gitops/ci-templates
@@ -48,8 +48,7 @@ include:
       compose_file: compose/deploy/gateway.yml
       image_var: VOICE_STACK_IMAGE
       published_var: VOICE_STACK_PUBLISHED_IMAGE
-      image_repository: registry.local.vitorgarbim.me/voice-stack
-      host: voice.server.local.vitorgarbim.me
+      image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
 
 # The gateway joins the ASR and TTS networks as external networks, which only

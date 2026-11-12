@@ -58,7 +58,7 @@ RUN chmod +x scripts/*.sh
 # Create hatch default environment with all dependencies
 # This installs: dev, server, tts, asr, gateway features from pyproject.toml.
 # Keep this list matching the production Dockerfile's extras -- CI installing a
-# different set than prod ships is the general form of voice-stack#4.
+# different set than prod ships is the general form of the torch 2.13 outage.
 RUN hatch env create
 
 # Force the CPU build of torch/torchaudio.
@@ -66,7 +66,7 @@ RUN hatch env create
 # pyproject pins the VERSION (==2.15.0) but PyPI serves that version as the CUDA
 # wheel, so hatch's resolve lands ~4 GB of nvidia-*-cu12 packages and, worse, a
 # DIFFERENT artifact from the one production runs. CI testing a different wheel
-# than prod ships is the general form of voice-stack#4.
+# than prod ships is the general form of the torch 2.13 outage.
 #
 # hatch owns environment creation here, so the variant is corrected afterwards
 # rather than installed first as in the production Dockerfile. --no-deps keeps

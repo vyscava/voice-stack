@@ -1,17 +1,13 @@
-# Voice Stack ASR, deployed by CI to the voice host (CT 261 on tower,
-# voice.server.local.vitorgarbim.me) through the shared compose deployer
-# (gitops/ci-templates templates/deploy.yml, wired in .gitlab/ci/deploy.yml).
+# Voice Stack ASR, deployed by CI to a 4-core CPU host through a shared
+# compose deployer (wired in .gitlab/ci/deploy.yml).
 #
 # A merge to main IS the deploy: the job pins VOICE_STACK_IMAGE to the slim
 # image this pipeline built (voice-stack:kokoro-<sha>, by digest), runs
 # `compose up -d` over an SSH docker context and asserts digest and health.
-# Portainer does not own this stack; it only shows it.
 #
 # Settings live here, not in a stack env: none of them is a secret, and the
-# repo is the record. The vault blob deploys/data-platforms/voice-stack/
-# voice-stack-asr exists because the deployer requires one; it holds no
-# setting this file reads. Tuning comes from the CT 261 benchmark
-# (voice-stack#10): 4 P-cores, small int8 = RTF ~0.2.
+# repo is the record. Tuning comes from a benchmark on that host: 4 CPU
+# cores, small int8 = RTF ~0.2.
 #
 # The compose project name is voice-stack-asr, so the network is
 # voice-stack-asr_default, which the gateway joins by name.
@@ -34,7 +30,7 @@ services:
       ASR_DEVICE: cpu
       ASR_MODEL: small
       ASR_COMPUTE_TYPE: int8
-      # Match the container's CPU set (CT 261 is pinned to 4 P-cores). More
+      # Match the container's CPU set (the host has 4 cores). More
       # threads than cores oversubscribes and gets slower, not faster.
       ASR_CPU_THREADS: "4"
       ASR_NUM_OF_WORKERS: "1"
@@ -54,9 +50,6 @@ services:
 
     volumes:
       - asr-models:/app/models
-
-    dns:
-      - 10.87.2.4
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]

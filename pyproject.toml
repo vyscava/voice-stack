@@ -29,15 +29,15 @@ dependencies = [
 # torch/torchaudio: three separate mechanisms, do not confuse them.
 #
 # Which images carry torch at all: ONLY the full (XTTS) image. The slim
-# `:kokoro` image (production default) has no torch since voice-stack#13: ASR
+# `:kokoro` image (production default) has no torch: ASR
 # runs on faster-whisper (CTranslate2) and its VAD is the Silero ONNX model
 # that faster-whisper bundles, on onnxruntime. scripts/assert_runtime.py
 # --variant kokoro fails the build if torch, torchaudio, whisper, TTS or
 # transformers ever come back into that image.
 #
 #   1. THE PIN (here) fixes the VERSION, exact, because the TTS import path is
-#      fragile. #4 (torch 2.13.0, TTS down three days) is now explained
-#      (#13): the full image ran Ubuntu 22.04's python3.11, which is
+#      fragile. The torch 2.13.0 outage (TTS down three days) is now explained:
+#      the full image ran Ubuntu 22.04's python3.11, which is
 #      3.11.0~rc1 and has no sys.get_int_max_str_digits. Newer torch registers
 #      a dynamo polyfill for it behind `sys.version_info >= (3, 11)` (2.9.1
 #      used hasattr), so `import torch._dynamo` died right after registering
@@ -101,11 +101,11 @@ tts-kokoro = [
   "soundfile",
 ]
 tts-xtts = [
-  # Exact pins: this is the import chain that broke in #4. coqui-tts 0.28.0 is
+  # Exact pins: this is the import chain that broke in the torch 2.13 outage. coqui-tts 0.28.0 is
   # the first release written against transformers 5 (its XTTS code carries
   # 5.3 / 5.4 / 5.18 compatibility branches) and only floors it at >=4.57, so
   # transformers is pinned here, not left to float. 5.22.2 clears all six
-  # transformers advisories pip-audit reported on 4.57.6 (#13).
+  # transformers advisories pip-audit reported on 4.57.6.
   "coqui-tts[codec]==0.28.0",
   "transformers==5.22.2",
   "torch==2.15.0",

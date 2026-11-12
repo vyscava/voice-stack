@@ -5,7 +5,7 @@
 #   sh ci/gpu-cache-prune.sh          # list what would be removed
 #   sh ci/gpu-cache-prune.sh --apply  # remove it
 #
-# The first GPU builds of !77 ran on the daemon's default builder, whose layer
+# The first GPU builds ran on the daemon's default builder, whose layer
 # cache outlives the job: two pipelines left ~110 GB and filled the runner's
 # disk. ci/gpu-image-check.sh now builds in a throwaway builder that is removed
 # with its cache, so this only cleans up what came before that (and anything a

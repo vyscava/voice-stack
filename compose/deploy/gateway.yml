@@ -1,12 +1,9 @@
-# Voice Stack Gateway, deployed by CI to the voice host (CT 261 on tower,
-# voice.server.local.vitorgarbim.me). See compose/deploy/asr.yml for how the
-# deploy works.
+# Voice Stack Gateway, deployed by CI to the same host as ASR and TTS. See
+# compose/deploy/asr.yml for how the deploy works.
 #
 # The bus identity, the NATS URL (it carries the credential) and the timeouts
-# come from the vault blob deploys/data-platforms/voice-stack/
-# voice-stack-gateway, copied server-side from the old Portainer stack env;
-# the deployer exports the blob's keys and compose substitutes them below.
-# Everything else is literal here.
+# come from the deployer's secret store: it exports them into the environment
+# and compose substitutes them below. Everything else is literal here.
 #
 # NETWORKS. The ASR and TTS stacks each create their own network, so this
 # service joins both as external networks and addresses them by container
@@ -54,10 +51,6 @@ services:
 
     ports:
       - "5003:5003"
-
-    # Internal resolver, so nats.local.* resolves.
-    dns:
-      - 10.87.2.4
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/health"]

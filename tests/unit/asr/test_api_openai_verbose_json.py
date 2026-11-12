@@ -1,4 +1,4 @@
-"""voice-stack#9: OpenAI's full response_format set on the ASR endpoints."""
+"""OpenAI's full response_format set on the ASR endpoints."""
 
 from __future__ import annotations
 

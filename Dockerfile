@@ -75,7 +75,7 @@ RUN printf '%s\n' '#!/bin/sh' 'set -e' \
 # Builder for the slim image: ASR + Kokoro + gateway, and NO torch. ASR is
 # faster-whisper (CTranslate2) with the Silero ONNX VAD it bundles; the
 # PyTorch Whisper engine (asr-whisper extra), coqui-tts and transformers do not
-# come in (voice-stack#13). assert_runtime.py --variant kokoro enforces it.
+# come in. assert_runtime.py --variant kokoro enforces it.
 # -----------------------------------------------------------------------------
 FROM builder-base AS builder-kokoro
 RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts-kokoro,gateway]" && finish-venv
@@ -92,7 +92,7 @@ RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,tts-kokoro,gate
 # torchaudio is 2.11.0, its last release; see pyproject.toml for why that pair
 # is asserted rather than assumed. torchcodec comes from the CPU index too:
 # PyPI's x86_64 torchcodec 0.17.0 is a CUDA build whose libtorchcodec_image.so
-# needs libnvrtc.so.13 and libtorch_cuda.so (measured in !76's first pipeline).
+# needs libnvrtc.so.13 and libtorch_cuda.so (measured in the first CI pipeline of the CUDA build).
 FROM builder-base AS builder-full
 RUN /build/.venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
@@ -183,12 +183,12 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 # Stage 2: Production - Minimal Runtime
 # -----------------------------------------------------------------------------
 # python:3.11-slim, the SAME image the venv is built in. This is the root cause
-# of #4, found in voice-stack#13: the full image used to run on
+# of the torch 2.13 outage (found while making the slim image torch-free): the full image used to run on
 # nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04, whose only python3.11 is
 # Ubuntu's 3.11.0~rc1 (jammy-updates still ships the release candidate). The
 # venv was built on python:3.11-slim's 3.11 final and then run on rc1, which
 # predates sys.get_int_max_str_digits. torch 2.9.1 guards that polyfill with
-# hasattr(); newer torch (2.13 in #4, 2.15 here) guards it with
+# hasattr(); newer torch (2.13 in the outage, 2.15 here) guards it with
 # sys.version_info >= (3, 11), which rc1 satisfies. So the first
 # `import torch._dynamo` died with AttributeError right AFTER registering the
 # sys.intern polyfill, transformers swallowed it, and the next import raised
@@ -200,7 +200,7 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 # GPU (ASR_DEVICE=cuda). torch here is the +cpu build either way, production
 # runs ASR on CPU from the :kokoro image, and no deploy sets ASR_DEVICE=cuda, so
 # that capability is dropped from this image rather than kept on an rc
-# interpreter. Tracked in voice-stack#13.
+# interpreter.
 FROM python:3.11-slim AS full
 
 LABEL maintainer="vyscava@gmail.com"
@@ -279,7 +279,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # (repo tts-hub/XTTS-v2) into the HF cache instead of ~/.local/share/tts.
 # Point that cache INSIDE the directory every deployment already mounts as the
 # TTS models volume, so the 1.8 GB download persists across containers instead
-# of landing in an ephemeral ~/.cache (voice-stack#13). A separate ENV, not a
+# of landing in an ephemeral ~/.cache. A separate ENV, not a
 # commented line inside the one above: semgrep's Dockerfile parser rejects that.
 ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
 
