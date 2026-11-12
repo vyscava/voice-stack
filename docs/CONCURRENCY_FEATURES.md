@@ -15,7 +15,15 @@ The Voice Stack now includes comprehensive safeguards and controls to prevent re
 A FastAPI middleware that checks system resources **before** processing any request.
 
 **Checks Performed:**
-- **Memory Usage:** Rejects requests when RAM usage exceeds `MEMORY_THRESHOLD_PERCENT` (default: 90%)
+- **Memory Usage:** Rejects requests when RAM usage exceeds `MEMORY_THRESHOLD_PERCENT` (default: 90%).
+  Inside a container with a memory limit (`docker run --memory`, compose
+  `deploy.resources.limits.memory`), the percentage is of that **limit**, with
+  the headroom capped by what the host still has available
+  ([src/core/memory.py](../src/core/memory.py)). Without a limit it is the
+  host's RAM, so on a host shared with another big workload (an LLM on the
+  same GPU box) set a container memory limit rather than raising the threshold.
+  `/health/detailed` reports which one is in use as `memory.source`
+  (`cgroup` or `host`).
 - **Swap Usage:** Rejects requests when swap usage exceeds `SWAP_THRESHOLD_PERCENT` (default: 80%)
 - **File Size:** Rejects file uploads larger than `MAX_UPLOAD_SIZE_MB` (default: 100MB)
 

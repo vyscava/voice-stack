@@ -195,8 +195,9 @@ async def detailed_health() -> JSONResponse:
     import psutil
 
     from asr.engine_factory import _engine, _semaphore
+    from core.memory import memory_snapshot
 
-    mem = psutil.virtual_memory()
+    mem = memory_snapshot()
     swap = psutil.swap_memory()
 
     # Calculate active/total request slots
@@ -215,6 +216,7 @@ async def detailed_health() -> JSONResponse:
             "percent": round(mem.percent, 1),
             "available_mb": round(mem.available / (1024 * 1024), 1),
             "total_mb": round(mem.total / (1024 * 1024), 1),
+            "source": mem.source,
             "threshold_percent": settings.MEMORY_THRESHOLD_PERCENT,
         },
         "swap": {

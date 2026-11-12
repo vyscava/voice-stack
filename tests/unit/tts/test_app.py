@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,8 +11,15 @@ from tts.app import app
 
 
 @pytest.fixture
-def tts_client() -> TestClient:
-    """Create a test client for the TTS app."""
+def tts_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Create a test client for the TTS app.
+
+    The resource guard reads live memory and swap, so without these mocks the
+    tests answer 503 on any machine under memory pressure (a laptop with heavy
+    swap), and pass only where the host happens to be idle.
+    """
+    monkeypatch.setattr("psutil.virtual_memory", lambda: SimpleNamespace(percent=50.0, available=1, total=2))
+    monkeypatch.setattr("psutil.swap_memory", lambda: SimpleNamespace(percent=10.0))
     return TestClient(app)
 
 
