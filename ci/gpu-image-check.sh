@@ -5,9 +5,11 @@
 #   sh ci/gpu-image-check.sh cuda|rocm
 #
 # Called by .gitlab/ci/gpu-images.yml. The GPU images are proven buildable and
-# scanned here but are NEVER pushed: the image only ever exists on the build
+# scanned here. This script never pushes: the image exists only on the build
 # daemon, under a name with no registry in it, and the job's after_script
-# removes it. So nothing this script produces can become a deploy candidate.
+# removes it. On main, the publish jobs then run ci/gpu-image-publish.sh in
+# the same job, which pushes this exact image only if every step here passed
+# (set -e). No deploy uses the GPU images.
 #
 # Steps, each fail-closed:
 #   1. docker build (the Dockerfile runs scripts/assert_runtime.py --variant X,
@@ -18,9 +20,10 @@
 #   4. trivy OS-package scan, same policy and guard template as .trivy-image
 #
 # Why one job and not the build/freeze/audit/trivy split the CPU images use:
-# that split hands the image between jobs through the registry. These images
-# must not be pushed, and a hand-off through the shared daemon would leave a
-# 10+ GB image behind whenever a pipeline is cancelled between jobs.
+# that split hands the image between jobs through the registry, which would
+# push every MR's unscanned GPU image, and a hand-off through the shared daemon
+# would leave a 10+ GB image behind whenever a pipeline is cancelled between
+# jobs. One job also means the image published on main is the one scanned.
 #
 # Needs: GPU_IMAGE (the local tag to build), GPU_BUILDER (the throwaway buildx
 # builder's name), CI_JOB_ID, a docker CLI talking to

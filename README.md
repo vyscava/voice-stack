@@ -37,12 +37,13 @@ docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .  # AMD GPU (ROCm 7)
 | `:kokoro` | `Dockerfile --target kokoro` | CPU | not included | CPU |
 | `:latest` / `:xtts` | `Dockerfile` | CPU | CPU | CPU |
 | `:cuda` | `docker/Dockerfile.cuda` | GPU | GPU | GPU (`TTS_KOKORO_DEVICE=cuda`) |
-| `:rocm` | `docker/Dockerfile.rocm` | GPU | GPU | CPU (no onnxruntime ROCm build) |
+| `:rocm` | `docker/Dockerfile.rocm` | GPU | GPU | CPU, by design (no onnxruntime ROCm build) |
 
 The GPU images default to the GPU (`ASR_DEVICE=cuda`, `TTS_DEVICE=cuda`; ROCm uses the
-same `cuda` device name). They are built and checked in CI on every change but have
-not been run on a GPU there; see [`DOCKER_DEPLOYMENT.md`](DOCKER_DEPLOYMENT.md#gpu-support)
-for host setup, GPU targets and what is verified.
+same `cuda` device name). There is no published GPU image: build the one you need as
+above. See
+[`DOCKER_DEPLOYMENT.md`](DOCKER_DEPLOYMENT.md#gpu-support) for host setup, GPU targets
+and what has been verified on real GPUs.
 
 ### Run Both Services
 

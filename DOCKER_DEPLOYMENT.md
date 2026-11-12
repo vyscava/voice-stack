@@ -98,8 +98,8 @@ gateway, no torch), which is what the homelab deployment runs.
 
 ### GPU Images (docker/Dockerfile.cuda, docker/Dockerfile.rocm)
 
-**Purpose**: The full stack on NVIDIA (CUDA) or AMD (ROCm) GPUs. Built and
-checked in CI, never published or deployed by it. See [GPU Support](#gpu-support).
+**Purpose**: The full stack on NVIDIA (CUDA) or AMD (ROCm) GPUs. Build them
+yourself with the commands below. See [GPU Support](#gpu-support).
 
 ```bash
 docker build -f docker/Dockerfile.cuda -t voice-stack:cuda .
@@ -349,7 +349,7 @@ of #4; `scripts/assert_runtime.py` refuses a pre-release interpreter.
 | ASR, faster-whisper / CTranslate2 (`ASR_DEVICE=cuda`) | GPU | GPU |
 | ASR, openai-whisper (`ASR_ENGINE=whisper`) | GPU | GPU |
 | TTS, XTTS v2 (`TTS_ENGINE=coqui`, `TTS_DEVICE=cuda`) | GPU | GPU |
-| TTS, Kokoro (`TTS_ENGINE=kokoro`) | GPU with `TTS_KOKORO_DEVICE=cuda` (the image default) | **CPU**: onnxruntime's AMD path (MIGraphX) needs a system MIGraphX install and its newest wheel trails the pinned onnxruntime |
+| TTS, Kokoro (`TTS_ENGINE=kokoro`) | GPU with `TTS_KOKORO_DEVICE=cuda` (the image default) | **CPU, by design** (see below) |
 | Silero VAD (ONNX) | CPU | CPU |
 
 The GPU images default to `ASR_DEVICE=cuda`, `ASR_COMPUTE_TYPE=float16` and
@@ -358,15 +358,28 @@ CTranslate2). `TTS_KOKORO_DEVICE=cuda` fails the start if onnxruntime did not
 actually put the session on the GPU, instead of silently running on the CPU;
 `auto` takes the GPU when available and logs which it got.
 
+**Kokoro on AMD runs on the CPU, by design.** onnxruntime dropped its ROCm
+execution provider after 1.22, and AMD's replacement (MIGraphX) needs a
+system-wide MIGraphX install beside the image's pip ROCm, with a newest wheel
+(`onnxruntime-migraphx` 1.27) that trails the pinned onnxruntime 1.31. Kokoro is
+small enough not to need the GPU: 0.56 s per sentence on a Strix Halo CPU,
+faster than real time. This may change if a MIGraphX wheel matching the
+onnxruntime pin appears.
+
 **What is verified, and what is not.** CI builds both images on every merge
 request that changes their inputs (`.gitlab/ci/gpu-images.yml`). The build runs
 `scripts/assert_runtime.py --variant cuda|rocm`, which checks without a GPU that
 torch, torchaudio and torchcodec are the GPU builds, cuDNN loads (CUDA),
 CTranslate2 is the cuBLAS / HIP build and the libraries it loads resolve,
 onnxruntime-gpu's CUDA provider library loads (CUDA), and the XTTS, Whisper and
-Kokoro imports work. The images are then pip-audited and trivy-scanned and
-deleted. They are never pushed or deployed by this project's CI, and **no CI
-runner has a GPU, so neither image has been run on a GPU there.**
+Kokoro imports work. The images are then pip-audited and trivy-scanned. A
+manual CI job can push the image that passed as `${DOCKER_REGISTRY}/voice-stack:cuda`
+/ `:rocm` to the registry the pipeline is configured with; there is no public
+registry, so build the images yourself as above. The CI runners have no GPU.
+Inference has been verified by hand: `:cuda` on an RTX 5090 (all engines on
+the GPU), and `:rocm` built with `ROCM_GPU_TARGETS=gfx1151` on an AMD Radeon
+8060S (faster-whisper and XTTS on the GPU; XTTS slower than real time there).
+RDNA4 (gfx1201) has not been tested.
 
 #### NVIDIA (`:cuda`)
 

@@ -44,6 +44,9 @@ stages:
   - security
   - release
   - deploy
+  # GPU images to the registry, strictly after the deploy
+  # (.gitlab/ci/gpu-images.yml says why)
+  - publish
 
 variables:
   # Docker registry configuration
