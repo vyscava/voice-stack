@@ -1,4 +1,4 @@
-"""Regression for #8: a synthesis in progress must not stop the server answering.
+"""Regression: a synthesis in progress must not stop the server answering.
 
 /audio/speech is an async handler, and it called the synchronous, CPU-bound
 engine.speech() directly. That held the event loop for the whole synthesis, so

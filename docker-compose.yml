@@ -226,7 +226,7 @@ services:
       # exactly: publishing is only allowed under agents.<self>.>, and a
       # mismatch is rejected asynchronously with no error surfaced here.
       GATEWAY_SELF_NAME: ${GATEWAY_SELF_NAME:-voice-gateway}
-      GATEWAY_AGENT: ${GATEWAY_AGENT:-claude-code-channel}
+      GATEWAY_AGENT: ${GATEWAY_AGENT:-assistant}
       GATEWAY_NATS_URL: ${GATEWAY_NATS_URL:-nats://nats:4222}
       GATEWAY_NATS_TOPIC: ${GATEWAY_NATS_TOPIC:-voice}
 

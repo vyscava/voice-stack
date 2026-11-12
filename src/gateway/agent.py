@@ -120,13 +120,13 @@ class NatsAgent:
         # it confidently -- and the gateway then speaks that answer aloud in a
         # human voice, which is a far more convincing way to be wrong than text.
         # Told the input was heard rather than read, a peer can say "I heard X"
-        # when X looks implausible. Asked for by claude-code-channel, who is on
+        # when X looks implausible. Asked for by a peer agent, which is on
         # the receiving end of exactly this failure.
         # `text` is the cleaned form a peer should ACT on. `transcript` is what
         # ASR actually returned, verbatim, and must never be rewritten.
         #
         # They are equal today apart from whitespace, which prompted a fair
-        # question from claude-code-channel: is `transcript` load-bearing or
+        # question from a peer agent: is `transcript` load-bearing or
         # documentation? Answer: it is the RAW channel, and it earns its keep
         # the moment anything sits between ASR and the DM -- a normaliser, a
         # spell-corrector, or a fast model rewriting the query in the two-brain

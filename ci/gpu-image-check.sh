@@ -47,7 +47,7 @@ PIP_AUDIT_VERSION="2.10.1"
 # ---------------------------------------------------------------- 1. build
 # In a THROWAWAY builder, not the daemon's default one. The default builder
 # keeps every layer as cache after the job, and these images are 9-12 GB with
-# builder stages as large again: the first two pipelines of !77 left ~110 GB on
+# builder stages as large again: the first two GPU pipelines left ~110 GB on
 # the shared runner and filled its disk. A docker-container builder keeps its
 # cache in its own volume, which `docker buildx rm` deletes with it (here and
 # in the job's after_script), so a build leaves nothing behind but the --load'ed

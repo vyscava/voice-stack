@@ -200,7 +200,7 @@ async def tts(request: OpenAICreateSpeechRequest) -> Any:
 
         # Synthesis is CPU-bound and synchronous. Called directly from this async
         # handler it held the event loop for its whole duration, so /health went
-        # unanswered and every long synthesis paged EndpointDown (#8). It runs in
+        # unanswered and every long synthesis paged EndpointDown. It runs in
         # the threadpool; shield() keeps the slot-owning task alive if this
         # request is cancelled.
         result = await asyncio.shield(job)

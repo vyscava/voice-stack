@@ -23,8 +23,8 @@ from gateway.clients import _extract_transcript
 
 class TestSubjectGrammar:
     def test_subject_is_from_dot_dm_dot_to(self):
-        agent = NatsAgent(servers="nats://x:4222", self_name="voice-gateway", peer="claude-code-channel")
-        assert agent.subject == "agents.voice-gateway.dm.claude-code-channel.voice"
+        agent = NatsAgent(servers="nats://x:4222", self_name="voice-gateway", peer="assistant")
+        assert agent.subject == "agents.voice-gateway.dm.assistant.voice"
 
     def test_our_own_name_comes_first(self):
         """The ACL allows publishing only under agents.<self>.>.
@@ -137,7 +137,7 @@ class TestAgentCallIsBounded:
         # message says "10.05s", so a bug that reports the WRONG budget goes
         # unnoticed by the very test asserting the budget is named. Verified by
         # mutation: adding 10 to the reported timeout left that assertion green.
-        # Credit: claude-code-channel, who found the same trap in their own
+        # Credit: a peer agent, who found the same trap in their own
         # guard tests ("3 shipping" matching "13 shipping").
         assert "'channel'" in message, "the peer must be named, quoted, not merely mentioned"
         assert "within 0.05s" in message, "the budget must be reported exactly"
@@ -172,7 +172,7 @@ class TestPayloadMarksAsrInput:
 class TestTranscriptStaysRaw:
     """`transcript` is the RAW channel and must never be the tidied one.
 
-    Asked by claude-code-channel: with text == transcript on every payload, is
+    Asked by a peer agent: with text == transcript on every payload, is
     the field load-bearing or documentation? It is load-bearing the moment
     anything sits between ASR and the DM -- a normaliser, or a fast model
     rewriting the query in the two-brain shape. A peer flagging a mishearing
@@ -258,20 +258,20 @@ class TestNatsTls:
     def test_tls_url_asks_for_handshake_first(self):
         from gateway.agent import nats_tls_kwargs
 
-        assert nats_tls_kwargs("tls://u:p@nats.local.vitorgarbim.me:4222") == {"tls_handshake_first": True}
-        assert nats_tls_kwargs("TLS://nats.local.vitorgarbim.me:4222") == {"tls_handshake_first": True}
+        assert nats_tls_kwargs("tls://u:p@nats.example.com:4222") == {"tls_handshake_first": True}
+        assert nats_tls_kwargs("TLS://nats.example.com:4222") == {"tls_handshake_first": True}
 
     def test_nats_url_keeps_todays_behaviour(self):
         from gateway.agent import nats_tls_kwargs
 
-        assert nats_tls_kwargs("nats://u:p@nats.local.vitorgarbim.me:4222") == {}
+        assert nats_tls_kwargs("nats://u:p@nats.example.com:4222") == {}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("url", "expect_handshake_first"),
         [
-            ("tls://voice-gateway:pw@nats.local.vitorgarbim.me:4222", True),
-            ("nats://voice-gateway:pw@nats.local.vitorgarbim.me:4222", False),
+            ("tls://voice-gateway:pw@nats.example.com:4222", True),
+            ("nats://voice-gateway:pw@nats.example.com:4222", False),
         ],
     )
     async def test_connect_passes_the_option_through(self, monkeypatch, url, expect_handshake_first):
@@ -301,11 +301,11 @@ class TestNatsTls:
         from nats.aio.client import Client
 
         nc = Client()
-        nc._setup_server_pool(f"{scheme}://voice-gateway:pw@nats.local.vitorgarbim.me:4222")
+        nc._setup_server_pool(f"{scheme}://voice-gateway:pw@nats.example.com:4222")
         uri = nc._server_pool[0].uri
         assert uri.scheme == scheme
         assert (uri.username, uri.password) == ("voice-gateway", "pw")
-        assert uri.hostname == "nats.local.vitorgarbim.me" and uri.port == 4222
+        assert uri.hostname == "nats.example.com" and uri.port == 4222
 
 
 SECRET = "s3ntinel-PW-do-not-leak"
@@ -318,15 +318,15 @@ class TestRedactUrl:
         ("raw", "expected"),
         [
             (
-                f"nats://voice-gateway:{SECRET}@nats.local.vitorgarbim.me:4222",
-                "nats://voice-gateway:***@nats.local.vitorgarbim.me:4222",
+                f"nats://voice-gateway:{SECRET}@nats.example.com:4222",
+                "nats://voice-gateway:***@nats.example.com:4222",
             ),
             (
-                f"tls://voice-gateway:{SECRET}@nats.local.vitorgarbim.me:4222",
-                "tls://voice-gateway:***@nats.local.vitorgarbim.me:4222",
+                f"tls://voice-gateway:{SECRET}@nats.example.com:4222",
+                "tls://voice-gateway:***@nats.example.com:4222",
             ),
-            ("nats://nats.local.vitorgarbim.me:4222", "nats://nats.local.vitorgarbim.me:4222"),
-            ("nats.local.vitorgarbim.me", "nats.local.vitorgarbim.me"),
+            ("nats://nats.example.com:4222", "nats://nats.example.com:4222"),
+            ("nats.example.com", "nats.example.com"),
             (f"voice-gateway:{SECRET}@nats-a:4222", "voice-gateway:***@nats-a:4222"),
             (f"nats://u:{SECRET}@a:4222, nats://u:{SECRET}@b:4222", "nats://u:***@a:4222,nats://u:***@b:4222"),
             (f"nats://u:{SECRET}@a:4222,nats://b:4222", "nats://u:***@a:4222,nats://b:4222"),
@@ -376,9 +376,9 @@ class TestRedactUrl:
 
         monkeypatch.setattr(nats, "connect", fake_connect)
         monkeypatch.setattr(agent_mod, "logger", Rec())
-        url = f"tls://voice-gateway:{SECRET}@nats.local.vitorgarbim.me:4222"
+        url = f"tls://voice-gateway:{SECRET}@nats.example.com:4222"
         await NatsAgent(servers=url, self_name="voice-gateway", peer="you").connect()
 
         assert any("NATS connected" in line for line in lines)
         assert not any(SECRET in line for line in lines)
-        assert any("voice-gateway:***@nats.local.vitorgarbim.me:4222" in line for line in lines)
+        assert any("voice-gateway:***@nats.example.com:4222" in line for line in lines)

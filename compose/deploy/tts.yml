@@ -1,6 +1,6 @@
-# Voice Stack TTS, deployed by CI to the voice host (CT 261 on tower,
-# voice.server.local.vitorgarbim.me). See compose/deploy/asr.yml for how the
-# deploy works and why the settings live in this file.
+# Voice Stack TTS, deployed by CI to the same 4-core host as ASR. See
+# compose/deploy/asr.yml for how the deploy works and why the settings live in
+# this file.
 #
 # Engine: Kokoro-82M on ONNX Runtime, from the slim image. XTTS is not in the
 # slim image; to run it, deploy the full image and set TTS_ENGINE=coqui.
@@ -29,7 +29,7 @@ services:
       TTS_KOKORO_VOICES_PATH: /app/models/kokoro/voices-v1.0.bin
       TTS_KOKORO_DEFAULT_VOICE: af_heart
       # Explicit, not 0: ONNX Runtime sizes its pool from the host's 24 CPUs,
-      # not the container's 4, and runs 4.7x slower (voice-stack#11).
+      # not the container's 4, oversubscribes and runs 4.7x slower.
       TTS_KOKORO_THREADS: "4"
       TTS_SAMPLE_RATE: "24000"
       TTS_DEFAULT_LANG: en
@@ -40,9 +40,6 @@ services:
 
     ports:
       - "5002:5002"
-
-    dns:
-      - 10.87.2.4
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5002/health"]

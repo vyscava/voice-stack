@@ -690,7 +690,7 @@ See `.clinerules/` directory for detailed coding standards:
 
 1. **[01-coding.md](.clinerules/01-coding.md)**: Python style, typing, imports
 2. **[02-documentation.md](.clinerules/02-documentation.md)**: Docstring format, README structure
-3. **[03-infra-available.md](.clinerules/03-infra-available.md)**: Homelab integration options
+3. **[03-infra-available.md](.clinerules/03-infra-available.md)**: Infrastructure integration options
 4. **[04-repo-mapping.md](.clinerules/04-repo-mapping.md)**: Code base indexing strategy
 
 ### Key Principles

@@ -106,7 +106,7 @@ def test_app_metadata(tts_client: TestClient) -> None:
 async def test_idle_checker_runs_off_the_event_loop_on_the_current_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """The idle check takes the engine's lifecycle lock, which a synthesis
     thread holds through a whole model reload. On the event loop that froze
-    /health (#8). It must run in a worker thread, and must check the engine
+    /health. It must run in a worker thread, and must check the engine
     that is current at each tick, not the one present when the task started."""
     import asyncio
     import threading

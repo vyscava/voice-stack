@@ -11,7 +11,7 @@ Why this file exists
 --------------------
 The unit suites mock ``torch``. A torch that cannot be imported at all therefore
 passes every test, and on 2026-08-13 CI was fully green on an image that
-crash-looped for three days (voice-stack#4). These are the checks that would
+crash-looped for three days (the torch 2.13 outage). These are the checks that would
 have caught it, bound to the artifact rather than to a pipeline.
 
 Each check is here because it has actually failed, or because the obvious
@@ -20,16 +20,16 @@ weaker version of it silently passes:
 * **variant, not just version** - ``torch==2.15.0`` on PyPI is the CUDA wheel.
   A version pin is satisfied by the wrong build, so the build variant is
   asserted explicitly.
-* **a final-release interpreter** - #4's root cause (found in #13): the full
+* **a final-release interpreter** - the root cause of the torch 2.13 outage: the full
   image ran on Ubuntu 22.04's python3.11, which is 3.11.0~rc1 and lacks
   ``sys.get_int_max_str_digits``. Newer torch registers a polyfill for it
   behind ``sys.version_info >= (3, 11)``, so ``import torch._dynamo`` died
   half way. Any non-final interpreter now fails the build.
-* **torch._dynamo imported directly, first** - #4's "Duplicate dispatch rule"
+* **torch._dynamo imported directly, first** - the outage's "Duplicate dispatch rule"
   is what a SECOND ``import torch._dynamo`` raises after a first attempt died
   partway and was swallowed by a library. Importing it here, unwrapped and
   before transformers touches it, turns a repeat into the REAL exception
-  (that is exactly how #13 found the rc1 interpreter).
+  (that is exactly how the rc1 interpreter was found).
 * **torchaudio's ops run, not just import** - torchaudio 2.11 is its last
   release and is paired with a newer torch (see pyproject.toml). Its extension
   is ABI-bound, so the two calls coqui-tts makes (MelSpectrogram, resample)
@@ -39,12 +39,12 @@ weaker version of it silently passes:
   unloadable torchcodec passes that check and passes ``import torchcodec``;
   only touching the decoder loads the shared object.
 * **the TTS engine import** - ``from TTS.api import TTS`` walks
-  coqui-TTS -> transformers -> torch._dynamo, which is where #4 exploded.
+  coqui-TTS -> transformers -> torch._dynamo, which is where the torch 2.13 outage exploded.
 * **the VAD session runs** - VAD is the Silero ONNX model faster-whisper
   bundles. The service treats a VAD that fails to load as "transcribe without
   VAD" and keeps going, so a broken onnxruntime or missing asset would be
   silent at runtime. Here it is fatal.
-* **the slim image has no torch** - since #13 the ``kokoro`` variant carries no
+* **the slim image has no torch** - the ``kokoro`` variant carries no
   torch, torchaudio, openai-whisper, coqui or transformers. Any of them coming
   back (a new transitive dependency) fails the build instead of silently
   re-importing the advisories they carry.
@@ -84,8 +84,8 @@ VARIANTS = ("full", "kokoro", "cuda", "rocm")
 # decodes audio on the CPU anyway. CUDA torchaudio is "cpu" too: torchaudio
 # 2.11 (its last release) stops at cu130, and on import it REFUSES to run
 # against a torch built for another CUDA version ("PyTorch has CUDA version
-# 13.2 whereas TorchAudio has CUDA version 13.0", measured in !77's first
-# pipeline). Its CPU build skips that check, and the two calls coqui-tts makes
+# 13.2 whereas TorchAudio has CUDA version 13.0", measured in the first
+# CI pipeline of the CUDA build). Its CPU build skips that check, and the two calls coqui-tts makes
 # (MelSpectrogram, resample) are plain torch ops that run on GPU tensors.
 TORCH_BUILDS: dict[str, dict[str, str]] = {
     "full": {"torch": "cpu", "torchaudio": "cpu", "torchcodec": "cpu"},
@@ -113,7 +113,7 @@ def check_interpreter(failures: list[str]) -> None:
     if v.releaselevel != "final":
         failures.append(
             f"python {sys.version.split()[0]} is a {v.releaselevel} build; torch._dynamo assumes a final "
-            "release (Ubuntu 22.04's python3.11 is 3.11.0~rc1 and broke it in #4)"
+            "release (Ubuntu 22.04's python3.11 is 3.11.0~rc1 and broke it in the torch 2.13 outage)"
         )
 
 
@@ -190,7 +190,7 @@ def check_torch(failures: list[str], variant: str = "full") -> bool:
         importlib.import_module("torch._dynamo")
         print("torch._dynamo import OK")
     except Exception as exc:  # noqa: BLE001
-        failures.append(f"import torch._dynamo failed (this is the #4 import path): {exc!r}")
+        failures.append(f"import torch._dynamo failed (the import path that crashed in the torch 2.13 outage): {exc!r}")
 
     # The two torchaudio calls coqui-tts' XTTS makes, run against this torch.
     try:
@@ -276,7 +276,7 @@ def check_xtts(failures: list[str], variant: str = "full") -> None:
     except Exception as exc:  # noqa: BLE001 - any failure here is fatal
         failures.append(f"torchcodec could not load its extension or decode: {exc!r}")
 
-    # The exact call that broke in #4.
+    # The exact call that broke in the torch 2.13 outage.
     try:
         from TTS.api import TTS  # noqa: F401
 

@@ -124,7 +124,7 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --build   
 
 ## Deploy as separate stacks
 
-`compose/deploy/` holds the author's production deployment: one compose stack
+`compose/deploy/` holds a real production deployment: one compose stack
 per service (`asr.yml`, `tts.yml`, `gateway.yml`), each pinned to an image by
 `${VOICE_STACK_IMAGE}` and deployed by CI over an SSH docker context
 (`.gitlab/ci/deploy.yml`). Any compose-aware tool (`docker compose -p`,
@@ -132,7 +132,7 @@ Portainer, a CI job) can run them the same way: set `VOICE_STACK_IMAGE` to your
 own image and deploy ASR and TTS before the gateway, which joins their
 networks.
 
-They carry homelab-specific values (registry, DNS server, tuning for a 4-core
+They carry deployment-specific values (a private registry, tuning for a 4-core
 host); see [compose/README.md](compose/README.md) for what to change. For a
 single-host start, use the root `docker-compose.yml` instead.
 
@@ -329,7 +329,7 @@ cloned voices on networks you control, and set `GATEWAY_VOICE` deliberately rath
 | `GATEWAY_TTS_URL` | `http://localhost:5002` | |
 | `GATEWAY_NATS_URL` | `nats://localhost:4222` | |
 | `GATEWAY_SELF_NAME` | `voice-gateway` | Must match this service's identity on the bus **exactly** |
-| `GATEWAY_AGENT` | `claude-code-channel` | The peer that answers |
+| `GATEWAY_AGENT` | `assistant` | The peer that answers |
 | `GATEWAY_NATS_TOPIC` | `voice` | |
 | `GATEWAY_AGENT_TIMEOUT_S` | `60` | Bounds connect **and** request, so an exchange cannot hang |
 | `GATEWAY_VOICE` | `default` | The engine's own default voice (a stock one, on purpose), so switching `TTS_ENGINE` needs no change here |

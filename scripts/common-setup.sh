@@ -241,7 +241,7 @@ install_pytorch() {
 
     for venv in "${venvs[@]}"; do
         # The ASR-only venv (prod-asr: server + asr) has no torch since
-        # voice-stack#13: faster-whisper and its ONNX VAD do not use it.
+        # faster-whisper and its ONNX VAD do not use it.
         if [ "$venv" = ".venv-asr" ]; then
             log_info "  -> $venv: no torch needed (faster-whisper + ONNX VAD), skipping"
             continue

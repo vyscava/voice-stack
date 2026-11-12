@@ -123,7 +123,7 @@ async def healthcheck() -> JSONResponse:
 async def prometheus_metrics() -> Response:
     """Prometheus exposition.
 
-    Unauthenticated by design and consistent with the other homelab exporters:
+    Unauthenticated by design and consistent with the other exporters:
     the service is LAN-only, and the payload is counters, not content.
     """
     payload, content_type = metrics.render()

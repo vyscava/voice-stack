@@ -1,7 +1,5 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "platform": "gitlab",
-  "endpoint": "https://gitlab.vitorgarbim.me/api/v4",
   "extends": [
     "config:recommended",
     ":dependencyDashboard",

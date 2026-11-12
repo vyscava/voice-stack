@@ -1,5 +1,5 @@
 # ============================================================================
-# Security gates (homelab standard, ported from kb-mcp / homelab-mcp)
+# Security gates (secret scan, SAST, dependency audit, image scan)
 # ============================================================================
 # Every job carries a fail-closed guard: a scanner's silent fake-pass shape
 # (exit 0 while scanning nothing) is a RED job, not a green one.
@@ -56,7 +56,7 @@
 #     "2.15.0+cpu" is not a PyPI version, and pip-audit would otherwise be
 #     unable to look it up. Advisories are keyed on the public version.
 #
-# Only the full image carries torch (voice-stack#13). EXPECT_TORCH makes the
+# Only the full image carries torch. EXPECT_TORCH makes the
 # freeze assert that per variant: present in the full image, ABSENT from the
 # slim one, so torch drifting back into :kokoro is a red job.
 #
@@ -122,7 +122,7 @@
         grep -q '^torch==' requirements.audit.txt || { echo "FAIL: torch missing from the export"; exit 1; }
       else
         if grep -qiE '^(torch|torchaudio|torchcodec|transformers|coqui-tts|openai-whisper)==' requirements.audit.txt; then
-          echo "FAIL: the slim image must not ship torch/transformers/coqui (voice-stack#13):"
+          echo "FAIL: the slim image must not ship torch/transformers/coqui:"
           grep -iE '^(torch|torchaudio|torchcodec|transformers|coqui-tts|openai-whisper)==' requirements.audit.txt
           exit 1
         fi
@@ -171,7 +171,7 @@ test:freeze:kokoro:
     # image ships. --strict still fails any package pip-audit cannot look up.
     #
     # Ignored advisories: NONE. The torch 2.9.1 and transformers 4.57.6
-    # ignores were cleared in voice-stack#13 (torch 2.15.0, transformers
+    # ignores were cleared when the slim image became torch-free (torch 2.15.0, transformers
     # 5.22.2; the slim image no longer carries torch at all). AUDIT_IGNORE
     # stays as the mechanism: a future ignore must be added by ID, per image,
     # with its justification and tracking issue written here.
@@ -192,7 +192,7 @@ test:freeze:kokoro:
     paths:
       - pip-audit-all.json
 
-# The ignore lists are per image (both empty since voice-stack#13).
+# The ignore lists are per image (both empty since the slim image became torch-free).
 test:audit:full:
   extends: .audit-image
   variables:

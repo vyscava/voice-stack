@@ -43,7 +43,7 @@ async def idle_timeout_checker() -> None:
                 # Off the event loop: the check takes the engine's lifecycle
                 # lock, which a synthesis thread holds for a whole model reload
                 # (tens of seconds for XTTS). Waiting for it here froze /health,
-                # the #8 symptom; an unload itself is slow too.
+                # the symptom of blocking the event loop; an unload itself is slow too.
                 was_unloaded = await run_in_threadpool(engine.check_and_unload_if_idle)
                 if was_unloaded:
                     logger.info("TTS model unloaded due to inactivity")

@@ -103,12 +103,12 @@ class TestHealth:
         monkeypatch.setattr(
             app_mod.settings,
             "GATEWAY_NATS_URL",
-            f"tls://voice-gateway:{secret}@nats.local.vitorgarbim.me:4222",
+            f"tls://voice-gateway:{secret}@nats.example.com:4222",
         )
         response = client.get("/health/detailed")
         assert response.status_code == 200
         assert secret not in response.text
-        assert response.json()["routes"]["nats_url"] == "tls://voice-gateway:***@nats.local.vitorgarbim.me:4222"
+        assert response.json()["routes"]["nats_url"] == "tls://voice-gateway:***@nats.example.com:4222"
 
     def test_transcribe_only_error_has_no_nats_password(self, client):
         """An exception that quotes the NATS URL must not echo the password over HTTP."""
@@ -225,7 +225,7 @@ class TestWebClient:
     def test_page_is_self_contained(self):
         """No CDN, no external fetches.
 
-        The gateway is LAN-only by policy (!53). A page that pulls a script
+        The gateway is LAN-only by policy. A page that pulls a script
         from the public internet would both add a dependency and create egress
         from a network that is meant not to have any.
         """

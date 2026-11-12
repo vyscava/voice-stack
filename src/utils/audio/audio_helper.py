@@ -14,7 +14,7 @@ What this module provides
 3) VAD (Silero)
    - Silero v6 as the ONNX model bundled with faster-whisper, run on onnxruntime.
    - Apply VAD to PCM16 audio and stitch speech-only regions together.
-   - No torch on this path: the slim image ships without it (voice-stack#13).
+   - No torch on this path: the slim image ships without it.
      torch/torchaudio remain optional, imported lazily, for resampling only.
 """
 
@@ -308,7 +308,7 @@ def load_silero_model(log: logging.Logger) -> tuple[Any, Any]:
     torch and torchaudio into every image that runs ASR. faster-whisper already
     bundles the ONNX export (``faster_whisper/assets/silero_vad_v6.onnx``) and
     runs it on onnxruntime, which it depends on anyway. Using it keeps torch out
-    of the slim image entirely (voice-stack#13).
+    of the slim image entirely.
 
     Returns
     -------

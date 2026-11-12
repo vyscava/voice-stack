@@ -3,7 +3,7 @@
 **Status:** approved design, implementation in progress
 **Date:** 2026-08-16
 **Author:** the voice-stack maintainers
-**Tracking:** voice-stack#6 · gate MR !48
+**Tracking:** the engine-contract gate below
 
 > Facts below marked **verified** were measured on hardware, not read from a
 > vendor page. Several vendor claims turned out to be wrong; see Corrections.
@@ -12,7 +12,7 @@
 
 **Voice is a transport, not an agent.**
 
-The homelab already has brains: Claude Code agents
+The deployment already has brains: LLM agents
 reachable over NATS, paid for by an existing subscription. They have no ears and no
 mouth. This project adds those at the edge and changes the agents themselves by zero
 lines.
@@ -45,20 +45,20 @@ Bazarr is a production consumer of the ASR service. Not a nice-to-have.
 3. **Form-encoded request shape** — `BazarrAsrRequest.as_form` and
    `BazarrDetectLanguageRequest` remain the wire contract.
 
-### The gate (MR !48)
+### The gate
 
 The 16 existing Bazarr tests **cannot catch a timestamp regression**. `conftest.py::asr_client`
 replaces the engine with a `Mock` whose timings are hardcoded, so they test routing and the
 SRT/VTT formatters, never the engine. Proven by mutation: zeroing `start`/`end` left all 16
 green.
 
-!48 adds an engine-contract test with no mocks, and — critically — that test is **proven able
+The gate adds an engine-contract test with no mocks, and — critically — that test is **proven able
 to fail**, via `pytest.raises` against the same zeroed input. It also installs `espeak-ng` in
 the CI image, because the fixture otherwise skips and the gate silently stops gating.
 
-## Hard constraint: cloned voices never leave the homelab
+## Hard constraint: cloned voices never leave the local network
 
-**Decided, not open.** No cloned voice is sent outside the homelab, and no cloned voice is
+**Decided, not open.** No cloned voice is sent outside the local network, and no cloned voice is
 used to speak to anyone other than the maintainer.
 
 This rules out, without further discussion:
@@ -149,7 +149,7 @@ the comparable result.
 Unpinned, a fresh build installs `setuptools 84`, `perth` swallows the resulting `ImportError`
 and sets `PerthImplicitWatermarker = None`, and Chatterbox raises `TypeError: 'NoneType'
 object is not callable` — an error naming none of the four packages involved. Same failure
-class as #4 and !46.
+class as the torch 2.13 import crash that took TTS down for three days.
 
 **CPU caveat:** stock Chatterbox **cannot load on a host without an NVIDIA GPU.** Its
 checkpoints are serialized on CUDA and it calls `torch.load` without `map_location`, so
@@ -238,7 +238,7 @@ otherwise, and they are cheap here and expensive after training.
   `Input Channels: 2` despite a cardioid capsule. A silent second channel would pass silently
   into everything downstream. Same shape as an earlier corpus bug, where `prepare_dataset.py`
   stamped `speaker_name` from a CLI flag and never checked the audio, so 22% of the corpus was
-  the wrong speaker. Credit: claude-code-loki.
+  the wrong speaker.
 - sample rate and bit depth are what we asked for
 - no clipping
 - RMS consistency across clips
@@ -255,11 +255,11 @@ otherwise, and they are cheap here and expensive after training.
 
 ## Testing
 
-- **!48 engine-contract gate** — no mocks, proven able to fail.
-- Voice-list endpoint tests from !45 continue to pass.
+- **Engine-contract gate** — no mocks, proven able to fail.
+- The voice-list endpoint tests continue to pass.
 - Latency measured as **time to first audio**, not total generation.
 - ASR WER harness over the held-out script, per model, per language.
-- Build-time assertions via `scripts/assert_runtime.py` (!46).
+- Build-time assertions via `scripts/assert_runtime.py`.
 
 ## Corrections to earlier versions of this document
 
@@ -282,7 +282,7 @@ LiveKit Agents); that decision is deliberately not made here.
 
 ## Open questions
 
-1. Does `claude-telegram-bridge` route voice notes to agents today, or can the gateway
+1. Does the existing chat bridge route voice notes to agents today, or can the gateway
    intercept them? Decides whether the gateway or the agent owns the voice exchange.
 2. XTTS v2 real-time factor on the GPU, measured as time to FIRST audio rather than total
    generation. The CPU figure is a floor and must not be quoted as a deployment number. This

@@ -118,7 +118,7 @@ def speech_effective_options(
 class TTSBase(ABC):
     # Engines whose model must not run two syntheses at once set this to True:
     # in_use() then serialises synthesis on the engine. Synthesis left the event
-    # loop for #8, which removed the accidental serialisation the loop provided.
+    # loop (so /health stays responsive), which removed the accidental serialisation the loop provided.
     serialize_synthesis: bool = False
 
     def _state(self) -> dict[str, Any]:

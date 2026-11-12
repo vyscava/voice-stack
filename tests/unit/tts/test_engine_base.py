@@ -643,9 +643,9 @@ class TestIdleReload:
 @pytest.mark.unit
 @pytest.mark.tts
 class TestLifecycleUnderThreads:
-    """Synthesis runs in worker threads (#8) while the idle checker runs on the loop.
+    """Synthesis runs in worker threads while the idle checker runs on the loop.
 
-    Before #8 the event loop serialised everything by accident. These pin the
+    Before synthesis moved to worker threads the event loop serialised everything by accident. These pin the
     guarantees that now have to be explicit: the unloader never pulls a model
     out from under a synthesis, concurrent requests after an unload load the
     model once, and an engine that asks for it runs one synthesis at a time.
