@@ -116,6 +116,8 @@ cleanup:gpu-build-cache:
   stage: security
   image: docker:29
   needs: []
+  # Never alongside a GPU build: it removes builders it assumes are orphaned.
+  resource_group: gpu-image-build
   before_script: []
   variables:
     GIT_DEPTH: "1"

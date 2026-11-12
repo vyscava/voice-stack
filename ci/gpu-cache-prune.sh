@@ -50,10 +50,27 @@ echo "GPU build cache records: $(wc -l < gpu-cache-records.txt)"
 awk '{ v = $2 + 0; if ($2 ~ /GB$/) t += v; else if ($2 ~ /MB$/) t += v / 1000 } END { printf "matched: %.1f GB\n", t }' gpu-cache-records.txt
 cat gpu-cache-records.txt
 
+# Throwaway builders a GPU build job left behind. ci/gpu-image-check.sh names
+# them gpu-<variant>-<CI_JOB_ID>, and buildx runs each as a container named
+# buildx_buildkit_<builder>0 with a <container>_state volume holding its cache.
+# The job's after_script removes them, but a CANCELLED job can skip it (seen
+# 2026-11-12: job 89334's builder was still up 5 hours later). This job shares
+# resource_group gpu-image-build with the builds, so no GPU build is running
+# while it does and every such builder is an orphan.
+ORPHAN_RE='^buildx_buildkit_gpu-(cuda|rocm)-[0-9]+$'
+orphans=$(docker ps -a --format '{{.Names}}' | grep -E "$ORPHAN_RE" || true)
+echo "orphan GPU builders: $(printf '%s' "$orphans" | grep -c . || true)"
+[ -z "$orphans" ] || printf '%s\n' "$orphans"
+
 if [ "${1:-}" != "--apply" ]; then
   echo "dry run; pass --apply to remove them"
   exit 0
 fi
+for c in $orphans; do
+  docker rm -f "$c" >/dev/null || true
+  docker volume rm "${c}_state" >/dev/null 2>&1 || true
+  echo "removed builder ${c} and volume ${c}_state"
+done
 docker system df
 # A record referenced by a child survives its prune, so this walks the chains
 # one generation per pass, until a pass removes nothing more (or 20 passes).
