@@ -39,6 +39,8 @@
 # NOT DEPLOYED. Homelab CI builds this image and runs the build-time
 # assertions and security scans on it, but never pushes it as a deploy
 # candidate. Nothing in CI has a GPU, so it has not been run on one there.
+# Run by hand on 2026-11-12 on an RTX 5090 (driver 615.71.09): faster-whisper,
+# openai-whisper, Kokoro and XTTS all ran on the GPU (voice-stack#14).
 # ============================================================================
 
 # -----------------------------------------------------------------------------
@@ -186,6 +188,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # XTTS weights into the mounted TTS models volume (see the root Dockerfile).
 ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
+
+# Licence acceptance that survives a bind mount (see the root Dockerfile).
+ENV COQUI_TOS_AGREED=1
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${ASR_PORT:-5001}/health || curl -f http://localhost:${TTS_PORT:-5002}/health || exit 1

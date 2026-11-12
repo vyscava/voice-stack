@@ -4,6 +4,7 @@
 # Build from the repository root:
 #   docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .
 #   # other GPUs: --build-arg ROCM_GPU_TARGETS="gfx1100 gfx942"
+#   # Strix Halo APUs (Radeon 8050S/8060S): --build-arg ROCM_GPU_TARGETS=gfx1151
 # Run (amdgpu kernel driver on the host; no container toolkit needed):
 #   docker run --device /dev/kfd --device /dev/dri --group-add video \
 #     -e SERVICE_MODE=asr -p 5001:5001 voice-stack:rocm
@@ -33,11 +34,15 @@
 # by default RDNA2 (gfx1030), RDNA3 (gfx1100/1101/1102) and RDNA4
 # (gfx1200/1201: RX 9070 XT, Radeon AI PRO R9700). A GPU outside the list
 # needs its target added, or GPU math fails at the first call. `rocminfo` on
-# the host prints your card's gfx name.
+# the host prints your card's gfx name. Strix Halo (Ryzen AI Max, Radeon
+# 8050S/8060S) is gfx1151 and is NOT in the default set.
 #
 # NOT DEPLOYED. Homelab CI builds this image and runs the build-time
 # assertions and security scans on it, but never pushes it as a deploy
 # candidate. Nothing in CI has a GPU, so it has not been run on one there.
+# Run by hand on 2026-11-12 on a Strix Halo Radeon 8060S (gfx1151 build):
+# faster-whisper and XTTS ran on the GPU, XTTS slower than real time there.
+# The default RDNA2/3/4 targets have not been run on a GPU (voice-stack#14).
 # ============================================================================
 
 # -----------------------------------------------------------------------------
@@ -212,6 +217,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # XTTS weights into the mounted TTS models volume (see the root Dockerfile).
 ENV HF_HUB_CACHE=/home/voicestack/.local/share/tts/huggingface
+
+# Licence acceptance that survives a bind mount (see the root Dockerfile).
+ENV COQUI_TOS_AGREED=1
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${ASR_PORT:-5001}/health || curl -f http://localhost:${TTS_PORT:-5002}/health || exit 1
