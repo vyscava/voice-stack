@@ -12,8 +12,11 @@
 # killed job could not remove).
 #
 # Scoped to records only these Dockerfiles create, identified by their build
-# step descriptions (`docker buildx du --verbose`): COPY steps of the `cuda`,
-# `rocm` and `ct2-rocm` stages ("[rocm  5/13] COPY ..."), and RUN steps
+# step descriptions (`docker buildx du --verbose`): COPY steps of the
+# `voice-stack-cuda`, `voice-stack-rocm` and `voice-stack-ct2-rocm` stages
+# ("[voice-stack-rocm  5/13] COPY ..."). The stages carry the project prefix
+# because the daemon is shared: a bare `cuda` or `rocm` stage name would also
+# match other projects' GPU builds. Also RUN steps
 # ("mount / from exec /bin/sh -c ...") whose command only these Dockerfiles
 # run: /build/.venv pip installs of +cu132 / rocm7.14 / rocm7.2 /
 # nvidia-cublas-cu12 / the CTranslate2 ROCm wheel, the onnxruntime-gpu swap,
@@ -27,14 +30,20 @@ set -eu
 
 # Passed to awk through ENVIRON, not -v: -v processes backslash escapes and
 # turns "\[" into "[", which is how the first version matched nothing.
-export MATCH='^\[(cuda|rocm|ct2-rocm) +[0-9]+/[0-9]+\]|/build/\.venv/bin/pip .*(\+cu132|rocm7\.14|rocm7\.2|nvidia-cublas-cu12|/tmp/ct2)|ORT_VERSION=.*onnxruntime-gpu|voice-stack-(cuda|rocm)\.conf|ct2-rocm\.zip|accept_coqui_license\.sh && +sed -i|--from=ct2-rocm|assert_runtime\.py --variant (cuda|rocm)|chmod \+x /app/entrypoint\.sh && +mkdir -p /app/voices /app/models'
+export MATCH='^\[voice-stack-(cuda|rocm|ct2-rocm) +[0-9]+/[0-9]+\]|/build/\.venv/bin/pip .*(\+cu132|rocm7\.14|rocm7\.2|nvidia-cublas-cu12|/tmp/ct2)|ORT_VERSION=.*onnxruntime-gpu|voice-stack-(cuda|rocm)\.conf|ct2-rocm\.zip|accept_coqui_license\.sh && +sed -i|--from=voice-stack-ct2-rocm|assert_runtime\.py --variant (cuda|rocm)|chmod \+x /app/entrypoint\.sh && +mkdir -p /app/voices /app/models'
 
-docker buildx du --verbose > buildx-du.txt
+# The full listing holds every project's build-step command lines on this
+# shared daemon (possibly with inline secrets), so it stays in a temp file and
+# is never written to the job directory, logged or kept as an artifact. Only
+# the matched records (this project's own steps) are.
+DU=$(mktemp)
+trap 'rm -f "$DU"' EXIT
+docker buildx du --verbose > "$DU"
 awk '
   /^ID:/          { id = $2 }
   /^Size:/        { size = $2 }
   /^Description:/ { sub(/^Description:[ \t]*/, ""); if ($0 ~ ENVIRON["MATCH"]) print id, size, $0 }
-' buildx-du.txt > gpu-cache-records.txt
+' "$DU" > gpu-cache-records.txt
 echo "GPU build cache records: $(wc -l < gpu-cache-records.txt)"
 # Fail-closed: a matcher that silently matches nothing looks exactly like a
 # clean daemon. The total of what matched is printed so the log shows it.

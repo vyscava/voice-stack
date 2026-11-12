@@ -71,6 +71,8 @@ def test_settings_tts_defaults() -> None:
     assert Settings.model_fields["TTS_KOKORO_VOICES_PATH"].default == "/app/models/kokoro/voices-v1.0.bin"
     assert Settings.model_fields["TTS_KOKORO_DEFAULT_VOICE"].default == "af_heart"
     assert Settings.model_fields["TTS_KOKORO_THREADS"].default == 0
+    # The CPU images ship onnxruntime without CUDA; any other default fails their start.
+    assert Settings.model_fields["TTS_KOKORO_DEVICE"].default == "cpu"
     assert Settings.model_fields["TTS_XTTS_DEFAULT_VOICE"].default == "Claribel Dervla"
     # "default" follows whichever engine is booted, so switching engines needs no voice change.
     assert Settings.model_fields["GATEWAY_VOICE"].default == "default"
@@ -294,3 +296,16 @@ def test_settings_model_config() -> None:
 
     # Verify extra fields are ignored
     assert config.get("extra") == "ignore"
+
+
+@pytest.mark.unit
+def test_settings_kokoro_device_unset_is_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With TTS_KOKORO_DEVICE unset, a constructed Settings resolves to cpu, the CPU-only provider list."""
+    from tts.engine.kokoro import kokoro_providers
+
+    monkeypatch.delenv("TTS_KOKORO_DEVICE", raising=False)
+    monkeypatch.delenv("tts_kokoro_device", raising=False)
+    device = Settings(_env_file=None).TTS_KOKORO_DEVICE
+    assert device == "cpu"
+    # A CPU-only onnxruntime must accept the default without error.
+    assert kokoro_providers(device, ["CPUExecutionProvider"]) == ["CPUExecutionProvider"]

@@ -113,7 +113,7 @@ RUN bash scripts/accept_coqui_license.sh && \
 # -----------------------------------------------------------------------------
 # Runtime
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS cuda
+FROM python:3.11-slim AS voice-stack-cuda
 
 LABEL description="Voice Stack CUDA image: ASR + Kokoro + XTTS on NVIDIA GPUs"
 LABEL version="0.1.0"
