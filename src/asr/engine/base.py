@@ -326,11 +326,17 @@ class ASRBase(ABC):
             logger.info(f"ASR idle timeout enabled: {self.idle_timeout_minutes} minutes")
 
     def _touch(self) -> None:
-        """Update last used timestamp - call this on every inference request."""
+        """Update last used timestamp - call this on every inference request.
+
+        It must not mark the model as loaded. Callers run _touch() before
+        ensure_model_loaded(), so setting the flag here made the reload check
+        always pass: after an idle unload every request found no model and
+        failed until the process restarted. Only ensure_model_loaded() (and
+        __init__) may set _model_loaded.
+        """
         from datetime import datetime
 
         self.last_used = datetime.now()
-        self._model_loaded = True
 
     @abstractmethod
     def _load_model(self) -> None:
