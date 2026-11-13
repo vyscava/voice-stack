@@ -249,3 +249,64 @@ smoke:kokoro-image:
     SMOKE_IMAGE: $KOKORO_IMAGE_SHA
     SMOKE_TTS_ENGINE: ""
     SMOKE_VOICE: pf_dora
+
+# The voice agent image, booted with NO LiveKit server reachable: that is the
+# designed degraded state. The worker must keep retrying instead of exiting,
+# and the web app must stay up: /health answers, the call page is served, and a
+# call token is minted. It also proves the agent's modules import inside the
+# shipped image, which the unit suite (run on the CI image) cannot.
+smoke:agent-image:
+  stage: smoke
+  image: docker:29
+  needs:
+    - build:prod-image
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - pyproject.toml
+        - Dockerfile
+        - .gitlab-ci.yml
+        - .gitlab/ci/smoke.yml
+        - scripts/entrypoint.sh
+        - scripts/assert_runtime.py
+        - src/**/*
+  before_script:
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      fi
+  script:
+    - docker pull $AGENT_IMAGE_SHA
+    - |
+      set -e
+      NAME=smoke-agent-${CI_JOB_ID}
+      trap 'docker logs $NAME 2>&1 | tail -40 || true; docker rm -f $NAME >/dev/null 2>&1 || true' EXIT
+      docker run -d --name $NAME \
+        -e LIVEKIT_URL=ws://127.0.0.1:1 \
+        -e LIVEKIT_API_KEY=smoke-key \
+        -e LIVEKIT_API_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
+        -e AGENT_PUBLIC_LIVEKIT_URL=wss://livekit.example.test \
+        "$AGENT_IMAGE_SHA"
+      ok=""
+      for i in $(seq 1 30); do
+        if docker exec $NAME curl -fsS http://localhost:5004/health >/dev/null 2>&1; then ok=1; break; fi
+        sleep 2
+      done
+      [ -n "$ok" ] || { echo "FAIL: /health never answered"; exit 1; }
+      docker exec $NAME curl -fsS http://localhost:5004/ | grep -q 'const CONFIGURED_URL = "wss://livekit.example.test";' \
+        || { echo "FAIL: call page missing or not configured"; exit 1; }
+      docker exec $NAME curl -fsS http://localhost:5004/token | grep -q '"room":"call-' \
+        || { echo "FAIL: no call token"; exit 1; }
+      docker exec $NAME curl -fsS http://localhost:5004/metrics | grep -q voice_agent_calls_total \
+        || { echo "FAIL: metrics missing"; exit 1; }
+      # Still running after the worker has failed to reach LiveKit a few times.
+      sleep 20
+      [ "$(docker inspect -f '{{.State.Running}}' $NAME)" = "true" ] \
+        || { echo "FAIL: the agent exited while LiveKit was unreachable"; exit 1; }
+      docker logs $NAME 2>&1 | grep -q "failed to connect to livekit" \
+        || { echo "FAIL: expected the worker to be retrying LiveKit"; exit 1; }
+      echo "OK: agent image boots, serves page/token/health/metrics, and survives without LiveKit."
+  tags:
+    - docker
+    - nuc

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voice call</title>
+<style>
+:root{color-scheme:dark}
+body{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:24px 16px;display:flex;flex-direction:column;gap:16px;align-items:center}
+h1{font-size:22px;margin:8px 0}
+button{font-size:22px;padding:18px 36px;border-radius:40px;border:0;background:#7c5cff;color:#fff;width:100%;max-width:360px}
+button.stop{background:#c0392b}
+#state{font-size:18px;min-height:1.4em}
+#log{font:13px ui-monospace,monospace;white-space:pre-wrap;width:100%;max-width:520px;color:#aaa}
+</style></head><body>
+<h1>Voice call</h1>
+<div id="state">Idle</div>
+<button id="btn" type="button">Start call</button>
+<div id="log"></div>
+<!-- Pinned by integrity: the page has the microphone, so a changed CDN file must not load. -->
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.js"
+        integrity="sha384-mZc/icMZdUZj13mr6NLcaIXo3tTwTNrYhpymDyUbaJ9QmBHF1u/OxNinUyrtlhis" crossorigin="anonymous"></script>
+<script>
+const CONFIGURED_URL = "__LIVEKIT_URL__";
+const L = LivekitClient;
+const logEl = document.getElementById('log'), st = document.getElementById('state'), btn = document.getElementById('btn');
+let room = null;
+const log = m => { logEl.textContent = new Date().toLocaleTimeString() + '  ' + m + '\n' + logEl.textContent; };
+const errText = e => (e && e.name ? e.name + ': ' : '') + (e && e.message || e);
+function reset() { room = null; btn.textContent = 'Start call'; btn.className = ''; st.textContent = 'Idle'; }
+btn.onclick = async () => {
+  if (room) { await room.disconnect(); return; }
+  try {
+    st.textContent = 'Connecting...';
+    const res = await fetch('token', {cache: 'no-store'});
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || ('token request failed: ' + res.status));
+    room = new L.Room({adaptiveStream: true});
+    room.on(L.RoomEvent.TrackSubscribed, track => {
+      if (track.kind === 'audio') { document.body.appendChild(track.attach()); log('agent audio connected'); }
+    });
+    room.on(L.RoomEvent.ConnectionStateChanged, s => { st.textContent = s; });
+    room.on(L.RoomEvent.Disconnected, r => { log('call ended (' + r + ')'); reset(); });
+    const url = CONFIGURED_URL || ('wss://' + location.host);
+    await room.connect(url, body.token);
+    log('connected: ' + body.room);
+    try { await room.startAudio(); } catch (e) { log('audio blocked, tap the page: ' + errText(e)); }
+    try { await room.localParticipant.setMicrophoneEnabled(true); }
+    catch (e) { log('MICROPHONE: ' + errText(e)); throw e; }
+    btn.textContent = 'Hang up'; btn.className = 'stop';
+  } catch (e) {
+    log('ERROR: ' + errText(e));
+    if (room) { try { await room.disconnect(); } catch (_) {} }
+    reset(); st.textContent = 'Error';
+  }
+};
+document.body.addEventListener('click', () => { if (room) room.startAudio().catch(() => {}); });
+</script></body></html>

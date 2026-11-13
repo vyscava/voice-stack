@@ -382,3 +382,64 @@ class TestRedactUrl:
         assert any("NATS connected" in line for line in lines)
         assert not any(SECRET in line for line in lines)
         assert any("voice-gateway:***@nats.example.com:4222" in line for line in lines)
+
+
+class TestPerTurnMeta:
+    """`meta` adds per-turn context for a live call (call id, turn number).
+
+    It may add fields but never replace what was heard or where it came from.
+    """
+
+    @staticmethod
+    async def _sent_payload(monkeypatch, **ask_kwargs) -> dict:
+        import nats
+
+        sent: dict = {}
+
+        class Reply:
+            data = b'{"text": "ok"}'
+
+        class FakeConn:
+            is_connected = True
+
+            async def request(self, subject, payload, timeout):
+                sent["subject"] = subject
+                sent["body"] = json.loads(payload)
+                return Reply()
+
+        async def fake_connect(servers, **kwargs):
+            return FakeConn()
+
+        monkeypatch.setattr(nats, "connect", fake_connect)
+        agent = NatsAgent(servers="nats://localhost:4222", self_name="voice-agent", peer="brain")
+        assert await agent.ask(" hello there ", timeout_s=1, **ask_kwargs) == "ok"
+        return sent["body"]
+
+    @pytest.mark.asyncio
+    async def test_meta_is_merged_into_the_payload(self, monkeypatch):
+        body = await self._sent_payload(monkeypatch, meta={"call_id": "call-abc", "turn_id": 3, "language": "pt"})
+        assert body["call_id"] == "call-abc"
+        assert body["turn_id"] == 3
+        assert body["language"] == "pt"
+        assert body["text"] == "hello there"
+
+    @pytest.mark.asyncio
+    async def test_meta_cannot_override_what_was_heard(self, monkeypatch):
+        body = await self._sent_payload(
+            monkeypatch, meta={"text": "forged", "transcript": "forged", "source": "typed", "from": "x", "to": "y"}
+        )
+        assert body["text"] == "hello there"
+        assert body["transcript"] == " hello there "
+        assert body["source"] == "asr"
+        assert (body["from"], body["to"]) == ("voice-agent", "brain")
+
+    @pytest.mark.asyncio
+    async def test_without_meta_the_payload_is_unchanged(self, monkeypatch):
+        body = await self._sent_payload(monkeypatch)
+        assert body == {
+            "text": "hello there",
+            "transcript": " hello there ",
+            "source": "asr",
+            "from": "voice-agent",
+            "to": "brain",
+        }
