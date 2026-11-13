@@ -42,7 +42,7 @@ def nats_tls_kwargs(servers: str) -> dict[str, Any]:
     """Extra ``nats.connect`` options for a ``tls://`` URL, none for ``nats://``.
 
     nats-py upgrades an INFO-first connection only when the server says
-    ``tls_required``. Under ``allow_non_tls`` (messaging#7 R1) it does not, so a
+    ``tls_required``. Under a server-side ``allow_non_tls`` setting it does not, so a
     ``tls://`` URL alone stays plaintext and still sends the password in clear.
     Handshake-first is the option that gives real TLS in that window. A
     ``nats://`` URL keeps today's behaviour exactly.
@@ -107,11 +107,15 @@ class NatsAgent:
                 logger.debug(f"NATS drain skipped: {scrub_urls(exc)}")
             self._nc = None
 
-    async def ask(self, text: str, *, timeout_s: float) -> str:
+    async def ask(self, text: str, *, timeout_s: float, meta: dict[str, str | int] | None = None) -> str:
         """Send `text` to the peer and return its reply.
 
         Raises TimeoutError if the peer does not answer in time. The caller
         turns that into speech rather than a hang.
+
+        ``meta`` adds per-turn context (e.g. a call id and turn number, so a
+        peer can keep one conversation per call). It can never replace the
+        fields below: what was heard, and where it came from, stay authoritative.
         """
         # `text` carries the transcript, and `source` says where it came from.
         #
@@ -135,7 +139,8 @@ class NatsAgent:
         #
         # So: whatever is added between here and ASR, `transcript` stays raw.
         # Collapsing these into one field would quietly remove that guarantee.
-        payload = json.dumps(
+        body: dict[str, object] = dict(meta or {})
+        body.update(
             {
                 "text": text.strip(),
                 "transcript": text,
@@ -143,7 +148,8 @@ class NatsAgent:
                 "from": self._self_name,
                 "to": self._peer,
             }
-        ).encode()
+        )
+        payload = json.dumps(body).encode()
 
         async def _connect_and_request() -> bytes:
             await self.connect()

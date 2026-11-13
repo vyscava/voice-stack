@@ -154,6 +154,14 @@ test:freeze:kokoro:
     EXPECT_TORCH: "false"
     MIN_DISTS: "50"
 
+test:freeze:agent:
+  extends: .freeze-image
+  variables:
+    SCAN_IMAGE: $AGENT_IMAGE_SHA
+    AUDIT_NAME: agent
+    EXPECT_TORCH: "false"
+    MIN_DISTS: "40"
+
 .audit-image:
   stage: security
   image: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
@@ -207,6 +215,14 @@ test:audit:kokoro:
     AUDIT_IGNORE: ""
   needs:
     - job: test:freeze:kokoro
+      artifacts: true
+
+test:audit:agent:
+  extends: .audit-image
+  variables:
+    AUDIT_IGNORE: ""
+  needs:
+    - job: test:freeze:agent
       artifacts: true
 
 # ---------------------------------------------------------------------------
@@ -434,3 +450,8 @@ test:scan:trivy_kokoro:
   extends: .trivy-image
   variables:
     SCAN_IMAGE: $KOKORO_IMAGE_SHA
+
+test:scan:trivy_agent:
+  extends: .trivy-image
+  variables:
+    SCAN_IMAGE: $AGENT_IMAGE_SHA

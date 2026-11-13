@@ -343,6 +343,52 @@ message simply never arrives.
 
 ---
 
+## Voice Agent: live calls (optional)
+
+`SERVICE_MODE=agent` turns the stack into a live, interruptible voice call, in
+the style of a phone assistant's voice mode. It runs a
+[LiveKit Agents](https://docs.livekit.io/agents/) worker against a LiveKit
+server you host: the caller's audio is transcribed by this project's ASR, the
+reply is spoken by this project's TTS, and the caller can talk over it to
+interrupt. Like the gateway, it holds no speech model of its own.
+
+The **brain** is pluggable and only ever sees text:
+
+| `AGENT_BRAIN` | What answers |
+|---|---|
+| `openai` (default) | Any OpenAI-compatible `/v1/chat/completions` endpoint (llama.cpp, vLLM, a hosted API): `AGENT_LLM_URL`, `AGENT_LLM_MODEL`, optional `AGENT_LLM_EXTRA_BODY` JSON |
+| `nats` | An agent on a NATS bus, over request/reply (`AGENT_NATS_URL`, `AGENT_PEER`); each turn carries the call id and turn number so the peer can keep one conversation per call |
+
+```bash
+docker build --target agent -t voice-stack:agent .
+docker run -d --network host -e SERVICE_MODE=agent \
+  -e LIVEKIT_URL=ws://localhost:7880 -e LIVEKIT_API_KEY=... -e LIVEKIT_API_SECRET=... \
+  -e AGENT_ASR_URL=http://localhost:5001 -e AGENT_TTS_URL=http://localhost:5002 \
+  -e AGENT_LLM_URL=http://localhost:8080/v1 -e AGENT_LLM_MODEL=my-model \
+  voice-stack:agent
+```
+
+Port `5004` serves a call page (`/`), short-lived room-scoped tokens
+(`/token`), `/health` and Prometheus `/metrics`. Anyone who can load the page
+can start a call, so put it behind whatever restricts access in your setup.
+Browsers may refuse to let a page on a public site connect to a private
+address, which is why the page is served by the agent itself.
+
+What it does on its own:
+
+- **Language:** ASR detects the language (it is never told "English"), the
+  reply voice switches per turn (`AGENT_VOICE_EN`, `AGENT_VOICE_PT`) and the
+  default prompt answers in the caller's language.
+- **Slow brain:** a short filler (`AGENT_MSG_FILLER`) is spoken only when the
+  brain has said nothing after `AGENT_FILLER_AFTER_S`; a fast answer gets none.
+- **Dead brain:** a timeout or error before the first words becomes a spoken
+  apology (`AGENT_MSG_APOLOGY`), never silence.
+- **Noisy rooms:** background speech never goes quiet, so a turn also ends
+  after `AGENT_MAX_USER_TURN_S`.
+- **Metrics** say where a slow turn spent its time:
+  `voice_agent_stage_seconds{stage="eou|stt|brain_first_text|tts_first_audio"}`,
+  plus turns by outcome, brain failures by kind, barge-ins and calls.
+
 ## TTS Engines
 
 The engine is chosen once, at boot, with `TTS_ENGINE`. The API (`/v1/audio/speech`,

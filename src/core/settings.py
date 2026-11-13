@@ -190,6 +190,69 @@ class Settings(BaseSettings):
     # speech, and the agent is never asked about it.
     GATEWAY_MIN_TRANSCRIPT_CHARS: int = Field(default=2)
 
+    # ----------------------------------------------------------------
+    # Agent (SERVICE_MODE=agent): a live, interruptible voice call
+    # ----------------------------------------------------------------
+    # Like the gateway, it holds no speech model: ASR and TTS are this
+    # project's own services over HTTP, and the "brain" is pluggable -- any
+    # OpenAI-compatible chat endpoint, or an agent on a NATS bus. Media goes
+    # through a LiveKit server; the brain only ever sees text.
+    AGENT_WEB_PORT: int = Field(default=5004, description="Port of the built-in call page, token, health, metrics.")
+    AGENT_ASR_URL: str = Field(default="http://localhost:5001", description="Base URL of the ASR service.")
+    AGENT_TTS_URL: str = Field(default="http://localhost:5002", description="Base URL of the TTS service.")
+
+    LIVEKIT_URL: str = Field(default="ws://localhost:7880", description="LiveKit server URL the worker connects to.")
+    LIVEKIT_API_KEY: str = Field(default="", description="LiveKit API key (worker registration and call tokens).")
+    LIVEKIT_API_SECRET: str = Field(default="", description="LiveKit API secret.")
+    AGENT_PUBLIC_LIVEKIT_URL: str = Field(
+        default="", description="wss:// URL the browser uses to reach LiveKit. Empty = same host as the page."
+    )
+    AGENT_CALLER_IDENTITY: str = Field(default="caller", description="Participant identity in call tokens.")
+    AGENT_TOKEN_TTL_MIN: int = Field(default=60, description="Lifetime of a call token, in minutes.")
+
+    # Which brain answers. openai = an OpenAI-compatible /chat/completions
+    # endpoint; nats = a peer agent over NATS request/reply (text only).
+    AGENT_BRAIN: str = Field(default="openai", description="openai | nats")
+    AGENT_BRAIN_TIMEOUT_S: float = Field(
+        default=20.0, description="How long to wait for the first words of a reply before apologising."
+    )
+    AGENT_LLM_URL: str = Field(default="http://localhost:8080/v1", description="OpenAI-compatible base URL.")
+    AGENT_LLM_MODEL: str = Field(default="default", description="Model name sent to the OpenAI-compatible endpoint.")
+    AGENT_LLM_API_KEY: str = Field(default="unused", description="API key for the OpenAI-compatible endpoint.")
+    AGENT_LLM_EXTRA_BODY: str = Field(
+        default="", description='JSON merged into each request, e.g. {"chat_template_kwargs":{"enable_thinking":false}}'
+    )
+    AGENT_SYSTEM_PROMPT: str = Field(
+        default=(
+            "You are a friendly voice assistant on a live call. Answer in one to three short, natural spoken "
+            "sentences. No markdown, no lists, no emojis. Always reply in the same language the user just spoke. "
+            "If you are interrupted, just continue the conversation naturally."
+        ),
+        description="System prompt for the openai brain.",
+    )
+    AGENT_NATS_URL: str = Field(default="nats://localhost:4222", description="NATS server URL for the nats brain.")
+    AGENT_SELF_NAME: str = Field(default="voice-agent", description="Our identity on the bus.")
+    AGENT_PEER: str = Field(default="assistant", description="Peer agent that answers, for the nats brain.")
+    AGENT_NATS_TOPIC: str = Field(default="voice", description="Topic segment of the DM subject.")
+
+    # Voices: stock speakers only. Switched per turn on the language ASR detects.
+    AGENT_VOICE_EN: str = Field(default="af_heart", description="Voice for English replies.")
+    AGENT_VOICE_PT: str = Field(default="pf_dora", description="Voice for Portuguese replies.")
+
+    # Turn taking. A caller in a noisy room (TV, radio, a car) never goes
+    # silent, so the turn length is capped or the agent would wait forever.
+    AGENT_MIN_ENDPOINTING_DELAY_S: float = Field(default=0.5, description="Silence that ends a turn.")
+    AGENT_MAX_ENDPOINTING_DELAY_S: float = Field(default=3.0, description="Upper bound on that wait.")
+    AGENT_MAX_USER_TURN_S: float = Field(default=20.0, description="A turn ends after this long even without silence.")
+
+    # Spoken lines. Failure must be audible.
+    AGENT_GREETING: str = Field(default="Hi, I'm listening.", description="Spoken when a call starts. Empty = none.")
+    AGENT_FILLER_AFTER_S: float = Field(
+        default=1.2, description="Speak the filler only if the brain has said nothing after this long."
+    )
+    AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.")
+    AGENT_MSG_APOLOGY: str = Field(default="Sorry, I can't reach my brain right now. Please try again in a moment.")
+
     # Debug settings
     DEBUG_PRESERVE_FAILED_UPLOADS: bool = Field(
         default=False, description="Save failed audio uploads to /tmp for debugging"

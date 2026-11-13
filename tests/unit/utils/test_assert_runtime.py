@@ -128,3 +128,29 @@ def test_unresolved_libraries_fails_on_a_missing_file(tmp_path: Path) -> None:
     failures: list[str] = []
     assert unresolved_libraries(failures, tmp_path / "nope.so") is None
     assert failures and "does not exist" in failures[0]
+
+
+def test_agent_variant_is_known_and_forbids_speech_engines() -> None:
+    from assert_runtime import AGENT_FORBIDDEN, KOKORO_FORBIDDEN
+
+    assert "agent" in VARIANTS
+    assert set(KOKORO_FORBIDDEN) <= set(AGENT_FORBIDDEN)
+    assert {"faster_whisper", "ctranslate2", "kokoro_onnx"} <= set(AGENT_FORBIDDEN)
+
+
+def test_check_agent_reports_a_module_that_does_not_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    import assert_runtime
+
+    monkeypatch.setattr(assert_runtime, "AGENT_REQUIRED", ("json", "voice_agent_does_not_exist"))
+    failures: list[str] = []
+    assert_runtime.check_agent(failures)
+    assert len(failures) == 1
+    assert "voice_agent_does_not_exist does not import" in failures[0]
+
+
+def test_check_absent_flags_an_installed_forbidden_module() -> None:
+    import assert_runtime
+
+    failures: list[str] = []
+    assert_runtime.check_absent(failures, ("json", "surely_not_installed_xyz"))
+    assert failures == ["json is installed but must not be in this image"]

@@ -76,7 +76,9 @@ from pathlib import Path
 # Image variants. "full" is the default because Dockerfile.ci runs this script
 # without arguments and installs everything. "kokoro" and "full" are targets of
 # the root Dockerfile; "cuda" and "rocm" are docker/Dockerfile.cuda / .rocm.
-VARIANTS = ("full", "kokoro", "cuda", "rocm")
+# "agent" is the voice agent's own target: no speech engines at all, because
+# it reaches ASR and TTS over HTTP.
+VARIANTS = ("full", "kokoro", "cuda", "rocm", "agent")
 
 # Which build of each torch package a variant must carry, as the prefix of the
 # version's local part ("2.15.0+cu132" -> "cu132"), and the index that has it.
@@ -104,6 +106,10 @@ DEFAULT_KOKORO_VOICES = "/app/models/kokoro/voices-v1.0.bin"
 
 # What the slim image must never contain (import names).
 KOKORO_FORBIDDEN = ("torch", "torchaudio", "torchcodec", "whisper", "TTS", "transformers")
+
+# The agent image holds no speech model: it calls the ASR and TTS services.
+AGENT_FORBIDDEN = (*KOKORO_FORBIDDEN, "faster_whisper", "ctranslate2", "kokoro_onnx")
+AGENT_REQUIRED = ("voice_agent.main", "voice_agent.worker", "voice_agent.web", "livekit.plugins.silero")
 
 
 def check_interpreter(failures: list[str]) -> None:
@@ -442,6 +448,21 @@ def check_absent(failures: list[str], modules: tuple[str, ...]) -> None:
     )
 
 
+def import_failure(name: str) -> str | None:
+    """Why ``name`` does not import, or None when it does."""
+    try:
+        importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001 - any import failure is the finding
+        return f"{name} does not import: {type(exc).__name__}: {exc}"
+    return None
+
+
+def check_agent(failures: list[str]) -> None:
+    """The agent's modules import, with the dependencies the image actually has."""
+    failures.extend(f for f in map(import_failure, AGENT_REQUIRED) if f)
+    print(f"agent modules checked: {', '.join(AGENT_REQUIRED)}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--variant", choices=VARIANTS, default="full")
@@ -451,8 +472,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"variant: {args.variant}")
 
     check_interpreter(failures)
-    check_asr(failures)
-    if args.variant == "full":
+    if args.variant != "agent":
+        check_asr(failures)
+    if args.variant == "agent":
+        check_agent(failures)
+        check_absent(failures, AGENT_FORBIDDEN)
+    elif args.variant == "full":
         if check_torch(failures):
             check_whisper_torch(failures)
             check_xtts(failures)

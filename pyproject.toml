@@ -151,6 +151,14 @@ gateway = [
   "nats-py>=2.6.0",
   "prometheus-client>=0.20.0",
 ]
+agent = [
+  # The voice agent holds no speech model: it reaches this project's ASR and
+  # TTS over HTTP and a LiveKit server for the call's media. Silero VAD comes
+  # with the silero plugin as an ONNX file, so still no torch.
+  "voice-stack[gateway]",
+  "livekit-agents[openai,silero]~=1.8",
+  "livekit-api>=1.0",
+]
 server = [
   "python-dotenv",
   "pydantic-settings",
@@ -193,7 +201,7 @@ path = ".venv"
 # gateway included so CI installs the same set the production image does
 # (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway]). Without it, any module importing a
 # gateway-only dependency passes locally and fails in CI at IMPORT time.
-features = ["dev", "server", "tts", "asr", "asr-whisper", "gateway"]
+features = ["dev", "server", "tts", "asr", "asr-whisper", "gateway", "agent"]
 dependencies = []
 
 [tool.hatch.envs.default.scripts]
@@ -215,6 +223,7 @@ test-tts = "pytest tests/unit/tts -v {args:}"
 test-core = "pytest tests/unit/core -v {args:}"
 test-utils = "pytest tests/unit/utils -v {args:}"
 test-gateway = "pytest tests/unit/gateway -v {args:}"
+test-agent = "pytest tests/unit/voice_agent -v {args:}"
 test-integration = "pytest tests/integration -v {args:}"
 
 # Coverage commands

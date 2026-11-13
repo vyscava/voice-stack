@@ -10,7 +10,7 @@
 #   SERVICE_MODE=tts ./entrypoint.sh
 #
 # Environment Variables:
-#   SERVICE_MODE: "asr" or "tts" (required)
+#   SERVICE_MODE: "asr", "tts", "gateway" or "agent" (required)
 #   HOST: Listen address (default: 0.0.0.0)
 #   ASR_PORT: ASR service port (default: 5001)
 #   TTS_PORT: TTS service port (default: 5002)
@@ -42,7 +42,7 @@ log_error() {
 # Check required SERVICE_MODE variable
 if [ -z "$SERVICE_MODE" ]; then
     log_error "SERVICE_MODE environment variable is required"
-    log_error "Valid options: 'asr', 'tts' or 'gateway'"
+    log_error "Valid options: 'asr', 'tts', 'gateway' or 'agent'"
     log_error ""
     log_error "Example:"
     log_error "  docker run -e SERVICE_MODE=asr voice-stack:latest"
@@ -87,9 +87,17 @@ case "$SERVICE_MODE" in
         PORT=${GATEWAY_PORT:-5003}
         DEFAULT_ENV_TEMPLATE="/app/config/.env.production.gateway"
         ;;
+    agent)
+        # Not a uvicorn app: LiveKit's worker CLI owns the main thread and
+        # serves the call page, health and metrics from a thread beside it.
+        log_success "Voice Stack Agent (live voice calls through LiveKit)"
+        log_info "Web (page, token, health, metrics) port: ${AGENT_WEB_PORT:-5004}"
+        cd /app/src
+        exec python -m voice_agent.main start
+        ;;
     *)
         log_error "Invalid SERVICE_MODE: '$SERVICE_MODE'"
-        log_error "Valid options: 'asr', 'tts' or 'gateway'"
+        log_error "Valid options: 'asr', 'tts', 'gateway' or 'agent'"
         exit 1
         ;;
 esac

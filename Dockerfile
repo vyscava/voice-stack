@@ -180,6 +180,56 @@ EXPOSE 5001 5002
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # -----------------------------------------------------------------------------
+# Voice agent image: live calls through LiveKit. It holds no speech model (ASR
+# and TTS are reached over HTTP), so no torch, no CTranslate2, no Kokoro.
+# assert_runtime.py --variant agent enforces it. Built with --target agent;
+# the full image stays the default (last) stage.
+# -----------------------------------------------------------------------------
+FROM builder-base AS builder-agent
+RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,agent]" && finish-venv
+
+FROM python:3.11-slim AS agent
+
+LABEL description="Voice Stack agent image: live voice calls through LiveKit"
+LABEL version="0.1.0"
+
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get install -y --no-install-recommends curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash voicestack
+WORKDIR /app
+
+COPY --from=builder-agent --chown=voicestack:voicestack /build/.venv /app/.venv
+COPY --chown=voicestack:voicestack src/ /app/src/
+COPY --chown=voicestack:voicestack scripts/assert_runtime.py /app/scripts/
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src"
+
+RUN /app/.venv/bin/python /app/scripts/assert_runtime.py --variant agent
+
+COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
+RUN chmod +x /app/entrypoint.sh
+
+USER voicestack
+
+ENV ENV=production \
+    LOG_LEVEL=info \
+    HOST=0.0.0.0 \
+    SERVICE_MODE=agent
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${AGENT_WEB_PORT:-5004}/health || exit 1
+
+EXPOSE 5004
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# -----------------------------------------------------------------------------
 # Stage 2: Production - Minimal Runtime
 # -----------------------------------------------------------------------------
 # python:3.11-slim, the SAME image the venv is built in. This is the root cause
