@@ -1,0 +1,79 @@
+# Voice Stack Agent, deployed by CI to the same host as ASR and TTS. See
+# compose/deploy/asr.yml for how the deploy works.
+#
+# Everything deployment-specific (the LiveKit server and its key pair, the
+# brain endpoint) comes from the deployer's secret store: it exports the values
+# into the environment and compose substitutes them below. `${VAR:?}` makes a
+# missing value fail the deploy instead of starting with an empty setting.
+#
+# NETWORKS. Like the gateway, the agent reaches ASR and TTS by container name
+# on their stacks' networks, so its deploy job runs after both of theirs. Its
+# connection to LiveKit is outbound, so it needs no host networking.
+
+services:
+  agent:
+    image: ${VOICE_STACK_AGENT_IMAGE}
+    container_name: voice-stack-agent
+    restart: unless-stopped
+
+    environment:
+      SERVICE_MODE: agent
+      ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      AGENT_WEB_PORT: "5004"
+
+      AGENT_ASR_URL: http://voice-stack-asr:5001
+      AGENT_TTS_URL: http://voice-stack-tts:5002
+
+      LIVEKIT_URL: ${LIVEKIT_URL:?set by the deployer}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set by the deployer}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set by the deployer}
+      AGENT_PUBLIC_LIVEKIT_URL: ${AGENT_PUBLIC_LIVEKIT_URL:?set by the deployer}
+
+      AGENT_BRAIN: ${AGENT_BRAIN:?set by the deployer}
+      AGENT_LLM_URL: ${AGENT_LLM_URL:-}
+      AGENT_LLM_MODEL: ${AGENT_LLM_MODEL:-}
+      AGENT_LLM_EXTRA_BODY: ${AGENT_LLM_EXTRA_BODY:-}
+      AGENT_NATS_URL: ${AGENT_NATS_URL:-}
+      AGENT_SELF_NAME: ${AGENT_SELF_NAME:-voice-agent}
+      AGENT_PEER: ${AGENT_PEER:-}
+      AGENT_NATS_TOPIC: ${AGENT_NATS_TOPIC:-voice}
+
+      # Stock speakers only: cloned voices of real people stay private.
+      AGENT_VOICE_EN: af_heart
+      AGENT_VOICE_PT: pf_dora
+      AGENT_GREETING: ${AGENT_GREETING:-Hi, I'm listening.}
+
+    ports:
+      - "5004:5004"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - asr
+      - tts
+
+networks:
+  asr:
+    external: true
+    name: voice-stack-asr_default
+  tts:
+    external: true
+    name: voice-stack-tts_default

@@ -51,11 +51,30 @@ include:
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
 
+  - project: gitops/ci-templates
+    ref: v1.1.4
+    file: /templates/deploy.yml
+    inputs:
+      stack: voice-stack-agent
+      compose_file: compose/deploy/agent.yml
+      image_var: VOICE_STACK_AGENT_IMAGE
+      published_var: VOICE_AGENT_PUBLISHED_IMAGE
+      image_repository: $DOCKER_REGISTRY/voice-stack
+      ci_fallback: false
+
 # The gateway joins the ASR and TTS networks as external networks, which only
 # exist once those stacks are up, so it deploys after both. A job with `needs`
 # only receives the dotenv of the jobs it names, hence build:prod-image (the
 # pinned image) and release:latest (which keeps every gate upstream of it).
 deploy:voice-stack-gateway:
+  needs:
+    - build:prod-image
+    - release:latest
+    - deploy:voice-stack-asr
+    - deploy:voice-stack-tts
+
+# The agent joins the same two networks, so it deploys after both as well.
+deploy:voice-stack-agent:
   needs:
     - build:prod-image
     - release:latest
