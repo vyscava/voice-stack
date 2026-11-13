@@ -561,3 +561,79 @@ def test_transcribe_resamples_audio() -> None:
 
         # Verify resample was called
         mock_resample.assert_called_once_with(audio_f32=audio_f32, sr=44100)
+
+
+def _idle_unloaded_engine(mock_model_cls: Mock) -> ASRFasterWhisper:
+    """An engine whose model was unloaded by the idle timeout, as in production."""
+    first, second = Mock(name="first-load"), Mock(name="reload")
+    second.transcribe.return_value = (
+        [Mock(start=0.0, end=1.0, text=" back again")],
+        Mock(language="en", language_probability=0.9),
+    )
+    second.detect_language.return_value = ("en", 0.9, None)
+    mock_model_cls.side_effect = [first, second]
+
+    engine = ASRFasterWhisper()
+    engine.idle_timeout_minutes = 60
+    engine._unload_model()
+    engine._model_loaded = False  # what check_and_unload_if_idle() leaves behind
+    assert engine.model is None
+    engine._decode_audio_bytes = Mock(return_value=(np.zeros(16000, dtype=np.float32), 16000, "test"))  # type: ignore[method-assign]
+    return engine
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_transcribe_file_reloads_a_model_unloaded_by_the_idle_timeout() -> None:
+    """Regression: _touch() marked the model loaded before ensure_model_loaded() ran.
+
+    transcribe_file() calls _touch() and then _transcribe_core(), which calls
+    ensure_model_loaded(). With _touch() setting _model_loaded=True, the reload
+    check always passed, so after a 60-minute idle unload every request hit
+    `None.transcribe` and returned HTTP 500 until the process was restarted.
+    """
+    with (
+        patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
+        patch("asr.engine.fasterwhisper.settings") as mock_settings,
+    ):
+        mock_settings.ASR_VAD_ENABLED = False
+        mock_settings.ASR_CACHE_ENABLED = False
+        mock_settings.ASR_ENGINE = "fasterwhisper"
+        mock_settings.ASR_MODEL = "base"
+        engine = _idle_unloaded_engine(mock_model_cls)
+
+        result = engine.transcribe_file(file_bytes=b"audio", filename="a.wav")
+
+        assert result.text == "back again"
+        assert mock_model_cls.call_count == 2, "the unloaded model must be loaded again"
+        assert engine._model_loaded is True
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_detect_language_file_reloads_a_model_unloaded_by_the_idle_timeout() -> None:
+    """Same regression on the language-detection path (Bazarr uses it)."""
+    with (
+        patch("asr.engine.fasterwhisper.WhisperModel") as mock_model_cls,
+        patch("asr.engine.fasterwhisper.settings") as mock_settings,
+    ):
+        mock_settings.ASR_VAD_ENABLED = False
+        mock_settings.ASR_CACHE_ENABLED = False
+        mock_settings.ASR_ENGINE = "fasterwhisper"
+        mock_settings.ASR_MODEL = "base"
+        engine = _idle_unloaded_engine(mock_model_cls)
+
+        engine.detect_language_file(file_bytes=b"audio", filename="a.wav")
+
+        assert mock_model_cls.call_count == 2, "the unloaded model must be loaded again"
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_touch_does_not_mark_the_model_loaded() -> None:
+    """Only ensure_model_loaded() and __init__ may set _model_loaded."""
+    with patch("asr.engine.fasterwhisper.WhisperModel"):
+        engine = ASRFasterWhisper()
+        engine._model_loaded = False
+        engine._touch()
+        assert engine._model_loaded is False
