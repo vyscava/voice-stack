@@ -331,6 +331,7 @@ cloned voices on networks you control, and set `GATEWAY_VOICE` deliberately rath
 | `GATEWAY_SELF_NAME` | `voice-gateway` | Must match this service's identity on the bus **exactly** |
 | `GATEWAY_AGENT` | `assistant` | The peer that answers |
 | `GATEWAY_NATS_TOPIC` | `voice` | |
+| `GATEWAY_NATS_INBOX_PREFIX` | empty | Reply inboxes go under `_INBOX.<user>`, the user from `GATEWAY_NATS_URL` (the agent's `AGENT_NATS_INBOX_PREFIX` works the same way). Set only to override; no user in the URL means the nats-py default |
 | `GATEWAY_AGENT_TIMEOUT_S` | `60` | Bounds connect **and** request, so an exchange cannot hang |
 | `GATEWAY_VOICE` | `default` | The engine's own default voice (a stock one, on purpose), so switching `TTS_ENGINE` needs no change here |
 | `GATEWAY_AUDIO_FORMAT` | `opus` | |

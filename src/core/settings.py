@@ -159,6 +159,11 @@ class Settings(BaseSettings):
     )
     GATEWAY_NATS_URL: str = Field(default="nats://localhost:4222", description="NATS server URL.")
     GATEWAY_NATS_TOPIC: str = Field(default="voice", description="Topic segment of the DM subject.")
+    GATEWAY_NATS_INBOX_PREFIX: str = Field(
+        default="",
+        description="Prefix for NATS reply inboxes. Empty: _INBOX.<user> from the user in "
+        "GATEWAY_NATS_URL, or the nats-py default when the URL has no user.",
+    )
 
     # An agent doing real work (tool calls, searches) is the slow part of an
     # exchange, not ASR. Measured ASR RTF is 0.006-0.020, so a 10 s utterance
@@ -234,6 +239,11 @@ class Settings(BaseSettings):
     AGENT_SELF_NAME: str = Field(default="voice-agent", description="Our identity on the bus.")
     AGENT_PEER: str = Field(default="assistant", description="Peer agent that answers, for the nats brain.")
     AGENT_NATS_TOPIC: str = Field(default="voice", description="Topic segment of the DM subject.")
+    AGENT_NATS_INBOX_PREFIX: str = Field(
+        default="",
+        description="Prefix for NATS reply inboxes. Empty: _INBOX.<user> from the user in "
+        "AGENT_NATS_URL, or the nats-py default when the URL has no user.",
+    )
 
     # Voices: stock speakers only. Switched per turn on the language ASR detects.
     AGENT_VOICE_EN: str = Field(default="af_heart", description="Voice for English replies.")
