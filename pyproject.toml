@@ -143,6 +143,18 @@ asr-whisper = [
   "openai-whisper",
   "torch==2.15.0",
 ]
+# Streaming ASR (WebSocket /v1/stream, ASR_STREAM_ENABLED=true): NVIDIA
+# Nemotron 3.5 ASR streaming through Hugging Face Transformers. Optional and in
+# no image by default: the slim image must stay torch-free, and the full image
+# already carries both packages (via tts-xtts) at these same pins. The model
+# class needs transformers >= 5.13; the pins match tts-xtts so the two extras
+# never ask for different versions. Like torch everywhere else, install it
+# from the CPU index on CPU-only hosts (see the torch notes above).
+stream = [
+  "transformers==5.22.2",
+  "torch==2.15.0",
+  "numpy",
+]
 gateway = [
   # The gateway holds no model. It orchestrates the ASR and TTS services over
   # HTTP and reaches the agent fleet over NATS, so its dependencies are a
@@ -201,7 +213,7 @@ path = ".venv"
 # gateway included so CI installs the same set the production image does
 # (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway]). Without it, any module importing a
 # gateway-only dependency passes locally and fails in CI at IMPORT time.
-features = ["dev", "server", "tts", "asr", "asr-whisper", "gateway", "agent"]
+features = ["dev", "server", "tts", "asr", "asr-whisper", "stream", "gateway", "agent"]
 dependencies = []
 
 [tool.hatch.envs.default.scripts]
