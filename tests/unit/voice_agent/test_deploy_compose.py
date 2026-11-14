@@ -35,6 +35,7 @@ def test_stt_and_preemptive_settings_are_forwarded_with_safe_defaults():
     env = _agent_environment()
     assert env["AGENT_STT_MODE"] == "${AGENT_STT_MODE:-batch}"
     assert env["AGENT_ASR_STREAM_URL"] == "${AGENT_ASR_STREAM_URL:-}"
+    assert env["AGENT_ASR_STREAM_FINAL_TIMEOUT_S"] == "${AGENT_ASR_STREAM_FINAL_TIMEOUT_S:-2.0}"
     assert env["AGENT_PREEMPTIVE_GENERATION"] == "${AGENT_PREEMPTIVE_GENERATION:-false}"
 
 

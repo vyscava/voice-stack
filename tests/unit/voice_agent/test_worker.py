@@ -181,7 +181,10 @@ async def test_stt_mode_stream_from_env_derives_the_websocket_url(monkeypatch):
 async def test_stt_stream_url_override(monkeypatch):
     monkeypatch.setenv("AGENT_STT_MODE", "stream")
     monkeypatch.setenv("AGENT_ASR_STREAM_URL", "wss://stream.example/v1/stream")
-    assert worker.build_stt(_settings(), vad=None).url == "wss://stream.example/v1/stream"
+    monkeypatch.setenv("AGENT_ASR_STREAM_FINAL_TIMEOUT_S", "1.5")
+    plugin = worker.build_stt(_settings(), vad=None)
+    assert plugin.url == "wss://stream.example/v1/stream"
+    assert plugin.final_timeout_s == 1.5
 
 
 def test_unknown_stt_mode_fails_at_startup():

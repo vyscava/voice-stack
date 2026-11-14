@@ -431,7 +431,9 @@ What it does on its own:
   they speak, instead of one request per pause. The turn still ends on VAD
   silence, which sends the `flush`; the final transcript and its language come
   back from the stream. If the stream refuses (`busy`, `disabled`), cannot be
-  reached or fails mid-call, that call carries on in batch mode, with the
+  reached, stalls (no final within `AGENT_ASR_STREAM_FINAL_TIMEOUT_S` of a
+  flush, a send blocked that long, or unanswered pings) or fails mid-call,
+  that call carries on in batch mode, with the
   utterance in progress replayed so nothing is lost, and
   `voice_agent_stt_stream_fallbacks_total{reason}` counts it.
 - **Metrics** say where a slow turn spent its time:
@@ -443,6 +445,7 @@ What it does on its own:
 |----------|---------|-------------|
 | `AGENT_STT_MODE` | `batch` | `batch` (one ASR request per VAD segment) or `stream` (the `/v1/stream` WebSocket, batch as fallback) |
 | `AGENT_ASR_STREAM_URL` | empty | Streaming WebSocket URL; empty derives it from `AGENT_ASR_URL` (`http` becomes `ws`, `https` becomes `wss`, plus `/v1/stream`) |
+| `AGENT_ASR_STREAM_FINAL_TIMEOUT_S` | `2.0` | Seconds a flush may go without a final (or a send may block) before the call falls back to batch |
 | `AGENT_PREEMPTIVE_GENERATION` | `false` | Start the reply before the turn is final. Applies to the `openai` brain only: a `nats` peer would receive every discarded speculative turn, so it never gets it |
 
 ## TTS Engines

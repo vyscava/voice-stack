@@ -25,7 +25,8 @@ from core.settings import Settings, get_settings
 from voice_agent import metrics
 from voice_agent.brains import Brain, build_brain, history_from_chat_items
 from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_filler
-from voice_agent.stream_stt import AsrStreamSTT, stream_url
+from voice_agent.stream_audio import stream_url
+from voice_agent.stream_stt import AsrStreamSTT
 
 # Never contacted: llm_node is overridden. Port 9 is discard.
 _PLACEHOLDER_LLM_URL = "http://127.0.0.1:9/v1"
@@ -87,7 +88,7 @@ def build_stt(settings: Settings, *, vad: Any) -> stt.STT[Any]:
     if stt_mode(settings) == "batch":
         return batch
     url = stream_url(settings.AGENT_ASR_URL, settings.AGENT_ASR_STREAM_URL)
-    return AsrStreamSTT(url=url, batch=batch, vad=vad)
+    return AsrStreamSTT(url=url, batch=batch, vad=vad, final_timeout_s=settings.AGENT_ASR_STREAM_FINAL_TIMEOUT_S)
 
 
 def build_session(settings: Settings, *, vad: Any) -> AgentSession:

@@ -28,6 +28,7 @@ services:
       # batch until the deployer flips it; empty stream URL = derived from AGENT_ASR_URL.
       AGENT_STT_MODE: ${AGENT_STT_MODE:-batch}
       AGENT_ASR_STREAM_URL: ${AGENT_ASR_STREAM_URL:-}
+      AGENT_ASR_STREAM_FINAL_TIMEOUT_S: ${AGENT_ASR_STREAM_FINAL_TIMEOUT_S:-2.0}
       AGENT_PREEMPTIVE_GENERATION: ${AGENT_PREEMPTIVE_GENERATION:-false}
 
       LIVEKIT_URL: ${LIVEKIT_URL:?set by the deployer}

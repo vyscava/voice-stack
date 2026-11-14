@@ -227,6 +227,11 @@ class Settings(BaseSettings):
     AGENT_ASR_STREAM_URL: str = Field(
         default="", description="ASR streaming WebSocket URL. Empty = AGENT_ASR_URL as ws(s)://.../v1/stream."
     )
+    AGENT_ASR_STREAM_FINAL_TIMEOUT_S: float = Field(
+        default=2.0,
+        description="A stream that sends no final this long after a flush, or blocks a send this long, has "
+        "stalled: the call falls back to batch.",
+    )
 
     LIVEKIT_URL: str = Field(default="ws://localhost:7880", description="LiveKit server URL the worker connects to.")
     LIVEKIT_API_KEY: str = Field(default="", description="LiveKit API key (worker registration and call tokens).")

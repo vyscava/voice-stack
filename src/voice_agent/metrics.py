@@ -30,7 +30,7 @@ BARGE_INS = Counter("voice_agent_barge_ins_total", "Times the caller started tal
 CALLS = Counter("voice_agent_calls_total", "Calls started.")
 STT_STREAM_FALLBACKS = Counter(
     "voice_agent_stt_stream_fallbacks_total",
-    "Calls that switched from streaming ASR to batch STT, by reason (busy, disabled, connect, error).",
+    "Calls that switched from streaming ASR to batch STT, by reason (busy, disabled, connect, stall, error).",
     ["reason"],
 )
 

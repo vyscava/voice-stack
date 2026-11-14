@@ -4,55 +4,21 @@ from __future__ import annotations
 
 import json
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
 from aiohttp import WSMsgType, web
-from aiohttp.test_utils import TestServer
 from livekit import rtc
 from livekit.agents import stt
 
 from tests.unit.voice_agent.stream_fakes import FakeBatch, collect_until
 from voice_agent import metrics
-from voice_agent.stream_stt import AsrStreamSTT, frame_from_pcm16, pcm16_mono, stream_url
+from voice_agent.stream_audio import frame_from_pcm16, pcm16_mono, stream_url
+from voice_agent.stream_stt import AsrStreamSTT
 
 ET = stt.SpeechEventType
 Handler = Callable[[web.WebSocketResponse, list[Any]], Awaitable[None]]
-
-
-class FakeAsr:
-    """A /v1/stream server whose behaviour is a per-test coroutine; records what it receives."""
-
-    def __init__(self, handler: Handler) -> None:
-        self.handler = handler
-        self.received: list[Any] = []  # dicts for JSON frames, bytes for audio
-        self.connections = 0
-
-    async def ws(self, request: web.Request) -> web.WebSocketResponse:
-        self.connections += 1
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        await self.handler(ws, self.received)
-        return ws
-
-
-@pytest.fixture
-async def serve() -> AsyncIterator[Callable[[Handler], Awaitable[tuple[FakeAsr, str]]]]:
-    servers: list[TestServer] = []
-
-    async def start(handler: Handler) -> tuple[FakeAsr, str]:
-        fake = FakeAsr(handler)
-        app = web.Application()
-        app.router.add_get("/v1/stream", fake.ws)
-        server = TestServer(app)
-        await server.start_server()
-        servers.append(server)
-        return fake, str(server.make_url("/v1/stream")).replace("http://", "ws://")
-
-    yield start
-    for server in servers:
-        await server.close()
 
 
 async def transcribing(ws: web.WebSocketResponse, received: list[Any]) -> None:
@@ -222,8 +188,8 @@ async def test_server_dying_mid_utterance_replays_the_utterance_into_batch(serve
     assert events[-1].alternatives[0].text == "from batch"
     assert plugin.fallback_reason == "error"
     assert _fallbacks("error") == before + 1
-    assert bytes(batch.audio).startswith((5).to_bytes(2, "little") * 320)
-    assert bytes(batch.audio).endswith((6).to_bytes(2, "little") * 320)
+    # Exactly the utterance, once: a duplicated or dropped frame would change it.
+    assert bytes(batch.audio) == (5).to_bytes(2, "little") * 320 + (6).to_bytes(2, "little") * 320
 
 
 async def test_the_final_records_stt_latency(serve):

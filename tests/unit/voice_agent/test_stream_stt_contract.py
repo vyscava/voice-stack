@@ -19,7 +19,8 @@ from asr.api.api_v1.endpoints import stream as stream_endpoint
 from asr.stream import factory as stream_factory
 from tests.unit.asr.stream_fakes import FakeEngine, config, pcm
 from tests.unit.voice_agent.stream_fakes import FakeBatch, collect_until
-from voice_agent.stream_stt import AsrStreamSTT, frame_from_pcm16
+from voice_agent.stream_audio import frame_from_pcm16
+from voice_agent.stream_stt import AsrStreamSTT
 
 pytestmark = pytest.mark.unit
 
