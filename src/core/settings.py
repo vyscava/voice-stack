@@ -61,6 +61,21 @@ class Settings(BaseSettings):
         default=1, description="Number of parallel sampling candidates when beam_size == 1"
     )
 
+    # Streaming ASR (WebSocket /v1/stream). Off by default; needs the "stream" extra
+    # (transformers + torch). The model loads on the first stream connection.
+    ASR_STREAM_ENABLED: bool = Field(default=False, description="Enable the /v1/stream WebSocket endpoint")
+    ASR_STREAM_MODEL: str = Field(
+        default="nvidia/nemotron-3.5-asr-streaming-0.6b", description="Hugging Face id of the streaming model"
+    )
+    ASR_STREAM_LOOKAHEAD: int = Field(
+        default=3, description="Lookahead tokens: 0|3|6|13 (3 = 320 ms chunks; more = higher latency, better accuracy)"
+    )
+    ASR_STREAM_DTYPE: str = Field(
+        default="float32",
+        description="float32|bfloat16 (bfloat16 only pays off with native CPU bf16 or a GPU)",
+    )
+    ASR_STREAM_THREADS: int = Field(default=0, description="torch CPU threads for streaming (0 = ASR_CPU_THREADS)")
+
     # ASR Resource Management
     ASR_IDLE_TIMEOUT_MINUTES: int = Field(
         default=60, description="Unload ASR model after N minutes of inactivity (0 = disabled)"

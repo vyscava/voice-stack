@@ -220,6 +220,46 @@ Both services expose OpenAI-compatible endpoints, plus extras for Bazarr and mon
 | `POST` | `/bazarr/asr` | Subtitle output (SRT, VTT, JSON, TXT, TSV, JSONL) |
 | `POST` | `/bazarr/detect-language` | Detect spoken language |
 | `GET` | `/v1/models` | List available models |
+| `WS` | `/v1/stream` | Streaming transcription (optional, off by default; see below) |
+
+### Streaming ASR (optional, experimental)
+
+`/v1/stream` is a WebSocket that returns partial transcripts while you speak, backed by
+[NVIDIA Nemotron 3.5 ASR streaming 0.6B](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+through Hugging Face Transformers. It is **off by default**: with `ASR_STREAM_ENABLED=false` the
+endpoint accepts the socket, sends `{"type":"error","code":"disabled"}` and closes with code 1008.
+Nothing else in the ASR service changes either way.
+
+**Enabling it.** It needs `transformers` (>= 5.13) and `torch`, the `stream` extra
+(`pip install -e '.[server,asr,stream]'`). The full image (`:latest` / `:xtts`) already carries both
+at the pinned versions, so there it is only `-e ASR_STREAM_ENABLED=true`. The slim `:kokoro` image
+is torch-free by design and does not include it. The model (about 2.5 GB download) is fetched and
+loaded on the first stream connection, not at startup; mount a volume on the Hugging Face cache
+(`HF_HOME`) to keep it across restarts.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ASR_STREAM_ENABLED` | `false` | Turn the endpoint on |
+| `ASR_STREAM_MODEL` | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Hugging Face model id |
+| `ASR_STREAM_LOOKAHEAD` | `3` | `0`, `3`, `6` or `13` lookahead tokens; 3 = 320 ms chunks, more = more latency and accuracy |
+| `ASR_STREAM_DTYPE` | `float32` | `float32` or `bfloat16`. The checkpoint is float32. bf16 halves memory but is only fast with native bf16 (AVX512-BF16/AMX CPUs, or a GPU); on CPUs without it, it is slower than float32. |
+| `ASR_STREAM_THREADS` | `0` | torch CPU threads; `0` reuses `ASR_CPU_THREADS` |
+
+`ASR_DEVICE=cpu` keeps the model on the CPU; any other value lets Transformers place it
+(`device_map="auto"`).
+
+**Protocol.** One stream per process: a second connection gets `{"type":"error","code":"busy"}` and
+close code 1013.
+
+1. Optionally send `{"type":"start","sample_rate":16000}` (only 16 kHz is accepted).
+2. Send binary frames of 16 kHz mono PCM16 little-endian audio.
+3. Receive `{"type":"partial","text":"..."}` (the full hypothesis so far) whenever it changes.
+4. Send `{"type":"flush"}` at the end of an utterance. You get
+   `{"type":"final","text":"...","language":"en"}` and the connection is ready for the next utterance.
+5. Send `{"type":"close"}` or just disconnect.
+
+`language` is detected once per utterance, from its first 2 seconds, in the background. A shorter
+utterance reuses the previous utterance's language on the same connection, or `null`.
 
 ### TTS Endpoints
 
