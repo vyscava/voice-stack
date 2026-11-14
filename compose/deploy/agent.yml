@@ -41,6 +41,7 @@ services:
       AGENT_SELF_NAME: ${AGENT_SELF_NAME:-voice-agent}
       AGENT_PEER: ${AGENT_PEER:-}
       AGENT_NATS_TOPIC: ${AGENT_NATS_TOPIC:-voice}
+      AGENT_NATS_INBOX_PREFIX: ${AGENT_NATS_INBOX_PREFIX:-}
 
       # Stock speakers only: cloned voices of real people stay private.
       AGENT_VOICE_EN: af_heart

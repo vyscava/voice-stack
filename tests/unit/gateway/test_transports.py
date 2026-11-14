@@ -443,3 +443,87 @@ class TestPerTurnMeta:
             "from": "voice-agent",
             "to": "brain",
         }
+
+
+class TestNatsInboxPrefix:
+    """A server may narrow each user's subscribe grant from
+    ``_INBOX.>`` to ``_INBOX.<user>.>``. A reply inbox outside that prefix would
+    never get its reply, so every request would time out."""
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("nats://voice-gateway:pw@nats.example.com:4222", {"inbox_prefix": "_INBOX.voice-gateway"}),
+            ("tls://voice-agent:pw@nats.example.com:4222", {"inbox_prefix": "_INBOX.voice-agent"}),
+            ("voice-gateway:pw@nats-a:4222", {"inbox_prefix": "_INBOX.voice-gateway"}),
+            ("nats://u:p@x:y@a:4222", {"inbox_prefix": "_INBOX.u"}),
+            ("nats://u1:pw@a:4222,nats://u2:pw@b:4222", {"inbox_prefix": "_INBOX.u1"}),
+            ("nats://nats.example.com:4222", {}),
+            ("", {}),
+        ],
+    )
+    def test_prefix_comes_from_the_url_user(self, url, expected):
+        from gateway.agent import nats_inbox_kwargs
+
+        assert nats_inbox_kwargs(url) == expected
+
+    def test_a_lone_userinfo_is_a_token_and_never_reaches_a_subject(self):
+        from gateway.agent import nats_inbox_kwargs
+
+        assert nats_inbox_kwargs(f"nats://{SECRET}@a:4222") == {}
+
+    def test_explicit_prefix_wins_and_loses_a_trailing_dot(self):
+        from gateway.agent import nats_inbox_kwargs
+
+        url = "nats://voice-gateway:pw@a:4222"
+        assert nats_inbox_kwargs(url, "_INBOX.custom") == {"inbox_prefix": "_INBOX.custom"}
+        assert nats_inbox_kwargs(url, "_INBOX.custom.") == {"inbox_prefix": "_INBOX.custom"}
+        assert nats_inbox_kwargs("nats://a:4222", "_INBOX.custom") == {"inbox_prefix": "_INBOX.custom"}
+
+    @pytest.mark.asyncio
+    async def test_connect_uses_the_url_user_not_self_name(self, monkeypatch):
+        import nats
+
+        seen: dict = {}
+
+        class FakeConn:
+            is_connected = True
+
+        async def fake_connect(servers, **kwargs):
+            seen["kwargs"] = kwargs
+            return FakeConn()
+
+        monkeypatch.setattr(nats, "connect", fake_connect)
+        url = "nats://bus-user:pw@nats.example.com:4222"
+        await NatsAgent(servers=url, self_name="voice-gateway", peer="you").connect()
+        assert seen["kwargs"]["inbox_prefix"] == "_INBOX.bus-user"
+
+    @pytest.mark.asyncio
+    async def test_connect_without_a_user_keeps_the_default(self, monkeypatch):
+        import nats
+
+        seen: dict = {}
+
+        class FakeConn:
+            is_connected = True
+
+        async def fake_connect(servers, **kwargs):
+            seen["kwargs"] = kwargs
+            return FakeConn()
+
+        monkeypatch.setattr(nats, "connect", fake_connect)
+        await NatsAgent(servers="nats://nats:4222", self_name="voice-gateway", peer="you").connect()
+        assert "inbox_prefix" not in seen["kwargs"]
+
+    def test_nats_py_builds_the_inbox_under_the_prefix(self):
+        """Pins the real library: it appends the "." itself."""
+        from nats.aio.client import Client
+
+        from gateway.agent import nats_inbox_kwargs
+
+        nc = Client()
+        prefix = nats_inbox_kwargs("nats://voice-gateway:pw@a:4222")["inbox_prefix"]
+        nc._inbox_prefix = bytearray(prefix.encode())  # what connect() does with the option
+        inbox = nc.new_inbox()
+        assert inbox.startswith("_INBOX.voice-gateway.")
+        assert ".." not in inbox

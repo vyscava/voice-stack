@@ -153,6 +153,7 @@ def build_brain(settings: Settings) -> Brain:
             self_name=settings.AGENT_SELF_NAME,
             peer=settings.AGENT_PEER,
             topic=settings.AGENT_NATS_TOPIC,
+            inbox_prefix=settings.AGENT_NATS_INBOX_PREFIX,
         )
         return NatsBrain(agent=agent, timeout_s=settings.AGENT_BRAIN_TIMEOUT_S)
     raise ValueError(f"unknown AGENT_BRAIN {settings.AGENT_BRAIN!r}: expected 'openai' or 'nats'")

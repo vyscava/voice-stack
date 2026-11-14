@@ -32,10 +32,11 @@ import asyncio
 import json
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.logging import logger_gateway as logger
 from gateway import metrics
-from gateway.redact import redact_url, scrub_urls
+from gateway.redact import _LIST_SPLIT_RE, redact_url, scrub_urls
 
 
 def nats_tls_kwargs(servers: str) -> dict[str, Any]:
@@ -52,6 +53,50 @@ def nats_tls_kwargs(servers: str) -> dict[str, Any]:
     return {}
 
 
+def nats_url_user(servers: str) -> str:
+    """The NATS user nats-py will authenticate as for ``servers``, or ``""``.
+
+    Read from the first server's ``user:password@`` userinfo, the way nats-py
+    reads it. A lone userinfo (``nats://x@host``) is an auth TOKEN to nats-py,
+    not a user, so it yields ``""``: a token must never end up in a subject.
+    """
+    first = _LIST_SPLIT_RE.split(str(servers))[0].strip()
+    if not first:
+        return ""
+    if "://" not in first:
+        first = f"nats://{first}"
+    try:
+        parts = urlsplit(first)
+        user, password = parts.username, parts.password
+    except ValueError:
+        return ""
+    if not user or password is None:
+        return ""
+    return user
+
+
+def nats_inbox_kwargs(servers: str, inbox_prefix: str = "") -> dict[str, Any]:
+    """``nats.connect`` option that puts our inboxes under ``_INBOX.<user>``.
+
+    A server may narrow each user's subscribe grant from
+    ``_INBOX.>`` to ``_INBOX.<user>.>``, so a request/reply inbox outside that
+    prefix would never receive its reply. ``inbox_prefix`` set explicitly wins;
+    otherwise the prefix is derived from the user in the URL, so prefix and
+    credentials cannot drift. Never from ``self_name``: the bus identity in the
+    subject and the NATS user are different things. No user, no option.
+
+    nats-py appends the ``.`` separator itself, so a trailing dot is dropped
+    (``_INBOX.u.`` would yield ``_INBOX.u..<nuid>``, outside the grant).
+    """
+    prefix = inbox_prefix.strip().rstrip(".")
+    if not prefix:
+        user = nats_url_user(servers)
+        if not user:
+            return {}
+        prefix = f"_INBOX.{user}"
+    return {"inbox_prefix": prefix}
+
+
 class NatsAgent:
     """Asks a peer agent a question and waits for its reply."""
 
@@ -64,6 +109,7 @@ class NatsAgent:
         topic: str = "voice",
         connect_timeout_s: float = 2.0,
         max_reconnect_attempts: int = 3,
+        inbox_prefix: str = "",
     ) -> None:
         self._servers = servers
         self._self_name = self_name
@@ -71,6 +117,7 @@ class NatsAgent:
         self._topic = topic
         self._connect_timeout_s = connect_timeout_s
         self._max_reconnect_attempts = max_reconnect_attempts
+        self._inbox_prefix = inbox_prefix
         self._nc: Any = None
         self._lock = asyncio.Lock()
 
@@ -96,6 +143,7 @@ class NatsAgent:
                 allow_reconnect=True,
                 max_reconnect_attempts=self._max_reconnect_attempts,
                 **nats_tls_kwargs(self._servers),
+                **nats_inbox_kwargs(self._servers, self._inbox_prefix),
             )
             logger.info(f"NATS connected: {redact_url(self._servers)}, publishing on {self.subject}")
 

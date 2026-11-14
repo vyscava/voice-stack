@@ -152,3 +152,9 @@ async def test_brains_close_their_clients():
     await OpenAICompatBrain(client=Client(), model="m", system_prompt="p").aclose()
     await NatsBrain(agent=Agent(), timeout_s=1).aclose()
     assert closed == ["http", "nats"]
+
+
+def test_build_brain_passes_the_inbox_prefix_setting():
+    """AGENT_NATS_INBOX_PREFIX reaches the NatsAgent."""
+    brain = build_brain(Settings(AGENT_BRAIN="nats", AGENT_NATS_INBOX_PREFIX="_INBOX.voice-agent"))
+    assert brain._agent._inbox_prefix == "_INBOX.voice-agent"

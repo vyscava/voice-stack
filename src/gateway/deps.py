@@ -44,6 +44,7 @@ def build_agent() -> NatsAgent:
             self_name=settings.GATEWAY_SELF_NAME,
             peer=settings.GATEWAY_AGENT,
             topic=settings.GATEWAY_NATS_TOPIC,
+            inbox_prefix=settings.GATEWAY_NATS_INBOX_PREFIX,
         )
     return _agent
 
