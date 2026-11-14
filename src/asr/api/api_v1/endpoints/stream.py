@@ -32,6 +32,7 @@ Every engine call runs in a thread executor; the event loop never blocks on the 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -75,6 +76,12 @@ def _consume_result(future: asyncio.Future[Any]) -> None:
     """Retrieve an abandoned future's exception so asyncio does not log it as unhandled."""
     if not future.cancelled() and future.exception() is not None:
         logger.warning(f"Streaming language detection failed: {future.exception()}")
+
+
+def _log_close_failure(future: asyncio.Future[Any]) -> None:
+    """Log a failed session close; also runs when nobody awaits the close any more (cancelled caller)."""
+    if not future.cancelled() and future.exception() is not None:
+        logger.error("Closing an abandoned streaming session failed", exc_info=future.exception())
 
 
 class _StreamConnection:
@@ -202,10 +209,26 @@ class _StreamConnection:
         await self._close_session(session)
 
     async def _close_session(self, session: StreamSession) -> None:
+        """Close ``session`` in the executor, and make sure that close RUNS even if we are cancelled.
+
+        This is cleanup, so it usually runs in a ``finally`` while the task is
+        being cancelled (server shutdown, or a test client that cancels the
+        handler right after sending its disconnect). Awaiting a plain
+        run_in_executor() future there is not enough: cancelling the awaiting
+        task cancels that future, and asyncio then cancels the queued
+        concurrent.futures work item, so if no worker thread had picked it up
+        yet, close() never runs and the session's decode thread leaks.
+        asyncio.shield() keeps the work item alive; the cancellation itself
+        still propagates to the caller at once.
+        """
         try:
-            await self._call(session.close)
-        except Exception:
-            logger.exception("Closing an abandoned streaming session failed")
+            work = self.loop.run_in_executor(None, session.close)
+        except RuntimeError:  # executor already shut down (loop closing)
+            logger.exception("Could not schedule the stream session close")
+            return
+        work.add_done_callback(_log_close_failure)
+        with contextlib.suppress(Exception):  # logged by the callback; never masks the error being handled
+            await asyncio.shield(work)
 
 
 @router.websocket("/stream")
