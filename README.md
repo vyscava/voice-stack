@@ -426,9 +426,24 @@ What it does on its own:
   apology (`AGENT_MSG_APOLOGY`), never silence.
 - **Noisy rooms:** background speech never goes quiet, so a turn also ends
   after `AGENT_MAX_USER_TURN_S`.
+- **Streaming ASR (opt-in):** `AGENT_STT_MODE=stream` sends the caller's audio
+  to the ASR [`/v1/stream`](#streaming-asr-optional-experimental) WebSocket as
+  they speak, instead of one request per pause. The turn still ends on VAD
+  silence, which sends the `flush`; the final transcript and its language come
+  back from the stream. If the stream refuses (`busy`, `disabled`), cannot be
+  reached or fails mid-call, that call carries on in batch mode, with the
+  utterance in progress replayed so nothing is lost, and
+  `voice_agent_stt_stream_fallbacks_total{reason}` counts it.
 - **Metrics** say where a slow turn spent its time:
   `voice_agent_stage_seconds{stage="eou|stt|brain_first_text|tts_first_audio"}`,
-  plus turns by outcome, brain failures by kind, barge-ins and calls.
+  plus turns by outcome, brain failures by kind, barge-ins and calls. In
+  stream mode `stt` is the time from the flush to the final transcript.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_STT_MODE` | `batch` | `batch` (one ASR request per VAD segment) or `stream` (the `/v1/stream` WebSocket, batch as fallback) |
+| `AGENT_ASR_STREAM_URL` | empty | Streaming WebSocket URL; empty derives it from `AGENT_ASR_URL` (`http` becomes `ws`, `https` becomes `wss`, plus `/v1/stream`) |
+| `AGENT_PREEMPTIVE_GENERATION` | `false` | Start the reply before the turn is final. Applies to the `openai` brain only: a `nats` peer would receive every discarded speculative turn, so it never gets it |
 
 ## TTS Engines
 

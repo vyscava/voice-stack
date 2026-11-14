@@ -4,7 +4,7 @@ The question these answer is "where did the time go?" A call that feels slow
 can be slow in four different places, with four different fixes:
 
 * ``eou``              waiting to be sure the caller stopped talking
-* ``stt``              transcribing what they said
+* ``stt``              transcribing what they said (streaming: flush to final)
 * ``brain_first_text`` the brain's first words
 * ``tts_first_audio``  synthesis of the first audio
 
@@ -28,6 +28,11 @@ TURNS = Counter("voice_agent_turns_total", "Turns answered, by outcome.", ["outc
 BRAIN_FAILURES = Counter("voice_agent_brain_failures_total", "Brain replies replaced by an apology, by kind.", ["kind"])
 BARGE_INS = Counter("voice_agent_barge_ins_total", "Times the caller started talking while the agent spoke.")
 CALLS = Counter("voice_agent_calls_total", "Calls started.")
+STT_STREAM_FALLBACKS = Counter(
+    "voice_agent_stt_stream_fallbacks_total",
+    "Calls that switched from streaming ASR to batch STT, by reason (busy, disabled, connect, error).",
+    ["reason"],
+)
 
 _STAGE_FIELDS = {
     "eou_metrics": ("end_of_utterance_delay", "eou"),

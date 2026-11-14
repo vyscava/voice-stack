@@ -18,13 +18,14 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from livekit.agents import Agent, AgentSession, JobContext, JobExecutorType, WorkerOptions
+from livekit.agents import Agent, AgentSession, JobContext, JobExecutorType, WorkerOptions, stt
 from livekit.plugins import openai, silero
 
 from core.settings import Settings, get_settings
 from voice_agent import metrics
 from voice_agent.brains import Brain, build_brain, history_from_chat_items
-from voice_agent.policy import guarded, voice_for_language, with_filler
+from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_filler
+from voice_agent.stream_stt import AsrStreamSTT, stream_url
 
 # Never contacted: llm_node is overridden. Port 9 is discard.
 _PLACEHOLDER_LLM_URL = "http://127.0.0.1:9/v1"
@@ -55,21 +56,43 @@ def turn_handling(settings: Settings) -> dict[str, Any]:
         "interruption": {"mode": "vad"},
         # Background speech never goes silent; cap the turn so it still ends.
         "user_turn_limit": {"max_duration": settings.AGENT_MAX_USER_TURN_S},
-        # Off: it calls the brain speculatively before the turn is final and
-        # cancels if the transcript moves on. A NATS peer would receive the
-        # duplicates, and every discarded call costs a real request.
-        "preemptive_generation": {"enabled": False},
+        # Off by default: it calls the brain speculatively before the turn is
+        # final and cancels if the transcript moves on. Every discarded call
+        # costs a real request, and a NATS peer would receive the duplicates,
+        # so the nats brain never gets it whatever the setting says.
+        "preemptive_generation": {
+            "enabled": preemptive_generation_allowed(settings.AGENT_PREEMPTIVE_GENERATION, settings.AGENT_BRAIN)
+        },
     }
+
+
+def stt_mode(settings: Settings) -> str:
+    mode = settings.AGENT_STT_MODE.strip().lower()
+    if mode not in ("batch", "stream"):
+        raise ValueError(f"unknown AGENT_STT_MODE {settings.AGENT_STT_MODE!r}: expected 'batch' or 'stream'")
+    return mode
+
+
+def build_stt(settings: Settings, *, vad: Any) -> stt.STT[Any]:
+    """Batch (one request per VAD segment) or streaming with batch as its fallback.
+
+    Built per call: a streaming fallback lasts for the rest of that call only.
+    """
+    batch = openai.STT(
+        base_url=settings.AGENT_ASR_URL.rstrip("/") + "/v1",
+        api_key="unused",
+        model="whisper-1",
+        detect_language=True,
+    )
+    if stt_mode(settings) == "batch":
+        return batch
+    url = stream_url(settings.AGENT_ASR_URL, settings.AGENT_ASR_STREAM_URL)
+    return AsrStreamSTT(url=url, batch=batch, vad=vad)
 
 
 def build_session(settings: Settings, *, vad: Any) -> AgentSession:
     return AgentSession(
-        stt=openai.STT(
-            base_url=settings.AGENT_ASR_URL.rstrip("/") + "/v1",
-            api_key="unused",
-            model="whisper-1",
-            detect_language=True,
-        ),
+        stt=build_stt(settings, vad=vad),
         tts=openai.TTS(
             base_url=settings.AGENT_TTS_URL.rstrip("/") + "/v1",
             api_key="unused",
@@ -170,6 +193,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def worker_options(settings: Settings) -> WorkerOptions:
+    stt_mode(settings)  # a typo fails at startup, not on every call
     # Threads, not processes: calls share one VAD model and one metrics registry.
     return WorkerOptions(
         entrypoint_fnc=entrypoint,

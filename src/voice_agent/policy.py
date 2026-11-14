@@ -5,6 +5,8 @@
   filler in front of a fast answer only adds delay.
 * ``guarded`` makes a dead or silent brain audible: a caller who hears nothing
   cannot tell a pause from a crash, and talks over it.
+* ``preemptive_generation_allowed`` keeps speculative replies away from a NATS
+  peer, which would receive every one of them as a real message.
 """
 
 from __future__ import annotations
@@ -23,6 +25,11 @@ def voice_for_language(lang: str | None, *, en: str, pt: str, current: str) -> s
     if code.startswith("en"):
         return en
     return current
+
+
+def preemptive_generation_allowed(enabled: bool, brain: str) -> bool:
+    """Speculative brain calls only for the openai brain, and only when asked for."""
+    return enabled and brain.strip().lower() == "openai"
 
 
 async def with_filler(chunks: AsyncIterator[str], *, after_s: float, filler: str) -> AsyncIterator[str]:
