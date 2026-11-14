@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
 import asr.app as asr_app
+from asr.api.api_v1.endpoints import stream as stream_endpoint
 from asr.api.api_v1.endpoints.stream import _StreamConnection
 from asr.stream import factory as stream_factory
 from tests.unit.asr.stream_fakes import FakeEngine, send_audio, slot_is_free, until_final, wait_until
@@ -18,6 +19,17 @@ from tests.unit.asr.stream_fakes import FakeEngine, send_audio, slot_is_free, un
 
 def sample(name: str, **labels: str) -> float:
     return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def connection_outcomes() -> float:
+    """All connection outcomes together: one per connection."""
+    return sum(
+        s.value
+        for m in REGISTRY.collect()
+        if m.name == "voice_asr_stream_connections"
+        for s in m.samples
+        if s.name.endswith("_total")
+    )
 
 
 @pytest.mark.unit
@@ -142,3 +154,151 @@ async def test_warmup_loads_the_engine_only_when_enabled_and_asked(monkeypatch: 
     assert future is not None
     await future
     assert loads == [True]
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_bad_sample_rate_is_a_refusal_not_a_second_connection_outcome(
+    asr_client: TestClient, fake_engine: FakeEngine
+) -> None:
+    accepted = sample("voice_asr_stream_connections_total", outcome="accepted")
+    outcomes_before = sum(
+        s.value
+        for m in REGISTRY.collect()
+        if m.name == "voice_asr_stream_connections"
+        for s in m.samples
+        if s.name.endswith("_total")
+    )
+    refused = sample("voice_asr_stream_refusals_total", code="unsupported_sample_rate")
+    try:
+        with asr_client.websocket_connect("/v1/stream") as ws:
+            ws.send_json({"type": "start", "sample_rate": 8000})
+            ws.receive_json()
+    except Exception:  # noqa: BLE001,S110 - the close after the refusal
+        pass
+    outcomes_after = sum(
+        s.value
+        for m in REGISTRY.collect()
+        if m.name == "voice_asr_stream_connections"
+        for s in m.samples
+        if s.name.endswith("_total")
+    )
+    assert sample("voice_asr_stream_refusals_total", code="unsupported_sample_rate") == refused + 1
+    assert sample("voice_asr_stream_connections_total", outcome="accepted") == accepted + 1
+    assert outcomes_after == outcomes_before + 1, "one connection, one outcome"
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_an_empty_flush_is_not_timed(asr_client: TestClient, fake_engine: FakeEngine) -> None:
+    flushes = sample("voice_asr_stream_flush_seconds_count")
+    with asr_client.websocket_connect("/v1/stream") as ws:
+        ws.send_json({"type": "flush"})
+        until_final(ws)
+    assert sample("voice_asr_stream_flush_seconds_count") == flushes
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_detailed_health_reports_the_stream_model(fake_engine: FakeEngine) -> None:
+    assert asr_app._stream_engine_loaded() is True
+    stream_factory.set_stream_engine(None)
+    assert asr_app._stream_engine_loaded() is False
+
+
+class _FakeWebSocket:
+    """Just enough of a WebSocket for the handler: one audio frame, then silence until cancelled."""
+
+    def __init__(self) -> None:
+        self.sent: list[Any] = []
+        self._frames = [{"type": "websocket.receive", "bytes": b"\x01\x00" * 1600}]
+
+    async def accept(self) -> None:
+        return None
+
+    async def receive(self) -> dict[str, Any]:
+        if self._frames:
+            return self._frames.pop(0)
+        await asyncio.Event().wait()  # until cancelled
+        raise AssertionError("unreachable")
+
+    async def send_json(self, data: Any) -> None:
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000) -> None:
+        return None
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+async def test_a_cancelled_handler_keeps_the_slot_until_its_session_closes(
+    monkeypatch: pytest.MonkeyPatch, fake_engine: FakeEngine
+) -> None:
+    gate = threading.Event()
+    real_new_session = fake_engine.new_session
+
+    def slow_close_session() -> Any:
+        session = real_new_session()
+
+        def close() -> None:
+            gate.wait(5)
+            session.closed = True
+
+        session.close = close  # type: ignore[method-assign]
+        return session
+
+    monkeypatch.setattr(fake_engine, "new_session", slow_close_session)
+    active = sample("voice_asr_stream_active")
+    ws = _FakeWebSocket()
+    handler = asyncio.create_task(stream_endpoint.stream(ws))  # type: ignore[arg-type]
+    for _ in range(200):
+        if fake_engine.sessions:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    # anyio's cancel scopes (uvicorn, the test client) re-deliver a
+    # cancellation at every await, so the handler's finally is cancelled too.
+    handler.cancel()
+    await asyncio.sleep(0.05)
+    handler.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(handler, 2)
+
+    assert not slot_is_free(), "the slot was handed on while the decode thread was still closing"
+    assert sample("voice_asr_stream_active") == active + 1
+    gate.set()
+    for _ in range(200):
+        if slot_is_free():
+            break
+        await asyncio.sleep(0.01)
+    assert fake_engine.sessions[0].closed
+    assert slot_is_free()
+    assert sample("voice_asr_stream_active") == active
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+async def test_a_session_started_under_a_cancel_is_closed_not_leaked(fake_engine: FakeEngine) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    real_new_session = fake_engine.new_session
+
+    def slow_new_session() -> Any:
+        started.set()
+        release.wait(5)
+        return real_new_session()
+
+    fake_engine.new_session = slow_new_session  # type: ignore[method-assign]
+    connection = _StreamConnection(object(), fake_engine)  # type: ignore[arg-type]
+    task = asyncio.create_task(connection._new_session())
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    for _ in range(300):
+        if fake_engine.sessions and fake_engine.sessions[0].closed:
+            break
+        await asyncio.sleep(0.01)
+    assert fake_engine.sessions and fake_engine.sessions[0].closed

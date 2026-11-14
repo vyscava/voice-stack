@@ -213,6 +213,12 @@ async def healthcheck() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+def _stream_engine_loaded() -> bool:
+    from asr.stream import factory as stream_factory
+
+    return stream_factory.is_stream_engine_loaded()
+
+
 @app.get("/health/detailed")
 async def detailed_health() -> JSONResponse:
     """
@@ -268,6 +274,10 @@ async def detailed_health() -> JSONResponse:
             "engine": settings.ASR_ENGINE,
             "model_name": settings.ASR_MODEL,
             "device": settings.ASR_DEVICE,
+        },
+        "stream": {
+            "enabled": settings.ASR_STREAM_ENABLED,
+            "model_loaded": _stream_engine_loaded(),
         },
         "concurrency": {
             "active_requests": active_requests,

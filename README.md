@@ -274,9 +274,11 @@ close code 1013.
 **Metrics.** The ASR service serves Prometheus metrics on `/metrics`:
 `voice_asr_stream_flush_seconds` (flush to final, the latency a caller feels),
 `voice_asr_stream_feed_seconds` (compute per audio feed), `voice_asr_stream_connections_total{outcome}`
-(`accepted`, `busy`, `disabled`, `misconfigured`, `unavailable`, `unsupported_sample_rate`),
+(one per connection: `accepted`, `busy`, `disabled`, `misconfigured`, `unavailable`),
+`voice_asr_stream_refusals_total{code}` (an accepted connection closed for `unsupported_sample_rate`),
 `voice_asr_stream_finals_total{language_source}`, `voice_asr_stream_errors_total`,
-`voice_asr_stream_active` and `voice_asr_stream_engine_loaded`.
+`voice_asr_stream_active` and `voice_asr_stream_engine_loaded`. `/health/detailed` reports
+`stream.model_loaded` too.
 
 ### TTS Endpoints
 

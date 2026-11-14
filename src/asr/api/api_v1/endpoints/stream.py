@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -74,6 +75,13 @@ def _log_close_failure(future: asyncio.Future[Any]) -> None:
     """Log a failed session close; also runs when nobody awaits the close any more (cancelled caller)."""
     if not future.cancelled() and future.exception() is not None:
         logger.error("Closing an abandoned streaming session failed", exc_info=future.exception())
+
+
+def _close_orphan(future: asyncio.Future[StreamSession]) -> None:
+    """Close a session nobody took. close() joins a thread, so never on the event loop."""
+    if future.cancelled() or future.exception() is not None:
+        return
+    threading.Thread(target=future.result().close, name="stream-orphan-close", daemon=True).start()
 
 
 class _StreamConnection:
@@ -126,7 +134,7 @@ class _StreamConnection:
         if kind == "start":
             rate = msg.get("sample_rate", STREAM_SAMPLE_RATE)
             if rate != STREAM_SAMPLE_RATE:
-                stream_metrics.CONNECTIONS.labels(outcome="unsupported_sample_rate").inc()
+                stream_metrics.REFUSALS.labels(code="unsupported_sample_rate").inc()
                 await _refuse(self.ws, "unsupported_sample_rate", CLOSE_UNSUPPORTED_DATA)
                 return False
             return True
@@ -148,7 +156,7 @@ class _StreamConnection:
         if not data:
             return
         if self.session is None:
-            self.session = await self._call(self.engine.new_session)
+            self.session = await self._new_session()
         started = time.perf_counter()
         text = await self._call(self.session.feed, pcm16_to_float32(data))
         stream_metrics.FEED_SECONDS.observe(time.perf_counter() - started)
@@ -156,11 +164,27 @@ class _StreamConnection:
             self.last_sent = text
             await self.ws.send_json({"type": "partial", "text": text})
 
+    async def _new_session(self) -> StreamSession:
+        """Start a session; if we are cancelled while it starts, close it once it exists.
+
+        new_session() starts a decode thread. Cancelling a plain executor await
+        drops the result while that thread runs on, blocked on its audio queue
+        with nobody to close it. Shielded, the session still arrives; the
+        cancelled caller hands it to a closer instead.
+        """
+        work = self.loop.run_in_executor(None, self.engine.new_session)
+        try:
+            return await asyncio.shield(work)
+        except asyncio.CancelledError:
+            work.add_done_callback(_close_orphan)
+            raise
+
     async def _flush(self) -> None:
         started = time.perf_counter()
         text = ""
         language: str | None = None
         source: str | None = None
+        had_audio = self.session is not None
         if self.session is not None:
             session, self.session = self.session, None
             try:
@@ -179,7 +203,8 @@ class _StreamConnection:
             language, source = self.last_language, "previous"
         self.last_language = language
         await self.ws.send_json({"type": "final", "text": text, "language": language, "language_source": source})
-        stream_metrics.FLUSH_SECONDS.observe(time.perf_counter() - started)
+        if had_audio:
+            stream_metrics.FLUSH_SECONDS.observe(time.perf_counter() - started)
         stream_metrics.FINALS.labels(language_source=source or "none").inc()
         self._reset_utterance()
 

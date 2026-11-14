@@ -48,6 +48,10 @@ services:
       ASR_IDLE_TIMEOUT_MINUTES: "0"
       ASR_MAX_CONCURRENT_REQUESTS: "1"
       HF_HOME: /app/models
+      # The full image sets HF_HUB_CACHE (Coqui's cache), which wins over
+      # HF_HOME. Without this the model downloads into the container layer
+      # and again after every deploy, not into the asr-stream-models volume.
+      HF_HUB_CACHE: /app/models/huggingface
 
     # The agent connects over the compose network. The host port is for
     # Prometheus (/metrics) and for testing, on the same LAN-only footing as
@@ -72,7 +76,9 @@ services:
       resources:
         limits:
           # 2.4 GB of float32 weights plus torch, the decode thread and lingua.
-          memory: 4G
+          # The resource guard refuses HTTP (/health, /metrics) above 90% of
+          # this, so leave room: re-measure RSS on a live call and trim.
+          memory: 6G
 
     logging:
       driver: json-file

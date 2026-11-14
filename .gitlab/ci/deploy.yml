@@ -94,12 +94,12 @@ deploy:voice-stack-asr-stream:
     - release:latest
     - deploy:voice-stack-asr
 
-# The agent joins the same two networks, so it deploys after both as well,
-# and after the streaming ASR it may connect to.
+# The agent joins the same two networks, so it deploys after both as well.
+# Not after voice-stack-asr-stream: the agent falls back to batch ASR when the
+# stream is down, so a failed stream deploy must not hold the agent back.
 deploy:voice-stack-agent:
   needs:
     - build:prod-image
     - release:latest
     - deploy:voice-stack-asr
-    - deploy:voice-stack-asr-stream
     - deploy:voice-stack-tts

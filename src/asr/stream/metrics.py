@@ -12,12 +12,19 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
 
-# One label value per way a connection can end before or instead of streaming.
-# "accepted" counts connections that got the slot and an engine.
+# Exactly one outcome per connection, decided at setup: "accepted" (got the
+# slot and an engine) or the refusal code. Refusals later on an accepted
+# connection go to REFUSALS, so these outcomes sum to the connection count.
 CONNECTIONS = Counter(
     "voice_asr_stream_connections_total",
     "Streaming connections by outcome at setup.",
     ["outcome"],
+)
+
+REFUSALS = Counter(
+    "voice_asr_stream_refusals_total",
+    "Accepted connections closed for a protocol error.",
+    ["code"],
 )
 
 ACTIVE = Gauge(
@@ -33,9 +40,11 @@ FINALS = Counter(
     ["language_source"],
 )
 
+# Only flushes that ended an utterance with audio; an empty flush would pull
+# the histogram toward zero.
 FLUSH_SECONDS = Histogram(
     "voice_asr_stream_flush_seconds",
-    "Time from the client's flush to the final frame.",
+    "Time from the client's flush to the final frame, for utterances with audio.",
     buckets=(0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0),
 )
 

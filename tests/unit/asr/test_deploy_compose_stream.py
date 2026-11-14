@@ -16,7 +16,7 @@ from core.settings import Settings
 
 DEPLOY = Path(__file__).resolve().parents[3] / "compose" / "deploy"
 # Read by the entrypoint or libraries, not by Settings.
-NOT_SETTINGS = {"SERVICE_MODE", "HF_HOME"}
+NOT_SETTINGS = {"SERVICE_MODE", "HF_HOME", "HF_HUB_CACHE"}
 
 
 def _service(name: str) -> dict:
@@ -40,3 +40,17 @@ def test_stream_joins_the_network_the_agent_already_uses() -> None:
     assert (
         stream["networks"]["asr"] == agent["networks"]["asr"] == {"external": True, "name": "voice-stack-asr_default"}
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_the_model_cache_is_on_the_mounted_volume() -> None:
+    """The full image sets HF_HUB_CACHE, which wins over HF_HOME: the compose file must override it.
+
+    Otherwise the 2.4 GB model downloads into the container layer and again
+    after every deploy, while the deploy goes green on /health.
+    """
+    (service,) = _service("asr-stream.yml").values()
+    mount = next(v.split(":")[1] for v in service["volumes"] if v.startswith("asr-stream-models:"))
+    cache = service["environment"]["HF_HUB_CACHE"]
+    assert cache == mount or cache.startswith(mount + "/")

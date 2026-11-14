@@ -44,6 +44,11 @@ def get_stream_engine() -> StreamEngine:
     return _engine
 
 
+def is_stream_engine_loaded() -> bool:
+    """True once the streaming engine exists in this process (never loads it)."""
+    return _engine is not None
+
+
 def set_stream_engine(engine: StreamEngine | None) -> None:
     """Test helper: inject a fake engine (or None to force a reload)."""
     global _engine
