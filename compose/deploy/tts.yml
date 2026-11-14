@@ -51,8 +51,11 @@ services:
     deploy:
       resources:
         limits:
-          # Kokoro idles at ~465 MiB; the 4 GB host also carries ASR (~910 MiB).
-          memory: 1G
+          # Kokoro idles at ~465 MiB but its resident memory creeps up while
+          # serving (measured ~925 MiB after ~10 h). The service refuses work
+          # with 503 once the cgroup passes 90%, so 1G left the agent mute
+          # mid-call. 2G gives that creep room on the 8 GB host.
+          memory: 2G
 
     logging:
       driver: json-file
