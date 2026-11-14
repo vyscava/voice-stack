@@ -216,3 +216,15 @@ def test_stream_extra_declares_what_the_model_needs_at_runtime() -> None:
         re.split(r"[<>=\[ ]", dep, maxsplit=1)[0] for dep in pyproject["project"]["optional-dependencies"]["stream"]
     }
     assert {"transformers", "torch", "librosa", "accelerate"} <= names
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_session_text_collapses_the_gap_a_stripped_language_tag_leaves() -> None:
+    session = NemotronStreamSession(FakeModel(), FakeProcessor())
+    try:
+        for piece in ["Seven thirty. ", " ", "Could you", " help?\n"]:  # the tag itself was stripped
+            session._append_text(piece)
+        assert session.text == "Seven thirty. Could you help?"
+    finally:
+        session.close()

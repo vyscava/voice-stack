@@ -112,8 +112,16 @@ class NemotronStreamSession:
 
     @property
     def text(self) -> str:
+        """The hypothesis with whitespace collapsed.
+
+        In language="auto" mode the model emits an ``<xx-YY>`` tag (a special
+        token, preceded by a word-boundary token) after every sentence. The
+        streamer strips the tag but keeps the boundary, which left a double
+        space mid-transcript ("seven thirty.  Could you"), seen on the first
+        real-model run.
+        """
         with self._text_lock:
-            return "".join(self._text).strip()
+            return " ".join("".join(self._text).split())
 
     # ------------------------------------------------------------ internals
     def _end(self) -> None:
