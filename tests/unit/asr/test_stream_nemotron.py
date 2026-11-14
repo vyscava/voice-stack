@@ -36,8 +36,8 @@ class FakeInputs(dict):  # type: ignore[type-arg]
         return self
 
 
-PT_TAG, EN_TAG, PAD = 900, 901, 902
-SPECIAL = {PT_TAG: "<pt-BR>", EN_TAG: "<en-US>", PAD: "<pad>"}
+PT_TAG, EN_TAG, PAD, AUTO = 900, 901, 902, 903
+SPECIAL = {PT_TAG: "<pt-BR>", EN_TAG: "<en-US>", PAD: "<pad>", AUTO: "<|auto|>"}
 
 
 class FakeTokenizer:
@@ -83,9 +83,12 @@ class FakeModel:
     device = "cpu"
     dtype = None
 
-    def __init__(self, fail: bool = False, tags: dict[int, list[int]] | None = None) -> None:
+    def __init__(
+        self, fail: bool = False, tags: dict[int, list[int]] | None = None, prompt: list[int] | None = None
+    ) -> None:
         self.fail = fail
         self.tags = tags or {}  # chunk index -> special ids emitted after that chunk's word
+        self.prompt = prompt if prompt is not None else [AUTO]  # put first, like GenerationMixin does
         self.first_chunk_seen = threading.Event()
         self.chunk_frames: list[int] = []
 
@@ -97,6 +100,7 @@ class FakeModel:
                 return SimpleNamespace(sequences=[[1, 2]])
             assert kwargs["num_lookahead_tokens"] == LOOKAHEAD
             streamer = kwargs["streamer"]
+            streamer.put(np.array(self.prompt))
             for i, chunk in enumerate(features):
                 if self.fail:
                     raise RuntimeError("boom")
@@ -266,3 +270,21 @@ def test_session_text_collapses_the_gap_a_stripped_language_tag_leaves() -> None
         assert session.text == "Seven thirty. Could you help?"
     finally:
         session.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_language_tag_in_the_prompt_is_not_the_speech_language() -> None:
+    session = NemotronStreamSession(FakeModel(prompt=[PT_TAG], tags={1: [PAD]}), FakeProcessor())
+    session.feed(_audio(1.0))
+    session.finish()
+    assert session.language is None
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_tag_right_after_the_prompt_still_counts() -> None:
+    session = NemotronStreamSession(FakeModel(prompt=[PT_TAG], tags={0: [EN_TAG]}), FakeProcessor())
+    session.feed(_audio(1.0))
+    session.finish()
+    assert session.language == "en"

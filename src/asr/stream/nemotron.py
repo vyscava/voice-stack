@@ -71,12 +71,19 @@ def _make_collector(tokenizer: Any, on_text: Callable[[str], None], on_language:
     from transformers import TextStreamer
 
     class _Collector(TextStreamer):
+        # generate() puts the prompt ids first. A tag there is what was asked
+        # for, not what was heard, so the first put is never scanned for one.
+        prompt_pending = True
+
         def put(self, value: Any) -> None:
-            ids = value[0] if len(value.shape) > 1 else value
-            for token in tokenizer.convert_ids_to_tokens([int(i) for i in ids.tolist()]):
-                language = parse_language_tag(str(token))
-                if language is not None:
-                    on_language(language)
+            if self.prompt_pending:
+                self.prompt_pending = False
+            else:
+                ids = value[0] if len(value.shape) > 1 else value
+                for token in tokenizer.convert_ids_to_tokens([int(i) for i in ids.tolist()]):
+                    language = parse_language_tag(str(token))
+                    if language is not None:
+                        on_language(language)
             super().put(value)
 
         def on_finalized_text(self, text: str, stream_end: bool = False) -> None:
