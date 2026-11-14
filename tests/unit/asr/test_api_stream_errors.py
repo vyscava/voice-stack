@@ -6,6 +6,9 @@ leaked slot would answer that connection with "busy" instead.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -13,7 +16,15 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from asr.stream import factory as stream_factory
-from tests.unit.asr.stream_fakes import SR, FakeEngine, recv_json, send_audio, until_final
+from tests.unit.asr.stream_fakes import (
+    SR,
+    FakeEngine,
+    recv_json,
+    send_audio,
+    slot_is_free,
+    until_final,
+    wait_until,
+)
 
 
 def _expect_refusal(ws: Any, code: str, close_code: int) -> None:
@@ -25,6 +36,7 @@ def _expect_refusal(ws: Any, code: str, close_code: int) -> None:
 
 def _assert_next_connection_streams(client: TestClient) -> None:
     """The slot is free: a new connection is served (partials and a final), not refused as busy."""
+    assert wait_until(slot_is_free), "the stream slot was never released"
     with client.websocket_connect("/v1/stream") as ws:
         send_audio(ws, 1.0)
         ws.send_json({"type": "flush"})
@@ -88,7 +100,7 @@ def test_feed_failure_mid_stream_is_decode_failed_and_frees_the_slot(
         assert recv_json(ws) == {"type": "partial", "text": "one"}
         assert recv_json(ws) == {"type": "partial", "text": "one two"}
         _expect_refusal(ws, "decode_failed", 1011)
-    assert fake_engine.sessions[0].closed  # the failed session was released, not leaked
+    assert wait_until(lambda: fake_engine.sessions[0].closed)  # released, not leaked
 
     fake_engine.feed_fails_after = None
     _assert_next_connection_streams(asr_client)
@@ -105,8 +117,8 @@ def test_finish_failure_still_closes_the_session(asr_client: TestClient, fake_en
         ws.send_json({"type": "flush"})
         _expect_refusal(ws, "decode_failed", 1011)
     session = fake_engine.sessions[0]
+    assert wait_until(lambda: session.closed)
     assert session.finished
-    assert session.closed
 
     fake_engine.finish_fails = False
     _assert_next_connection_streams(asr_client)
@@ -119,8 +131,11 @@ def test_abrupt_disconnect_mid_stream_frees_slot_and_session(asr_client: TestCli
         send_audio(ws, 0.5)
         assert recv_json(ws) == {"type": "partial", "text": "one"}
         # Leave mid-utterance: no flush, no close message.
-    assert fake_engine.sessions[0].closed
-    assert not fake_engine.sessions[0].finished
+    # The server notices the disconnect on its own task, after the client
+    # context exits, so wait (bounded) for its cleanup instead of racing it.
+    session = fake_engine.sessions[0]
+    assert wait_until(lambda: session.closed)
+    assert not session.finished
 
     _assert_next_connection_streams(asr_client)
 
@@ -153,3 +168,36 @@ def test_stale_language_detection_is_not_adopted_by_the_next_utterance(
 
     assert second["language"] is None  # the stale "pt" was discarded, not adopted
     assert fake_engine.detect_calls == [2 * SR]
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+async def test_session_close_still_runs_when_the_cleanup_is_cancelled() -> None:
+    """Cleanup runs while the handler is being cancelled; cancelling it must not drop close().
+
+    Deterministic version of the abrupt-disconnect race: the executor's only
+    worker is busy, so close() is still QUEUED when the cleanup task is
+    cancelled. Awaiting a bare run_in_executor() future would cancel that queued
+    work item and close() would never run.
+    """
+    from asr.api.api_v1.endpoints.stream import _StreamConnection
+
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    gate = threading.Event()
+    executor.submit(gate.wait, 5)  # occupy the only worker
+
+    engine = FakeEngine()
+    session = engine.new_session()
+    connection = _StreamConnection(websocket=Any, engine=engine)  # type: ignore[arg-type]
+    cleanup = asyncio.create_task(connection._close_session(session))
+    await asyncio.sleep(0)  # let it submit close() and start waiting
+    cleanup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup
+    assert not session.closed  # still queued behind the busy worker
+
+    gate.set()
+    executor.shutdown(wait=True)  # runs every work item that was not cancelled
+    assert session.closed

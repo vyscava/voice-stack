@@ -13,7 +13,18 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from asr.stream import factory as stream_factory
-from tests.unit.asr.stream_fakes import SR, WORDS, FakeEngine, config, pcm, recv_json, send_audio, until_final
+from tests.unit.asr.stream_fakes import (
+    SR,
+    WORDS,
+    FakeEngine,
+    config,
+    pcm,
+    recv_json,
+    send_audio,
+    slot_is_free,
+    until_final,
+    wait_until,
+)
 
 
 @pytest.mark.unit
@@ -116,6 +127,7 @@ def test_stream_second_connection_is_refused_busy(asr_client: TestClient, fake_e
             assert closed.value.code == 1013
 
     # The slot is released when the first connection ends.
+    assert wait_until(slot_is_free)
     with asr_client.websocket_connect("/v1/stream") as third:
         third.send_json({"type": "flush"})
         _, final = until_final(third)
@@ -152,7 +164,7 @@ def test_stream_close_message_ends_connection_and_drops_session(
             recv_json(ws)
         assert closed.value.code == 1000
 
-    assert fake_engine.sessions[0].closed
+    assert wait_until(lambda: fake_engine.sessions[0].closed)
     assert not fake_engine.sessions[0].finished
 
 

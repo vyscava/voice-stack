@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 import anyio
@@ -122,3 +124,27 @@ def recv_json(ws: Any, timeout: float = RECV_TIMEOUT_S) -> Any:
     message = ws.portal.call(receive)
     ws._raise_on_close(message)  # WebSocketDisconnect(code) on a close frame
     return json.loads(message["text"])
+
+
+def wait_until(predicate: Callable[[], bool], timeout: float = RECV_TIMEOUT_S) -> bool:
+    """Poll until predicate() is true or the deadline passes; return its last value.
+
+    The server finishes a connection (closing the session, releasing the slot) on
+    its own task after the client sees the close frame, so state checked right
+    after the client context exits races that cleanup. A real leak still fails:
+    the predicate stays false and the caller's assert sees it.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return predicate()
+
+
+def slot_is_free() -> bool:
+    """True when the process's stream slot can be claimed (claims and releases it)."""
+    from asr.stream import factory
+
+    if factory.try_acquire_stream_slot():
+        factory.release_stream_slot()
+        return True
+    return False
