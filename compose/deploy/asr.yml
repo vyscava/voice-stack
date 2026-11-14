@@ -30,13 +30,16 @@ services:
       ASR_DEVICE: cpu
       ASR_MODEL: small
       ASR_COMPUTE_TYPE: int8
-      # Match the container's CPU set (the host has 4 cores). More
-      # threads than cores oversubscribes and gets slower, not faster.
-      ASR_CPU_THREADS: "4"
+      # Match the deploy host's 6 cores. More threads than that
+      # spills onto slower cores or oversubscribes and gets slower, not
+      # faster: measured 1.18 s at 6 threads vs 1.25-1.70 s at 8-12.
+      ASR_CPU_THREADS: "6"
       ASR_NUM_OF_WORKERS: "1"
       ASR_CACHE_ENABLED: "true"
       ASR_CACHE_MAX_ITEMS: "100"
-      ASR_TRANSCRIBE_BEAM_SIZE: "5"
+      # Greedy decoding: about 0.1 s faster per utterance than beam 5 with
+      # matching transcripts on short en and pt test turns.
+      ASR_TRANSCRIBE_BEAM_SIZE: "1"
       ASR_TRANSCRIBE_TEMPERATURE: "0"
       ASR_TRANSCRIBE_BEST_OF: "1"
       ASR_VAD_ENABLED: "true"
