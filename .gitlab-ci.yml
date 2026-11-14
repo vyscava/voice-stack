@@ -189,6 +189,8 @@ build:prod-image:
     # The deploy jobs (.gitlab/ci/deploy.yml) pin exactly this build.
     - echo "VOICE_STACK_PUBLISHED_IMAGE=${KOKORO_IMAGE_SHA}" > deploy.env
     - echo "VOICE_AGENT_PUBLISHED_IMAGE=${AGENT_IMAGE_SHA}" >> deploy.env
+    # Streaming ASR needs torch, so it runs from the full image.
+    - echo "VOICE_STACK_FULL_PUBLISHED_IMAGE=${PROD_IMAGE_SHA}" >> deploy.env
     - echo "Image will be promoted to latest in release stage after all checks pass"
 
   artifacts:

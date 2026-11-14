@@ -97,7 +97,9 @@ FROM builder-base AS builder-full
 RUN /build/.venv/bin/pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         torch==2.15.0 torchaudio==2.11.0 torchcodec==0.17.0
-RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,asr-whisper,tts,gateway]"
+# `stream` adds streaming ASR (/v1/stream). transformers and torch are already
+# here at the same pins (tts-xtts); it brings librosa and lingua on top.
+RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr,asr-whisper,tts,gateway,stream]"
 
 # Pre-accept Coqui TTS license to prevent interactive prompts
 RUN bash scripts/accept_coqui_license.sh && finish-venv

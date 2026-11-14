@@ -225,7 +225,7 @@ packages = ["src"]
 type = "virtual"
 path = ".venv"
 # gateway included so CI installs the same set the production image does
-# (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway]). Without it, any module importing a
+# (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway,stream]). Without it, any module importing a
 # gateway-only dependency passes locally and fails in CI at IMPORT time.
 features = ["dev", "server", "tts", "asr", "asr-whisper", "stream", "gateway", "agent"]
 dependencies = []

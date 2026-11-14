@@ -1,0 +1,90 @@
+# Voice Stack streaming ASR (/v1/stream), deployed by CI next to the batch ASR
+# through the same shared compose deployer (wired in .gitlab/ci/deploy.yml).
+#
+# It runs from the FULL image (voice-stack:<sha>): the streaming model needs
+# torch, and the slim image that batch ASR runs on is torch-free by design.
+# The job pins VOICE_STACK_FULL_IMAGE to the full image this pipeline built.
+#
+# A stack of its own, not a setting on the batch ASR:
+#   - the model is about 2.4 GB in float32 and never unloaded, and torch's
+#     thread count is process-wide, so one process would make batch ASR pay
+#     for the stream in memory and CPU;
+#   - if this stack is down or busy, the voice agent falls back to batch ASR,
+#     which keeps working untouched.
+#
+# Batch requests here would work (it is the same ASR app) but nothing sends
+# any: the voice agent and the gateway use voice-stack-asr for batch.
+#
+# It joins voice-stack-asr_default as an external network, so the agent
+# reaches it as voice-stack-asr-stream:5001 on the network it already uses.
+
+services:
+  asr-stream:
+    image: ${VOICE_STACK_FULL_IMAGE}
+    container_name: voice-stack-asr-stream
+    restart: unless-stopped
+
+    environment:
+      SERVICE_MODE: asr
+      ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HOST: 0.0.0.0
+      ASR_PORT: "5001"
+      CORS_ORIGINS: ""
+      DEBUGPY_ENABLE: "false"
+      ASR_DEVICE: cpu
+      ASR_STREAM_ENABLED: "true"
+      # Load the model in the background at startup, so the first call after
+      # a deploy does not wait for it. The container is healthy meanwhile.
+      ASR_STREAM_WARMUP: "true"
+      # Defaults measured on this host class with TTS under load:
+      # lookahead 6 (560 ms chunks), float32, 4 threads.
+      ASR_STREAM_LOOKAHEAD: "6"
+      ASR_STREAM_DTYPE: float32
+      ASR_STREAM_THREADS: "4"
+      ASR_STREAM_LANGUAGES: en,pt
+      # The batch Whisper model loads on the first batch request, and nothing
+      # sends one here, so there is nothing for the idle checker to unload.
+      ASR_IDLE_TIMEOUT_MINUTES: "0"
+      ASR_MAX_CONCURRENT_REQUESTS: "1"
+      HF_HOME: /app/models
+
+    # The agent connects over the compose network. The host port is for
+    # Prometheus (/metrics) and for testing, on the same LAN-only footing as
+    # batch ASR's 5001.
+    ports:
+      - "5005:5001"
+
+    volumes:
+      - asr-stream-models:/app/models
+
+    networks:
+      - asr
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          # 2.4 GB of float32 weights plus torch, the decode thread and lingua.
+          memory: 4G
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  asr-stream-models:
+    driver: local
+
+networks:
+  asr:
+    external: true
+    name: voice-stack-asr_default

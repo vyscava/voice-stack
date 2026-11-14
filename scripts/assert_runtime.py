@@ -463,6 +463,34 @@ def check_agent(failures: list[str]) -> None:
     print(f"agent modules checked: {', '.join(AGENT_REQUIRED)}")
 
 
+def check_stream(failures: list[str]) -> None:
+    """The ``stream`` extra (streaming ASR): the model classes, librosa and a WORKING lingua.
+
+    Each was found missing at runtime once: transformers loads the Nemotron
+    checkpoint without librosa and then refuses every stream, and lingua is
+    imported lazily on the first final. Detecting real text proves its
+    language models are inside the wheel, not just its Python files.
+    """
+    try:
+        import librosa
+        from transformers import AutoModelForRNNT, AutoProcessor  # noqa: F401
+
+        print(f"librosa {librosa.__version__}")
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"streaming ASR model imports failed: {exc!r}")
+    try:
+        from lingua import Language, LanguageDetectorBuilder
+
+        detector = LanguageDetectorBuilder.from_languages(Language.ENGLISH, Language.PORTUGUESE).build()
+        got = detector.detect_language_of("where is the nearest train station")
+        if got != Language.ENGLISH:
+            failures.append(f"lingua answered {got!r} for an English sentence")
+        else:
+            print("lingua: detects en/pt")
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"lingua could not detect a language: {exc!r}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--variant", choices=VARIANTS, default="full")
@@ -481,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
         if check_torch(failures):
             check_whisper_torch(failures)
             check_xtts(failures)
+            check_stream(failures)
         check_kokoro(failures, require_model=False)
     elif args.variant in ("cuda", "rocm"):
         if check_torch(failures, args.variant):

@@ -231,9 +231,9 @@ endpoint accepts the socket, sends `{"type":"error","code":"disabled"}` and clos
 Nothing else in the ASR service changes either way.
 
 **Enabling it.** It needs the `stream` extra (`pip install -e '.[server,asr,stream]'`): `transformers`
-(>= 5.13), `torch`, `librosa` and `lingua-language-detector`, plus `accelerate` off-CPU. No image
-installs the extra yet. The full image (`:latest` / `:xtts`) carries transformers, torch and librosa
-at the same pins but not lingua, and the slim `:kokoro` image is torch-free by design. The model (about 2.5 GB download) is fetched and
+(>= 5.13), `torch`, `librosa` and `lingua-language-detector`, plus `accelerate` off-CPU. The full
+image (`:latest` / `:xtts`) installs it; the slim `:kokoro` image is torch-free by design, and the GPU
+images do not carry it yet. The model (about 2.5 GB download) is fetched and
 loaded on the first stream connection, or in the background at startup with `ASR_STREAM_WARMUP=true`;
 mount a volume on the Hugging Face cache
 (`HF_HOME`) to keep it across restarts.
