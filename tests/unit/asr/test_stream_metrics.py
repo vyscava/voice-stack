@@ -296,9 +296,15 @@ async def test_a_session_started_under_a_cancel_is_closed_not_leaked(fake_engine
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+    released = threading.Event()
+    connection.release_when_closed(released.set)
+    assert not released.is_set(), "the slot was handed on while the orphan session was still starting"
+
     release.set()
     for _ in range(300):
-        if fake_engine.sessions and fake_engine.sessions[0].closed:
+        if released.is_set():
             break
         await asyncio.sleep(0.01)
     assert fake_engine.sessions and fake_engine.sessions[0].closed
+    assert released.is_set()

@@ -77,13 +77,6 @@ def _log_close_failure(future: asyncio.Future[Any]) -> None:
         logger.error("Closing an abandoned streaming session failed", exc_info=future.exception())
 
 
-def _close_orphan(future: asyncio.Future[StreamSession]) -> None:
-    """Close a session nobody took. close() joins a thread, so never on the event loop."""
-    if future.cancelled() or future.exception() is not None:
-        return
-    threading.Thread(target=future.result().close, name="stream-orphan-close", daemon=True).start()
-
-
 class _StreamConnection:
     """State for one accepted, slot-holding connection. Utterances follow each other on it."""
 
@@ -142,7 +135,8 @@ class _StreamConnection:
             await self._flush()
             return True
         if kind == "close":
-            await self.ws.close(code=CLOSE_NORMAL)
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError):  # the client may already be gone
+                await self.ws.close(code=CLOSE_NORMAL)
             return False
         await self.ws.send_json({"type": "error", "code": "bad_message"})
         return True
@@ -176,8 +170,43 @@ class _StreamConnection:
         try:
             return await asyncio.shield(work)
         except asyncio.CancelledError:
-            work.add_done_callback(_close_orphan)
+            # The slot waits for this too (release_when_closed): the orphan's
+            # decode thread is still starting, then closing.
+            self._closing = self._close_when_started(work)
             raise
+
+    def _close_when_started(self, work: asyncio.Future[StreamSession]) -> asyncio.Future[None]:
+        """A future that resolves once ``work``'s session (if any) is closed.
+
+        close() joins a thread, so it runs on a thread of its own, never on the loop.
+        """
+        closed: asyncio.Future[None] = self.loop.create_future()
+
+        def signal() -> None:
+            if not closed.done():
+                closed.set_result(None)
+
+        def close_then_signal(session: StreamSession) -> None:
+            try:
+                session.close()
+            except Exception:
+                logger.exception("Closing an orphaned streaming session failed")
+            finally:
+                with contextlib.suppress(RuntimeError):  # loop already closed: nobody is waiting
+                    self.loop.call_soon_threadsafe(signal)
+
+        def on_started(future: asyncio.Future[StreamSession]) -> None:
+            if future.cancelled() or future.exception() is not None:
+                if not future.cancelled():
+                    logger.error("A cancelled stream's session failed to start", exc_info=future.exception())
+                signal()
+                return
+            threading.Thread(
+                target=close_then_signal, args=(future.result(),), name="stream-orphan-close", daemon=True
+            ).start()
+
+        work.add_done_callback(on_started)
+        return closed
 
     async def _flush(self) -> None:
         started = time.perf_counter()
