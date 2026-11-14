@@ -214,17 +214,27 @@ class NemotronStreamEngine:
         if config.threads > 0:
             torch.set_num_threads(config.threads)
         dtype = torch.bfloat16 if config.dtype == "bfloat16" else torch.float32
-        device_map = "cpu" if config.device == "cpu" else "auto"
+        load_kwargs = self.model_load_kwargs(config, dtype)
 
         logger.info(
-            f"Loading streaming ASR model {config.model} (dtype={config.dtype}, device_map={device_map}, "
+            f"Loading streaming ASR model {config.model} (dtype={config.dtype}, "
+            f"device_map={load_kwargs.get('device_map', 'none (cpu)')}, "
             f"lookahead={config.lookahead}, threads={config.threads})"
         )
         self._processor = AutoProcessor.from_pretrained(config.model)
         self._processor.set_num_lookahead_tokens(config.lookahead)
-        self._model = AutoModelForRNNT.from_pretrained(config.model, dtype=dtype, device_map=device_map)
+        self._model = AutoModelForRNNT.from_pretrained(config.model, **load_kwargs)
         self._model.eval()
         logger.info(f"Streaming ASR model loaded; latency {self._processor.streaming_latency_ms} ms per chunk")
+
+    @staticmethod
+    def model_load_kwargs(config: StreamConfig, dtype: Any) -> dict[str, Any]:
+        """from_pretrained() arguments. On CPU, NO device_map: the model loads on the CPU anyway,
+        and any device_map (even "cpu") makes transformers require the accelerate package."""
+        kwargs: dict[str, Any] = {"dtype": dtype}
+        if config.device != "cpu":
+            kwargs["device_map"] = "auto"
+        return kwargs
 
     def _isolated_model(self) -> Any:
         """A shallow copy that shares weights but keeps generate()'s per-call attributes to itself."""

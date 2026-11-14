@@ -153,6 +153,13 @@ asr-whisper = [
 stream = [
   "transformers==5.22.2",
   "torch==2.15.0",
+  # The model's feature extractor (NemotronAsrStreamingFeatureExtractor) refuses
+  # to load without librosa, and transformers does not declare it. Found on the
+  # first real-model run: without it every stream is refused as "unavailable".
+  "librosa>=0.11",
+  # transformers needs accelerate for device_map, which the engine passes only
+  # off-CPU (ASR_DEVICE != cpu). Light, pure Python.
+  "accelerate>=1.15",
   "numpy",
 ]
 gateway = [

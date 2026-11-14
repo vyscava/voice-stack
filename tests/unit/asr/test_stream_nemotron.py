@@ -181,3 +181,38 @@ def test_language_detection_during_a_stream_does_not_corrupt_it() -> None:
 
     session.feed(_audio(1.0))
     assert session.finish().startswith("w0 w1")
+
+
+def _config(device: str) -> Any:
+    from asr.stream.base import StreamConfig
+
+    return StreamConfig(enabled=True, model="m", lookahead=3, dtype="float32", threads=0, device=device)
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_cpu_load_passes_no_device_map() -> None:
+    """Any device_map, even "cpu", makes transformers demand accelerate; the CPU path must not pass one."""
+    assert NemotronStreamEngine.model_load_kwargs(_config("cpu"), "f32") == {"dtype": "f32"}
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_gpu_load_lets_transformers_place_the_model() -> None:
+    assert NemotronStreamEngine.model_load_kwargs(_config("cuda"), "bf16") == {"dtype": "bf16", "device_map": "auto"}
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_stream_extra_declares_what_the_model_needs_at_runtime() -> None:
+    """transformers loads the model without these but refuses at runtime (found on the first real run)."""
+    import re
+    from pathlib import Path
+
+    import tomllib
+
+    pyproject = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())
+    names = {
+        re.split(r"[<>=\[ ]", dep, maxsplit=1)[0] for dep in pyproject["project"]["optional-dependencies"]["stream"]
+    }
+    assert {"transformers", "torch", "librosa", "accelerate"} <= names
