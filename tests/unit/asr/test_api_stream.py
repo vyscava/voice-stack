@@ -37,9 +37,8 @@ def test_stream_happy_path_partials_then_final_with_language(asr_client: TestCli
         partials, final = until_final(ws)
 
     assert partials == [" ".join(WORDS[:n]) for n in range(1, 7)]
+    # The tag after "two" never reaches the text, but it sets the language.
     assert final == {"type": "final", "text": "One two three four five six.", "language": "pt"}
-    # Exactly ONE detection, on exactly the first 2 s of the utterance.
-    assert fake_engine.detect_calls == [2 * SR]
     assert fake_engine.sessions[0].finished
 
 
@@ -60,18 +59,18 @@ def test_stream_flush_resets_for_the_next_utterance(asr_client: TestClient, fake
     assert len(fake_engine.sessions) == 2
     assert partials == ["one", "one two"]
     assert second["text"] == "One two."
-    # The 1 s utterance never reached 2 s, so no second detection ran.
-    assert fake_engine.detect_calls == [2 * SR]
 
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_stream_short_utterance_reuses_previous_language(asr_client: TestClient, fake_engine: FakeEngine) -> None:
+def test_stream_utterance_without_a_tag_reuses_previous_language(
+    asr_client: TestClient, fake_engine: FakeEngine
+) -> None:
     with asr_client.websocket_connect("/v1/stream") as ws:
-        send_audio(ws, 2.5)
+        send_audio(ws, 2.5)  # reaches the tag after "two"
         ws.send_json({"type": "flush"})
         _, first = until_final(ws)
-        send_audio(ws, 0.5)
+        send_audio(ws, 0.5)  # "one" only: no sentence end, no tag
         ws.send_json({"type": "flush"})
         _, second = until_final(ws)
 
@@ -81,35 +80,43 @@ def test_stream_short_utterance_reuses_previous_language(asr_client: TestClient,
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_stream_short_first_utterance_has_null_language(asr_client: TestClient, fake_engine: FakeEngine) -> None:
+def test_stream_first_utterance_without_a_tag_has_null_language(
+    asr_client: TestClient, fake_engine: FakeEngine
+) -> None:
     with asr_client.websocket_connect("/v1/stream") as ws:
-        send_audio(ws, 1.0)
+        send_audio(ws, 0.5)
         ws.send_json({"type": "flush"})
         _, final = until_final(ws)
 
     assert final["language"] is None
-    assert fake_engine.detect_calls == []
 
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_stream_detection_not_ready_by_flush_falls_back(
-    asr_client: TestClient, fake_engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from asr.api.api_v1.endpoints import stream as stream_endpoint
+def test_stream_last_tag_of_the_utterance_wins(asr_client: TestClient, fake_engine: FakeEngine) -> None:
+    fake_engine.tags = [(1, "<en-US>"), (3, "<pt-BR>")]
+    with asr_client.websocket_connect("/v1/stream") as ws:
+        send_audio(ws, 2.0)
+        ws.send_json({"type": "flush"})
+        _, final = until_final(ws)
 
-    monkeypatch.setattr(stream_endpoint, "LANGUAGE_GRACE_SECONDS", 0.05)
-    fake_engine.release_detection.clear()  # detection hangs until the test lets it go
-    try:
-        with asr_client.websocket_connect("/v1/stream") as ws:
-            send_audio(ws, 2.5)
-            ws.send_json({"type": "flush"})
-            _, final = until_final(ws)
-    finally:
-        fake_engine.release_detection.set()
+    assert final["text"] == "One two three four."
+    assert final["language"] == "pt"
 
-    assert fake_engine.detect_calls == [2 * SR]  # it was started ...
-    assert final["language"] is None  # ... but not ready, and there is no previous language
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_stream_a_new_tag_replaces_the_previous_language(asr_client: TestClient, fake_engine: FakeEngine) -> None:
+    with asr_client.websocket_connect("/v1/stream") as ws:
+        send_audio(ws, 1.0)
+        ws.send_json({"type": "flush"})
+        _, first = until_final(ws)
+        fake_engine.tags = [(2, "<en-US>")]
+        send_audio(ws, 1.0)
+        ws.send_json({"type": "flush"})
+        _, second = until_final(ws)
+
+    assert (first["language"], second["language"]) == ("pt", "en")
 
 
 @pytest.mark.unit

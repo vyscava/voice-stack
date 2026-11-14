@@ -111,14 +111,19 @@ class StreamSession(Protocol):
         """Abandon the utterance (client went away). Must be safe to call more than once."""
         ...
 
+    @property
+    def language(self) -> str | None:
+        """Primary subtag ("en", "pt") of the LAST language tag the model emitted in this utterance, or None.
+
+        The model tags a sentence only after its final punctuation, so an
+        utterance without a completed sentence has none.
+        """
+        ...
+
 
 class StreamEngine(Protocol):
     """A loaded streaming model. One per process."""
 
     def new_session(self) -> StreamSession:
         """Start a new utterance."""
-        ...
-
-    def detect_language(self, samples: AudioArray) -> str | None:
-        """Batch-decode ``samples`` with automatic language detection; return e.g. ``"en"`` or None."""
         ...

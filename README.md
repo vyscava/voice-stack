@@ -258,8 +258,10 @@ close code 1013.
    `{"type":"final","text":"...","language":"en"}` and the connection is ready for the next utterance.
 5. Send `{"type":"close"}` or just disconnect.
 
-`language` is detected once per utterance, from its first 2 seconds, in the background. A shorter
-utterance reuses the previous utterance's language on the same connection, or `null`.
+`language` comes from the model itself: in automatic mode it emits a language tag (such as
+`<pt-BR>`) after each completed sentence, and the final carries the last one of the utterance. An
+utterance without a completed sentence (typically a very short one) has no tag and reuses the
+previous utterance's language on the same connection, or `null` on the first.
 
 ### TTS Endpoints
 

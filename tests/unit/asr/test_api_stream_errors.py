@@ -142,36 +142,6 @@ def test_abrupt_disconnect_mid_stream_frees_slot_and_session(asr_client: TestCli
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_stale_language_detection_is_not_adopted_by_the_next_utterance(
-    asr_client: TestClient, fake_engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A detection still running when its utterance ends belongs to that utterance only."""
-    from asr.api.api_v1.endpoints import stream as stream_endpoint
-
-    monkeypatch.setattr(stream_endpoint, "LANGUAGE_GRACE_SECONDS", 0.05)
-    fake_engine.release_detection.clear()
-    try:
-        with asr_client.websocket_connect("/v1/stream") as ws:
-            send_audio(ws, 2.5)
-            ws.send_json({"type": "flush"})
-            _, first = until_final(ws)
-            assert first["language"] is None  # not ready in time
-
-            # The late result lands while the next (short) utterance is under way.
-            fake_engine.release_detection.set()
-            assert fake_engine.detect_returned.wait(5)
-            send_audio(ws, 0.5)
-            ws.send_json({"type": "flush"})
-            _, second = until_final(ws)
-    finally:
-        fake_engine.release_detection.set()
-
-    assert second["language"] is None  # the stale "pt" was discarded, not adopted
-    assert fake_engine.detect_calls == [2 * SR]
-
-
-@pytest.mark.unit
-@pytest.mark.asr
 async def test_session_close_still_runs_when_the_cleanup_is_cancelled() -> None:
     """Cleanup runs while the handler is being cancelled; cancelling it must not drop close().
 

@@ -15,14 +15,11 @@ Protocol (JSON text frames for control, binary frames for audio):
   ``unavailable``/``misconfigured``/``decode_failed`` (1011). ``bad_message`` keeps
   the connection open.
 
-Language: once 2 s of an utterance is buffered, ONE batch decode with automatic
-language detection runs on those 2 s in the background. The final carries its
-answer; if it is not ready (a short utterance never starts one; a slow one gets
-LANGUAGE_GRACE_SECONDS after the final text is ready), the connection's
-previous language, else null. A detection is never cancelled (a model call
-running in a worker thread cannot be interrupted): one still running when the
-utterance ends or the client leaves runs to completion and its result is
-discarded, because each run is tagged with the utterance it was started for.
+Language: the model emits a ``<xx-YY>`` tag after each completed sentence
+("Que horas são? <pt-BR>"). The final carries the primary subtag of the LAST
+tag seen in the utterance; an utterance without one (no sentence finished,
+typically a short one) gets the connection's previous language, else null.
+No extra decode runs for it.
 
 Off by default (ASR_STREAM_ENABLED=false). The route stays registered and
 refuses with ``disabled`` so a client gets a reason rather than a bare 403.
@@ -47,14 +44,6 @@ router = APIRouter()
 
 T = TypeVar("T")
 
-# Audio used for the one-off language detection of each utterance.
-LANGUAGE_PROBE_SECONDS = 2.0
-_PROBE_BYTES = int(LANGUAGE_PROBE_SECONDS * STREAM_SAMPLE_RATE) * 2  # PCM16 = 2 bytes/sample
-# How long a final may wait for a detection that is already running. It started
-# 2 s into the utterance, so by the flush it has usually finished; this only
-# absorbs the hand-off from its worker thread, it never waits out a slow model.
-LANGUAGE_GRACE_SECONDS = 0.2
-
 # WebSocket close codes (RFC 6455 section 7.4.1).
 CLOSE_NORMAL = 1000
 CLOSE_UNSUPPORTED_DATA = 1003
@@ -72,12 +61,6 @@ async def _refuse(websocket: WebSocket, code: str, close_code: int) -> None:
         pass
 
 
-def _consume_result(future: asyncio.Future[Any]) -> None:
-    """Retrieve an abandoned future's exception so asyncio does not log it as unhandled."""
-    if not future.cancelled() and future.exception() is not None:
-        logger.warning(f"Streaming language detection failed: {future.exception()}")
-
-
 def _log_close_failure(future: asyncio.Future[Any]) -> None:
     """Log a failed session close; also runs when nobody awaits the close any more (cancelled caller)."""
     if not future.cancelled() and future.exception() is not None:
@@ -93,16 +76,11 @@ class _StreamConnection:
         self.loop = asyncio.get_running_loop()
         self.session: StreamSession | None = None
         self.last_language: str | None = None
-        self.utterance_id = 0
         self._reset_utterance()
 
     def _reset_utterance(self) -> None:
-        self.utterance_id += 1
         self.last_sent = ""
         self.carry = b""  # odd trailing byte of a frame, completed by the next one
-        self.probe = bytearray()  # first LANGUAGE_PROBE_SECONDS of the utterance
-        self.lang_future: asyncio.Future[str | None] | None = None
-        self.lang_utterance_id: int | None = None  # the utterance lang_future was started for
 
     async def _call(self, fn: Callable[..., T], *args: Any) -> T:
         return await self.loop.run_in_executor(None, fn, *args)
@@ -158,35 +136,10 @@ class _StreamConnection:
             return
         if self.session is None:
             self.session = await self._call(self.engine.new_session)
-        self._probe_language(data)
         text = await self._call(self.session.feed, pcm16_to_float32(data))
         if text != self.last_sent:
             self.last_sent = text
             await self.ws.send_json({"type": "partial", "text": text})
-
-    def _probe_language(self, data: bytes) -> None:
-        """Buffer the utterance's first 2 s; once full, start the one background detection."""
-        if self.lang_future is not None:
-            return
-        self.probe.extend(data[: _PROBE_BYTES - len(self.probe)])
-        if len(self.probe) >= _PROBE_BYTES:
-            samples = pcm16_to_float32(bytes(self.probe))
-            self.lang_future = self.loop.run_in_executor(None, self.engine.detect_language, samples)
-            self.lang_utterance_id = self.utterance_id
-            self.lang_future.add_done_callback(_consume_result)
-
-    async def _resolve_language(self) -> str | None:
-        """This utterance's detected language if ready, else the connection's previous one."""
-        future = self.lang_future
-        if self.lang_utterance_id != self.utterance_id:
-            future = None  # started for an earlier utterance: stale, never adopted
-        if future is not None and not future.done():
-            await asyncio.wait({future}, timeout=LANGUAGE_GRACE_SECONDS)  # never cancels it
-        if future is not None and future.done() and not future.cancelled() and future.exception() is None:
-            detected = future.result()
-            if detected:
-                self.last_language = detected
-        return self.last_language
 
     async def _flush(self) -> None:
         text = ""
@@ -194,12 +147,14 @@ class _StreamConnection:
             session, self.session = self.session, None
             try:
                 text = await self._call(session.finish)
+                # Read after finish(): the padded tail can still emit the last sentence's tag.
+                if session.language is not None:
+                    self.last_language = session.language
             finally:
                 # Always release the decode thread, also when finish() raised
                 # (e.g. its join timed out); close() is safe after finish().
                 await self._close_session(session)
-        language = await self._resolve_language()
-        await self.ws.send_json({"type": "final", "text": text, "language": language})
+        await self.ws.send_json({"type": "final", "text": text, "language": self.last_language})
         self._reset_utterance()
 
     async def _drop_session(self) -> None:
