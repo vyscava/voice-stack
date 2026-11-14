@@ -7,19 +7,26 @@ Protocol (JSON text frames for control, binary frames for audio):
 - client -> binary frames: PCM16 little-endian, mono, 16 kHz
 - server -> ``{"type":"partial","text":"<full hypothesis so far>"}`` whenever it changes
 - client -> ``{"type":"flush"}``: end of utterance
-- server -> ``{"type":"final","text":"...","language":"en"|"pt"|...|null}``, then the
-  connection is ready for the next utterance
+- server -> ``{"type":"final","text":"...","language":"en"|"pt"|...|null,
+  "language_source":"stream_tag"|"text"|"previous"|null}``, then the connection is
+  ready for the next utterance
 - client -> ``{"type":"close"}`` (or just disconnect) ends the connection
 - server -> ``{"type":"error","code":"..."}`` then a close, for: ``disabled`` (1008),
   ``busy`` (1013, one stream per process), ``unsupported_sample_rate`` (1003),
   ``unavailable``/``misconfigured``/``decode_failed`` (1011). ``bad_message`` keeps
   the connection open.
 
-Language: the model emits a ``<xx-YY>`` tag after each completed sentence
-("Que horas são? <pt-BR>"). The final carries the primary subtag of the LAST
-tag seen in the utterance; an utterance without one (no sentence finished,
-typically a short one) gets the connection's previous language, else null.
-No extra decode runs for it.
+Language, first match wins (``language_source`` says which):
+
+1. ``stream_tag``: the model emits a ``<xx-YY>`` tag after each completed
+   sentence; the last one of the utterance. Free, but the model never
+   punctuates an utterance's final sentence, so one-sentence turns rarely
+   carry one.
+2. ``text``: the final transcript classified by lingua, restricted to
+   ASR_STREAM_LANGUAGES, when the verdict is confident.
+3. ``previous``: the connection's previous final language, when the text is
+   empty or ambiguous.
+4. null (with ``language_source`` null) on a first utterance that gave nothing.
 
 Off by default (ASR_STREAM_ENABLED=false). The route stays registered and
 refuses with ``disabled`` so a client gets a reason rather than a bare 403.
@@ -143,18 +150,26 @@ class _StreamConnection:
 
     async def _flush(self) -> None:
         text = ""
+        language: str | None = None
+        source: str | None = None
         if self.session is not None:
             session, self.session = self.session, None
             try:
                 text = await self._call(session.finish)
                 # Read after finish(): the padded tail can still emit the last sentence's tag.
                 if session.language is not None:
-                    self.last_language = session.language
+                    language, source = session.language, "stream_tag"
             finally:
                 # Always release the decode thread, also when finish() raised
                 # (e.g. its join timed out); close() is safe after finish().
                 await self._close_session(session)
-        await self.ws.send_json({"type": "final", "text": text, "language": self.last_language})
+        if language is None and text:
+            language = await self._call(self.engine.detect_text_language, text)
+            source = "text" if language is not None else None
+        if language is None and self.last_language is not None:
+            language, source = self.last_language, "previous"
+        self.last_language = language
+        await self.ws.send_json({"type": "final", "text": text, "language": language, "language_source": source})
         self._reset_utterance()
 
     async def _drop_session(self) -> None:

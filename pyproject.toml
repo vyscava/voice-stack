@@ -160,6 +160,11 @@ stream = [
   # transformers needs accelerate for device_map, which the engine passes only
   # off-CPU (ASR_DEVICE != cpu). Light, pure Python.
   "accelerate>=1.15",
+  # Language of finals that carry no stream tag (most one-sentence turns): text
+  # language ID restricted to ASR_STREAM_LANGUAGES. Apache-2.0, wheels only, no
+  # dependencies, well under 5 ms per final. Pinned because src/asr/stream/language.py
+  # lists the codes it supports.
+  "lingua-language-detector==2.1.1",
   "numpy",
 ]
 gateway = [

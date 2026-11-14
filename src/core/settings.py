@@ -68,13 +68,19 @@ class Settings(BaseSettings):
         default="nvidia/nemotron-3.5-asr-streaming-0.6b", description="Hugging Face id of the streaming model"
     )
     ASR_STREAM_LOOKAHEAD: int = Field(
-        default=3, description="Lookahead tokens: 0|3|6|13 (3 = 320 ms chunks; more = higher latency, better accuracy)"
+        default=6,
+        description="Lookahead tokens: 0|3|6|13 (6 = 560 ms chunks; measured best RTF and WER under TTS load)",
     )
     ASR_STREAM_DTYPE: str = Field(
         default="float32",
         description="float32|bfloat16 (bfloat16 only pays off with native CPU bf16 or a GPU)",
     )
-    ASR_STREAM_THREADS: int = Field(default=0, description="torch CPU threads for streaming (0 = ASR_CPU_THREADS)")
+    ASR_STREAM_THREADS: int = Field(
+        default=4, description="torch CPU threads for streaming (4 beat 6 and 8 when sharing the CPU with TTS)"
+    )
+    ASR_STREAM_LANGUAGES: str = Field(
+        default="en,pt", description="ISO 639-1 codes the text language fallback may answer with"
+    )
 
     # ASR Resource Management
     ASR_IDLE_TIMEOUT_MINUTES: int = Field(

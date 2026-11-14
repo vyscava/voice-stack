@@ -6,6 +6,7 @@ for the model: no download, no torch.
 
 from __future__ import annotations
 
+import functools
 import json
 import time
 from collections.abc import Callable
@@ -15,6 +16,7 @@ import anyio
 import numpy as np
 
 from asr.stream.base import StreamConfig, parse_language_tag
+from asr.stream.language import TextLanguageDetector
 
 SR = 16000
 WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight"]
@@ -56,6 +58,8 @@ class FakeSession:
         self.finished = True
         if self.engine.finish_fails:
             raise TimeoutError("fake: streaming decode did not finish in time")
+        if self.engine.final_text is not None:
+            return self.engine.final_text
         return self.hypothesis().capitalize() + "."
 
     def close(self) -> None:
@@ -70,11 +74,24 @@ class FakeEngine:
         self.sessions: list[FakeSession] = []
         self.feed_fails_after: int | None = None  # samples into a session before feed() raises
         self.finish_fails = False
+        self.final_text: str | None = None  # overrides the final transcript when set
+        self.text_language_calls: list[str] = []
 
     def new_session(self) -> FakeSession:
         session = FakeSession(self)
         self.sessions.append(session)
         return session
+
+    def detect_text_language(self, text: str) -> str | None:
+        """The REAL text language ID (lingua, en+pt), as the Nemotron engine runs it."""
+        self.text_language_calls.append(text)
+        return text_detector().detect(text)
+
+
+@functools.lru_cache(maxsize=1)
+def text_detector() -> TextLanguageDetector:
+    """Built once for the whole test session (about 0.1 s)."""
+    return TextLanguageDetector(("en", "pt"))
 
 
 def config(enabled: bool = True) -> StreamConfig:

@@ -38,7 +38,12 @@ def test_stream_happy_path_partials_then_final_with_language(asr_client: TestCli
 
     assert partials == [" ".join(WORDS[:n]) for n in range(1, 7)]
     # The tag after "two" never reaches the text, but it sets the language.
-    assert final == {"type": "final", "text": "One two three four five six.", "language": "pt"}
+    assert final == {
+        "type": "final",
+        "text": "One two three four five six.",
+        "language": "pt",
+        "language_source": "stream_tag",
+    }
     assert fake_engine.sessions[0].finished
 
 
@@ -70,12 +75,13 @@ def test_stream_utterance_without_a_tag_reuses_previous_language(
         send_audio(ws, 2.5)  # reaches the tag after "two"
         ws.send_json({"type": "flush"})
         _, first = until_final(ws)
+        fake_engine.final_text = "Iris"  # no tag, and too short for the text to decide
         send_audio(ws, 0.5)  # "one" only: no sentence end, no tag
         ws.send_json({"type": "flush"})
         _, second = until_final(ws)
 
-    assert first["language"] == "pt"
-    assert second["language"] == "pt"
+    assert (first["language"], first["language_source"]) == ("pt", "stream_tag")
+    assert (second["language"], second["language_source"]) == ("pt", "previous")
 
 
 @pytest.mark.unit
@@ -83,12 +89,13 @@ def test_stream_utterance_without_a_tag_reuses_previous_language(
 def test_stream_first_utterance_without_a_tag_has_null_language(
     asr_client: TestClient, fake_engine: FakeEngine
 ) -> None:
+    fake_engine.final_text = "Iris"
     with asr_client.websocket_connect("/v1/stream") as ws:
         send_audio(ws, 0.5)
         ws.send_json({"type": "flush"})
         _, final = until_final(ws)
 
-    assert final["language"] is None
+    assert (final["language"], final["language_source"]) == (None, None)
 
 
 @pytest.mark.unit
@@ -200,3 +207,55 @@ def test_stream_odd_length_frames_keep_sample_alignment(asr_client: TestClient, 
         until_final(ws)
 
     assert fake_engine.sessions[0].samples == SR // 2
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_stream_tag_wins_and_text_language_id_is_not_consulted(asr_client: TestClient, fake_engine: FakeEngine) -> None:
+    fake_engine.final_text = "What time is it in Lisbon"  # English text, but the model tagged Portuguese
+    with asr_client.websocket_connect("/v1/stream") as ws:
+        send_audio(ws, 1.0)
+        ws.send_json({"type": "flush"})
+        _, final = until_final(ws)
+
+    assert (final["language"], final["language_source"]) == ("pt", "stream_tag")
+    assert fake_engine.text_language_calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("What time is it in Lisbon", "en"), ("Que horas são", "pt"), ("Oi Iris, tudo bem", "pt")],
+)
+def test_stream_without_a_tag_detects_the_language_from_the_text(
+    asr_client: TestClient, fake_engine: FakeEngine, text: str, expected: str
+) -> None:
+    fake_engine.tags = []
+    fake_engine.final_text = text
+    with asr_client.websocket_connect("/v1/stream") as ws:
+        send_audio(ws, 1.0)
+        ws.send_json({"type": "flush"})
+        _, final = until_final(ws)
+
+    assert (final["language"], final["language_source"]) == (expected, "text")
+    assert fake_engine.text_language_calls == [text]
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_stream_empty_final_falls_back_to_previous_without_text_id(
+    asr_client: TestClient, fake_engine: FakeEngine
+) -> None:
+    fake_engine.tags = []
+    with asr_client.websocket_connect("/v1/stream") as ws:
+        fake_engine.final_text = "Que horas são"
+        send_audio(ws, 1.0)
+        ws.send_json({"type": "flush"})
+        _, first = until_final(ws)
+        ws.send_json({"type": "flush"})  # no audio: an empty final
+        _, second = until_final(ws)
+
+    assert (first["language"], first["language_source"]) == ("pt", "text")
+    assert second == {"type": "final", "text": "", "language": "pt", "language_source": "previous"}
+    assert fake_engine.text_language_calls == ["Que horas são"]  # never called on the empty one

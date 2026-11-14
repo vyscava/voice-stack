@@ -47,8 +47,8 @@ def _settings(**overrides: Any) -> SimpleNamespace:
         "ASR_STREAM_MODEL": "nvidia/nemotron-3.5-asr-streaming-0.6b",
         "ASR_STREAM_LOOKAHEAD": 3,
         "ASR_STREAM_DTYPE": "bfloat16",
-        "ASR_STREAM_THREADS": 0,
-        "ASR_CPU_THREADS": 8,
+        "ASR_STREAM_THREADS": 4,
+        "ASR_STREAM_LANGUAGES": "en,pt",
         "ASR_DEVICE": "cpu",
     }
     values.update(overrides)
@@ -58,23 +58,33 @@ def _settings(**overrides: Any) -> SimpleNamespace:
 @pytest.mark.unit
 @pytest.mark.asr
 def test_stream_config_defaults_come_from_real_settings() -> None:
-    """The shipped defaults: off, the Nemotron model, 320 ms lookahead, float32, ASR_CPU_THREADS."""
+    """The shipped defaults: off, the Nemotron model, 560 ms lookahead, float32, 4 threads, en+pt."""
     from core.settings import Settings
 
-    settings = Settings()
-    config = StreamConfig.from_settings(settings)
+    config = StreamConfig.from_settings(Settings())
     assert config.enabled is False
     assert config.model == "nvidia/nemotron-3.5-asr-streaming-0.6b"
-    assert config.lookahead == 3
+    assert config.lookahead == 6
     assert config.dtype == "float32"
-    assert config.threads == settings.ASR_CPU_THREADS
+    assert config.threads == 4
+    assert config.languages == ("en", "pt")
 
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_stream_config_threads_fall_back_to_asr_cpu_threads() -> None:
-    assert StreamConfig.from_settings(_settings(ASR_STREAM_THREADS=0, ASR_CPU_THREADS=6)).threads == 6
+def test_stream_config_threads_are_their_own_setting() -> None:
+    """No fallback to ASR_CPU_THREADS any more: the streaming engine has its own measured default."""
     assert StreamConfig.from_settings(_settings(ASR_STREAM_THREADS=2, ASR_CPU_THREADS=6)).threads == 2
+    with pytest.raises(ValueError, match="ASR_STREAM_THREADS"):
+        StreamConfig.from_settings(_settings(ASR_STREAM_THREADS=0))
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_stream_config_languages_are_validated() -> None:
+    assert StreamConfig.from_settings(_settings(ASR_STREAM_LANGUAGES="pt, ES")).languages == ("pt", "es")
+    with pytest.raises(ValueError, match="ASR_STREAM_LANGUAGES"):
+        StreamConfig.from_settings(_settings(ASR_STREAM_LANGUAGES="en,xx"))
 
 
 @pytest.mark.unit

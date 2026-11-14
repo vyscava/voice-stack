@@ -46,6 +46,7 @@ from typing import Any
 import numpy as np
 
 from asr.stream.base import STREAM_SAMPLE_RATE, AudioArray, StreamConfig, parse_language_tag
+from asr.stream.language import TextLanguageDetector
 from core.logging import logger_asr as logger
 
 # Silence appended on finish so the final chunk (current frames + lookahead)
@@ -258,6 +259,7 @@ class NemotronStreamEngine:
         self._processor.set_num_lookahead_tokens(config.lookahead)
         self._model = AutoModelForRNNT.from_pretrained(config.model, **load_kwargs)
         self._model.eval()
+        self._text_language = TextLanguageDetector(config.languages)
         logger.info(f"Streaming ASR model loaded; latency {self._processor.streaming_latency_ms} ms per chunk")
 
     @staticmethod
@@ -275,3 +277,6 @@ class NemotronStreamEngine:
 
     def new_session(self) -> NemotronStreamSession:
         return NemotronStreamSession(self._isolated_model(), self._processor)
+
+    def detect_text_language(self, text: str) -> str | None:
+        return self._text_language.detect(text)
