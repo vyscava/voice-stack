@@ -132,6 +132,8 @@ asr = [
   # Floor: the bundled silero_vad_v6.onnx asset and the VadOptions fields the
   # VAD path passes exist from 1.2.1 (the version the slim image was verified on).
   "faster-whisper>=1.2.1,<2",
+  # The ASR app serves /metrics (streaming ASR counters). Pure Python, tiny.
+  "prometheus-client>=0.20.0",
   "numpy",
   "soundfile",
   "resampy",

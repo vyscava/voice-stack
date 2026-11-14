@@ -234,7 +234,8 @@ Nothing else in the ASR service changes either way.
 (>= 5.13), `torch`, `librosa` and `lingua-language-detector`, plus `accelerate` off-CPU. No image
 installs the extra yet. The full image (`:latest` / `:xtts`) carries transformers, torch and librosa
 at the same pins but not lingua, and the slim `:kokoro` image is torch-free by design. The model (about 2.5 GB download) is fetched and
-loaded on the first stream connection, not at startup; mount a volume on the Hugging Face cache
+loaded on the first stream connection, or in the background at startup with `ASR_STREAM_WARMUP=true`;
+mount a volume on the Hugging Face cache
 (`HF_HOME`) to keep it across restarts.
 
 | Variable | Default | Description |
@@ -244,6 +245,7 @@ loaded on the first stream connection, not at startup; mount a volume on the Hug
 | `ASR_STREAM_LOOKAHEAD` | `6` | `0`, `3`, `6` or `13` lookahead tokens. 6 = 560 ms chunks. On an 8-core CPU shared with Kokoro TTS under load, 6 measured RTF p95 0.30 and WER 1.5 % against 0.46 and 5.6 % for 3, and a lower flush-to-final latency (fewer chunks left to decode at the end). The cost is about 240 ms more latency on partials; use `3` if live captions matter more than the final. |
 | `ASR_STREAM_DTYPE` | `float32` | `float32` or `bfloat16`. The checkpoint is float32. bf16 halves memory but is only fast with native bf16 (AVX512-BF16/AMX CPUs, or a GPU); on CPUs without it, it is slower than float32. |
 | `ASR_STREAM_THREADS` | `4` | torch CPU threads. With TTS running on the same CPU, 4 threads measured RTF p95 0.46 against 0.54 for 6 and 0.56 for 8 (lookahead 3). |
+| `ASR_STREAM_WARMUP` | `false` | Load the model at startup, in the background. The service is healthy and serves batch ASR meanwhile; a stream that connects before the load finishes waits for it. |
 | `ASR_STREAM_LANGUAGES` | `en,pt` | ISO 639-1 codes the text language fallback may answer with (see `language_source` below). An unknown code fails at startup. |
 
 `ASR_DEVICE=cpu` keeps the model on the CPU; any other value lets Transformers place it
@@ -268,6 +270,13 @@ close code 1013.
 | `text` | The final transcript, classified by [lingua](https://github.com/pemistahl/lingua-py) restricted to `ASR_STREAM_LANGUAGES`, when the top language scores at least 0.7 (well under 5 ms per final). |
 | `previous` | The previous final's language on the same connection, when the text is empty or too ambiguous (a lone name, "no"). |
 | `null` | Nothing above gave an answer on the connection's first utterance; `language` is `null` too. |
+
+**Metrics.** The ASR service serves Prometheus metrics on `/metrics`:
+`voice_asr_stream_flush_seconds` (flush to final, the latency a caller feels),
+`voice_asr_stream_feed_seconds` (compute per audio feed), `voice_asr_stream_connections_total{outcome}`
+(`accepted`, `busy`, `disabled`, `misconfigured`, `unavailable`, `unsupported_sample_rate`),
+`voice_asr_stream_finals_total{language_source}`, `voice_asr_stream_errors_total`,
+`voice_asr_stream_active` and `voice_asr_stream_engine_loaded`.
 
 ### TTS Endpoints
 

@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     ASR_STREAM_THREADS: int = Field(
         default=4, description="torch CPU threads for streaming (4 beat 6 and 8 when sharing the CPU with TTS)"
     )
+    ASR_STREAM_WARMUP: bool = Field(
+        default=False,
+        description="Load the streaming model at startup (in the background) instead of on the first connection",
+    )
     ASR_STREAM_LANGUAGES: str = Field(
         default="en,pt", description="ISO 639-1 codes the text language fallback may answer with"
     )

@@ -38,12 +38,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from asr.stream import factory as stream_factory
+from asr.stream import metrics as stream_metrics
 from asr.stream.base import STREAM_SAMPLE_RATE, StreamEngine, StreamSession, pcm16_to_float32
 from core.logging import logger_asr as logger
 
@@ -83,6 +85,8 @@ class _StreamConnection:
         self.loop = asyncio.get_running_loop()
         self.session: StreamSession | None = None
         self.last_language: str | None = None
+        # The latest session close, which may still be running when the handler ends.
+        self._closing: asyncio.Future[None] | None = None
         self._reset_utterance()
 
     def _reset_utterance(self) -> None:
@@ -106,6 +110,7 @@ class _StreamConnection:
             return
         except Exception:
             logger.exception("Streaming ASR connection failed")
+            stream_metrics.ERRORS.inc()
             await _refuse(self.ws, "decode_failed", CLOSE_INTERNAL_ERROR)
         finally:
             await self._drop_session()
@@ -121,6 +126,7 @@ class _StreamConnection:
         if kind == "start":
             rate = msg.get("sample_rate", STREAM_SAMPLE_RATE)
             if rate != STREAM_SAMPLE_RATE:
+                stream_metrics.CONNECTIONS.labels(outcome="unsupported_sample_rate").inc()
                 await _refuse(self.ws, "unsupported_sample_rate", CLOSE_UNSUPPORTED_DATA)
                 return False
             return True
@@ -143,12 +149,15 @@ class _StreamConnection:
             return
         if self.session is None:
             self.session = await self._call(self.engine.new_session)
+        started = time.perf_counter()
         text = await self._call(self.session.feed, pcm16_to_float32(data))
+        stream_metrics.FEED_SECONDS.observe(time.perf_counter() - started)
         if text != self.last_sent:
             self.last_sent = text
             await self.ws.send_json({"type": "partial", "text": text})
 
     async def _flush(self) -> None:
+        started = time.perf_counter()
         text = ""
         language: str | None = None
         source: str | None = None
@@ -170,6 +179,8 @@ class _StreamConnection:
             language, source = self.last_language, "previous"
         self.last_language = language
         await self.ws.send_json({"type": "final", "text": text, "language": language, "language_source": source})
+        stream_metrics.FLUSH_SECONDS.observe(time.perf_counter() - started)
+        stream_metrics.FINALS.labels(language_source=source or "none").inc()
         self._reset_utterance()
 
     async def _drop_session(self) -> None:
@@ -197,8 +208,27 @@ class _StreamConnection:
             logger.exception("Could not schedule the stream session close")
             return
         work.add_done_callback(_log_close_failure)
+        self._closing = work
         with contextlib.suppress(Exception):  # logged by the callback; never masks the error being handled
             await asyncio.shield(work)
+
+    def release_when_closed(self, release: Callable[[], None]) -> None:
+        """Call ``release`` now, or once the last session close finishes if it is still running.
+
+        A cancelled handler stops awaiting its close (see ``_close_session``)
+        while the decode thread is still winding down. Handing the slot to the
+        next stream then would overlap two decodes on the same cores.
+        """
+        closing = self._closing
+        if closing is None or closing.done():
+            release()
+        else:
+            closing.add_done_callback(lambda _done: release())
+
+
+def _release_slot() -> None:
+    stream_metrics.ACTIVE.dec()
+    stream_factory.release_stream_slot()
 
 
 @router.websocket("/stream")
@@ -209,21 +239,32 @@ async def stream(websocket: WebSocket) -> None:
         config = stream_factory.get_stream_config()
     except ValueError:
         logger.exception("Streaming ASR is misconfigured")
+        stream_metrics.CONNECTIONS.labels(outcome="misconfigured").inc()
         await _refuse(websocket, "misconfigured", CLOSE_INTERNAL_ERROR)
         return
     if not config.enabled:
+        stream_metrics.CONNECTIONS.labels(outcome="disabled").inc()
         await _refuse(websocket, "disabled", CLOSE_POLICY_VIOLATION)
         return
     if not stream_factory.try_acquire_stream_slot():
+        stream_metrics.CONNECTIONS.labels(outcome="busy").inc()
         await _refuse(websocket, "busy", CLOSE_TRY_AGAIN_LATER)
         return
+    stream_metrics.ACTIVE.inc()
+    connection: _StreamConnection | None = None
     try:
         try:
             engine = await asyncio.get_running_loop().run_in_executor(None, stream_factory.get_stream_engine)
         except Exception:
             logger.exception("Streaming ASR engine failed to load")
+            stream_metrics.CONNECTIONS.labels(outcome="unavailable").inc()
             await _refuse(websocket, "unavailable", CLOSE_INTERNAL_ERROR)
             return
-        await _StreamConnection(websocket, engine).run()
+        stream_metrics.CONNECTIONS.labels(outcome="accepted").inc()
+        connection = _StreamConnection(websocket, engine)
+        await connection.run()
     finally:
-        stream_factory.release_stream_slot()
+        if connection is None:
+            _release_slot()
+        else:
+            connection.release_when_closed(_release_slot)
