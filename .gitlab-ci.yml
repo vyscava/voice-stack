@@ -217,6 +217,11 @@ quality:fmt:
   tags:
     - cpu
   stage: quality
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -234,6 +239,11 @@ quality:lint:
   tags:
     - cpu
   stage: quality
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -249,6 +259,11 @@ quality:lint:
 
 unit:asr:
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -269,6 +284,11 @@ unit:asr:
 
 unit:tts:
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -292,6 +312,11 @@ unit:core:
   tags:
     - cpu
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -312,6 +337,11 @@ unit:core:
 
 unit:utils:
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -335,6 +365,11 @@ unit:gateway:
   tags:
     - cpu
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -358,6 +393,11 @@ unit:agent:
   tags:
     - cpu
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -378,6 +418,11 @@ unit:agent:
 
 integration:
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
