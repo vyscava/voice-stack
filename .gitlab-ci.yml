@@ -295,6 +295,14 @@ unit:asr:
     expire_in: 1 week
 
 unit:tts:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
@@ -353,6 +361,14 @@ unit:core:
     expire_in: 1 week
 
 unit:utils:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
