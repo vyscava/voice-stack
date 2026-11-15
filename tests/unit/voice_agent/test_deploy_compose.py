@@ -33,8 +33,10 @@ def test_every_brain_setting_is_forwarded():
 
 def test_stt_and_preemptive_settings_are_forwarded_with_safe_defaults():
     env = _agent_environment()
-    assert env["AGENT_STT_MODE"] == "${AGENT_STT_MODE:-batch}"
-    assert env["AGENT_ASR_STREAM_URL"] == "${AGENT_ASR_STREAM_URL:-}"
+    # Streaming by default against the streaming ASR stack (batch is the fallback, and the
+    # stack env can still set AGENT_STT_MODE=batch); preemptive generation stays off.
+    assert env["AGENT_STT_MODE"] == "${AGENT_STT_MODE:-stream}"
+    assert env["AGENT_ASR_STREAM_URL"] == "${AGENT_ASR_STREAM_URL:-ws://voice-stack-asr-stream:5001/v1/stream}"
     assert env["AGENT_ASR_STREAM_FINAL_TIMEOUT_S"] == "${AGENT_ASR_STREAM_FINAL_TIMEOUT_S:-2.0}"
     assert env["AGENT_PREEMPTIVE_GENERATION"] == "${AGENT_PREEMPTIVE_GENERATION:-false}"
 
@@ -42,3 +44,16 @@ def test_stt_and_preemptive_settings_are_forwarded_with_safe_defaults():
 def test_api_key_falls_back_to_the_settings_default_not_empty():
     # An empty bearer is not the same as "no key needed": keep the settings default when unset.
     assert _agent_environment()["AGENT_LLM_API_KEY"] == "${AGENT_LLM_API_KEY:-unused}"
+
+
+def test_stream_url_points_at_the_streaming_asr_stack():
+    """The agent's default stream URL must name the service and port the streaming stack really runs."""
+    import re
+
+    stream = yaml.safe_load((COMPOSE.parent / "asr-stream.yml").read_text(encoding="utf-8"))
+    (service,) = stream["services"].values()
+    url = _agent_environment()["AGENT_ASR_STREAM_URL"]
+    host, port, path = re.fullmatch(r"\$\{AGENT_ASR_STREAM_URL:-ws://([^:]+):(\d+)(/.*)\}", url).groups()
+    assert host == service["container_name"]
+    assert port == service["environment"]["ASR_PORT"]
+    assert path == "/v1/stream"

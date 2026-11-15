@@ -25,9 +25,11 @@ services:
 
       AGENT_ASR_URL: http://voice-stack-asr:5001
       AGENT_TTS_URL: http://voice-stack-tts:5002
-      # batch until the deployer flips it; empty stream URL = derived from AGENT_ASR_URL.
-      AGENT_STT_MODE: ${AGENT_STT_MODE:-batch}
-      AGENT_ASR_STREAM_URL: ${AGENT_ASR_STREAM_URL:-}
+      # Streaming STT from the voice-stack-asr-stream stack (its own process, so
+      # the model never competes with batch ASR). A stream that is refused,
+      # stalls or drops falls back to batch ASR above for the rest of the call.
+      AGENT_STT_MODE: ${AGENT_STT_MODE:-stream}
+      AGENT_ASR_STREAM_URL: ${AGENT_ASR_STREAM_URL:-ws://voice-stack-asr-stream:5001/v1/stream}
       AGENT_ASR_STREAM_FINAL_TIMEOUT_S: ${AGENT_ASR_STREAM_FINAL_TIMEOUT_S:-2.0}
       AGENT_PREEMPTIVE_GENERATION: ${AGENT_PREEMPTIVE_GENERATION:-false}
 
