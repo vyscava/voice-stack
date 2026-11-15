@@ -30,6 +30,7 @@ async def endpoint(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[FakeE
     engine = FakeEngine()  # its default tags the stream <pt-BR> after the second word
     monkeypatch.setattr(stream_factory, "get_stream_config", lambda: config(enabled=True))
     stream_factory.set_stream_engine(engine)
+    stream_factory.set_max_sessions(1)  # the busy test holds the one slot
     app = FastAPI()
     app.include_router(stream_endpoint.router, prefix="/v1")
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="off"))
@@ -40,6 +41,7 @@ async def endpoint(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[FakeE
     yield engine, f"ws://127.0.0.1:{port}/v1/stream"
     server.should_exit = True
     await task
+    stream_factory.set_max_sessions(None)
     stream_factory.set_stream_engine(None)
 
 
@@ -88,3 +90,17 @@ async def test_busy_endpoint_falls_back(endpoint):
         stream_factory.release_stream_slot()
     assert events[-1].alternatives[0].text == "from batch"
     assert plugin.fallback_reason == "busy"
+
+
+async def test_each_final_reports_the_streamed_audio_as_usage(endpoint):
+    _, url = endpoint
+    plugin = AsrStreamSTT(url=url, batch=FakeBatch(), vad=None)
+    stream = plugin.stream()
+    stream.push_frame(frame_from_pcm16(pcm(3.0)))
+    stream.flush()
+    events = await collect_until(stream, "recognition_usage")
+    await stream.aclose()
+
+    kinds = [e.type for e in events]
+    assert kinds.index("final_transcript") < kinds.index("recognition_usage")
+    assert abs(events[-1].recognition_usage.audio_duration - 3.0) < 0.01

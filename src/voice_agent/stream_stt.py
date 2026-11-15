@@ -182,6 +182,7 @@ class AsrSpeechStream(stt.RecognizeStream):
         self._flush_sent = asyncio.Event()
         self._idle = asyncio.Event()
         self._idle.set()
+        self._usage_samples = 0  # audio streamed since the last usage event
 
     async def _run(self) -> None:
         if self._parent.fallback_reason is None:
@@ -242,6 +243,7 @@ class AsrSpeechStream(stt.RecognizeStream):
             if isinstance(item, rtc.AudioFrame):
                 data = pcm16_mono(item)
                 self._replay.add(data)
+                self._usage_samples += len(data) // 2
                 await self._bounded(ws.send_bytes(data))
             else:
                 self._replay.flushed()
@@ -301,6 +303,18 @@ class AsrSpeechStream(stt.RecognizeStream):
         )
         self._event_ch.send_nowait(stt.SpeechEvent(type=kind, alternatives=alternatives))
 
+    def _emit_usage(self) -> None:
+        """LiveKit usage accounting: the audio streamed since the last usage event, in seconds."""
+        if self._usage_samples <= 0:
+            return
+        seconds, self._usage_samples = self._usage_samples / SAMPLE_RATE, 0
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                recognition_usage=stt.RecognitionUsage(audio_duration=seconds),
+            )
+        )
+
     def _on_partial(self, text: str) -> None:
         if not text:
             return
@@ -325,6 +339,7 @@ class AsrSpeechStream(stt.RecognizeStream):
         if self._in_speech:
             self._in_speech = False
             self._speech(stt.SpeechEventType.END_OF_SPEECH)
+        self._emit_usage()
 
     async def _run_batch(self, replay: list[tuple[bytes, bool]]) -> None:
         """Serve the rest of this stream from the batch STT, starting with the replayed audio."""
