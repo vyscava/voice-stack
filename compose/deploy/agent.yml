@@ -55,8 +55,10 @@ services:
       AGENT_NATS_INBOX_PREFIX: ${AGENT_NATS_INBOX_PREFIX:-}
 
       # Stock speakers only: cloned voices of real people stay private.
-      AGENT_VOICE_EN: af_heart
-      AGENT_VOICE_PT: pf_dora
+      # English is Kokoro's British female bf_isabella (picked by ear from the
+      # full voice set); the stack env can override either voice.
+      AGENT_VOICE_EN: ${AGENT_VOICE_EN:-bf_isabella}
+      AGENT_VOICE_PT: ${AGENT_VOICE_PT:-pf_dora}
       AGENT_GREETING: ${AGENT_GREETING:-Hi, I'm listening.}
 
     ports:
