@@ -15,6 +15,7 @@ Two implementations:
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -78,8 +79,10 @@ class OpenAICompatBrain:
         system_prompt: str,
         extra_body: dict[str, Any] | None = None,
         max_tokens: int = 300,
+        session_header: str = "",
     ) -> None:
         self._client = client
+        self._session_header = session_header.strip()
         self._model = model
         self._system_prompt = system_prompt
         self._extra_body = extra_body or {}
@@ -96,6 +99,7 @@ class OpenAICompatBrain:
             stream=True,
             max_tokens=self._max_tokens,
             extra_body=self._extra_body or None,
+            extra_headers=self._headers(call_id),
         )
         try:
             async for chunk in stream:
@@ -110,6 +114,19 @@ class OpenAICompatBrain:
             close = getattr(stream, "close", None) or getattr(stream, "aclose", None)
             if close is not None:
                 await close()
+
+    def _headers(self, call_id: str) -> dict[str, str] | None:
+        """One session per call on endpoints that key conversations by a header.
+
+        Without it a server that derives the session from the first user message
+        (Hermes api_server does) merges two calls that open with the same words.
+        """
+        if not self._session_header or not call_id:
+            return None
+        # Room names from SIP dispatch can carry a phone number and symbols; keep the id
+        # header- and filename-safe (servers store sessions under it) and short.
+        safe = re.sub(r"[^A-Za-z0-9._-]", "-", call_id)[:64]
+        return {self._session_header: f"voice-{safe}"}
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)
@@ -160,6 +177,7 @@ def build_brain(settings: Settings) -> Brain:
             model=settings.AGENT_LLM_MODEL,
             system_prompt=settings.AGENT_SYSTEM_PROMPT,
             extra_body=parse_extra_body(settings.AGENT_LLM_EXTRA_BODY),
+            session_header=settings.AGENT_LLM_SESSION_HEADER,
         )
     if kind == "nats":
         from gateway.agent import NatsAgent

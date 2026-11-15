@@ -44,6 +44,10 @@ services:
       AGENT_LLM_MODEL: ${AGENT_LLM_MODEL:-}
       AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-unused}
       AGENT_LLM_EXTRA_BODY: ${AGENT_LLM_EXTRA_BODY:-}
+      # One brain session per call. The deployed brain (a Hermes api_server)
+      # otherwise keys sessions on the first user message and merges calls.
+      # Set it empty for an endpoint that is not a Hermes api_server.
+      AGENT_LLM_SESSION_HEADER: ${AGENT_LLM_SESSION_HEADER:-X-Hermes-Session-Id}
       AGENT_NATS_URL: ${AGENT_NATS_URL:-}
       AGENT_SELF_NAME: ${AGENT_SELF_NAME:-voice-agent}
       AGENT_PEER: ${AGENT_PEER:-}
