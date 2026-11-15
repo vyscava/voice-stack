@@ -308,3 +308,33 @@ async def test_a_session_started_under_a_cancel_is_closed_not_leaked(fake_engine
         await asyncio.sleep(0.01)
     assert fake_engine.sessions and fake_engine.sessions[0].closed
     assert released.is_set()
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_streams_up_to_the_session_limit_are_served_and_the_next_is_busy(
+    asr_client: TestClient, fake_engine: FakeEngine
+) -> None:
+    stream_factory.set_max_sessions(2)
+    with asr_client.websocket_connect("/v1/stream") as one, asr_client.websocket_connect("/v1/stream") as two:
+        send_audio(one, 1.0)
+        send_audio(two, 1.0)
+        one.send_json({"type": "flush"})
+        two.send_json({"type": "flush"})
+        _, final_one = until_final(one)
+        _, final_two = until_final(two)
+        assert final_one["text"] and final_two["text"]
+        with asr_client.websocket_connect("/v1/stream") as three:
+            assert three.receive_json() == {"type": "error", "code": "busy"}
+    assert wait_until(slot_is_free)
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_release_without_a_claim_is_an_error() -> None:
+    stream_factory.set_max_sessions(1)
+    try:
+        with pytest.raises(RuntimeError):
+            stream_factory.release_stream_slot()
+    finally:
+        stream_factory.set_max_sessions(None)

@@ -16,5 +16,9 @@ def fake_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeEngine]:
     engine = FakeEngine()
     monkeypatch.setattr(stream_factory, "get_stream_config", lambda: config(enabled=True))
     stream_factory.set_stream_engine(engine)
+    # The existing tests are written for one stream per process; tests of the
+    # multi-session limit set their own.
+    stream_factory.set_max_sessions(1)
     yield engine
+    stream_factory.set_max_sessions(None)
     stream_factory.set_stream_engine(None)

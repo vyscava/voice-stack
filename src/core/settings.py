@@ -82,6 +82,10 @@ class Settings(BaseSettings):
         default=False,
         description="Load the streaming model at startup (in the background) instead of on the first connection",
     )
+    ASR_STREAM_MAX_SESSIONS: int = Field(
+        default=2,
+        description="Concurrent streams per process; more get 'busy' (sessions share the weights, so this bounds CPU)",
+    )
     ASR_STREAM_LANGUAGES: str = Field(
         default="en,pt", description="ISO 639-1 codes the text language fallback may answer with"
     )
