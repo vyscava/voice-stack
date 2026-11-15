@@ -63,3 +63,9 @@ def test_deployed_brain_gets_one_session_per_call():
     """The deployed Hermes api_server merges header-less calls that open with the same words."""
     env = _agent_environment()
     assert env["AGENT_LLM_SESSION_HEADER"] == "${AGENT_LLM_SESSION_HEADER:-X-Hermes-Session-Id}"
+
+
+def test_deployed_voices_are_overridable_with_the_chosen_defaults():
+    env = _agent_environment()
+    assert env["AGENT_VOICE_EN"] == "${AGENT_VOICE_EN:-bf_isabella}"
+    assert env["AGENT_VOICE_PT"] == "${AGENT_VOICE_PT:-pf_dora}"
