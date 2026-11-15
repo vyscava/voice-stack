@@ -34,6 +34,15 @@ STT_STREAM_FALLBACKS = Counter(
     ["reason"],
 )
 
+# LiveKit's session "error" events. A TTS failing every request leaves the
+# caller in silence while the process looks healthy; this is how that shows.
+ERRORS = Counter(
+    "voice_agent_errors_total",
+    "Errors LiveKit reported during calls, by component (tts, stt, brain, other) and recoverability.",
+    ["component", "recoverable"],
+)
+_ERROR_COMPONENTS = {"tts_error": "tts", "stt_error": "stt", "llm_error": "brain"}
+
 _STAGE_FIELDS = {
     "eou_metrics": ("end_of_utterance_delay", "eou"),
     "stt_metrics": ("duration", "stt"),
@@ -50,6 +59,15 @@ def record_livekit_metrics(m: Any) -> None:
     value = getattr(m, field, None)
     if isinstance(value, int | float) and value > 0:
         STAGE_SECONDS.labels(stage=stage).observe(float(value))
+
+
+def record_error(ev: Any) -> None:
+    """Count one LiveKit ``error`` event (its ``error`` is a TTSError, STTError, LLMError or other)."""
+    err = getattr(ev, "error", None)
+    component = _ERROR_COMPONENTS.get(getattr(err, "type", ""), "other")
+    recoverable = getattr(err, "recoverable", None)
+    label = "unknown" if recoverable is None else str(bool(recoverable)).lower()
+    ERRORS.labels(component=component, recoverable=label).inc()
 
 
 def render() -> tuple[bytes, str]:

@@ -186,6 +186,10 @@ async def entrypoint(ctx: JobContext) -> None:
     def _on_metrics(ev: Any) -> None:
         metrics.record_livekit_metrics(ev.metrics)
 
+    @session.on("error")
+    def _on_error(ev: Any) -> None:
+        metrics.record_error(ev)
+
     metrics.CALLS.inc()
     logger.info(f"voice call started: {call_id}")
     await session.start(room=ctx.room, agent=agent)
