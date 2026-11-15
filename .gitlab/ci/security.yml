@@ -142,9 +142,6 @@
       - requirements.freeze.txt
       - requirements.audit.txt
       - dist-meta/
-  tags:
-    - docker
-    - nuc
 
 test:freeze:full:
   extends: .freeze-image
