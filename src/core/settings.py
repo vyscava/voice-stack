@@ -310,10 +310,18 @@ class Settings(BaseSettings):
 
     # Spoken lines. Failure must be audible.
     AGENT_GREETING: str = Field(default="Hi, I'm listening.", description="Spoken when a call starts. Empty = none.")
+    # While the brain has said nothing yet: a short acknowledgement first, then a
+    # thinking line if the wait gets long (voice_agent/fillers.py). 0 = off.
+    AGENT_ACK_AFTER_S: float = Field(
+        default=0.4, description="Say a short acknowledgement if the brain has said nothing after this long. 0 = off."
+    )
+    AGENT_ACKS_EN: str = Field(default="Okay.|Sure.|Alright.|Got it.", description="English acks, '|'-separated.")
+    AGENT_ACKS_PT: str = Field(default="Tá.|Certo.|Beleza.|Ok.", description="Portuguese acks, '|'-separated.")
     AGENT_FILLER_AFTER_S: float = Field(
-        default=1.2, description="Speak the filler only if the brain has said nothing after this long."
+        default=2.5, description="Say the thinking line if the brain has still said nothing after this long. 0 = off."
     )
     AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.")
+    AGENT_MSG_FILLER_PT: str = Field(default="Hum, deixa eu pensar.")
     AGENT_MSG_APOLOGY: str = Field(default="Sorry, I can't reach my brain right now. Please try again in a moment.")
 
     # Debug settings

@@ -18,13 +18,14 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from livekit.agents import Agent, AgentSession, JobContext, JobExecutorType, WorkerOptions, stt
+from livekit.agents import Agent, AgentSession, FlushSentinel, JobContext, JobExecutorType, WorkerOptions, stt
 from livekit.plugins import openai, silero
 
 from core.settings import Settings, get_settings
 from voice_agent import metrics
 from voice_agent.brains import Brain, build_brain, history_from_chat_items
-from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_filler
+from voice_agent.fillers import Filler, FillerPicker, parse_phrases
+from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_fillers
 from voice_agent.stream_audio import stream_url
 from voice_agent.stream_stt import AsrStreamSTT
 
@@ -107,6 +108,13 @@ def build_session(settings: Settings, *, vad: Any) -> AgentSession:
     )
 
 
+def build_fillers(settings: Settings) -> FillerPicker:
+    return FillerPicker(
+        acks={"en": parse_phrases(settings.AGENT_ACKS_EN), "pt": parse_phrases(settings.AGENT_ACKS_PT)},
+        think={"en": settings.AGENT_MSG_FILLER, "pt": settings.AGENT_MSG_FILLER_PT},
+    )
+
+
 class VoiceAgent(Agent):
     def __init__(self, *, brain: Brain, settings: Settings, call_id: str) -> None:
         super().__init__(instructions="")
@@ -115,11 +123,14 @@ class VoiceAgent(Agent):
         self._call_id = call_id
         self._turn_id = 0
         self.language: str | None = None
+        self._fillers = build_fillers(settings)
 
-    async def llm_node(self, chat_ctx: Any, tools: Any, model_settings: Any) -> AsyncIterator[str]:  # type: ignore[override]
+    async def llm_node(  # type: ignore[override]
+        self, chat_ctx: Any, tools: Any, model_settings: Any
+    ) -> AsyncIterator[str | FlushSentinel]:
         self._turn_id += 1
         s = self._settings
-        history = history_from_chat_items(chat_ctx.items, strip_prefixes=(s.AGENT_MSG_FILLER,))
+        history = history_from_chat_items(chat_ctx.items, strip_prefixes=self._fillers.phrases())
         started = time.monotonic()
         outcome = {"value": "ok"}
         spoke = {"first": False}
@@ -130,17 +141,25 @@ class VoiceAgent(Agent):
             metrics.BRAIN_FAILURES.labels(kind=kind).inc()
 
         reply = self._brain.reply(history, call_id=self._call_id, turn_id=self._turn_id, language=self.language)
-        filler_pending = True
-        async for chunk in with_filler(
+        lang = self.language
+        stages = [
+            (s.AGENT_ACK_AFTER_S, lambda: self._fillers.ack(lang)),
+            (s.AGENT_FILLER_AFTER_S, lambda: self._fillers.think(lang)),
+        ]
+        async for chunk in with_fillers(
             guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=s.AGENT_MSG_APOLOGY, on_failure=failed),
-            after_s=s.AGENT_FILLER_AFTER_S,
-            filler=s.AGENT_MSG_FILLER,
+            stages=stages,
         ):
-            if filler_pending and chunk == s.AGENT_MSG_FILLER and not spoke["first"]:
-                filler_pending = False  # the filler is ours, not the brain's
-            elif not spoke["first"]:
+            if isinstance(chunk, Filler):
+                metrics.FILLERS.labels(kind=chunk.kind).inc()
+                yield chunk + " "  # ours, not the brain's
+                # End the TTS segment now. Without this LiveKit's sentence tokenizer
+                # holds a line under 20 characters until more text arrives, and the
+                # ack would only be heard glued to the brain's first sentence.
+                yield FlushSentinel()
+                continue
+            if not spoke["first"]:
                 spoke["first"] = True
-                filler_pending = False
                 if outcome["value"] == "ok":  # an apology is not brain latency
                     metrics.STAGE_SECONDS.labels(stage="brain_first_text").observe(time.monotonic() - started)
             yield chunk
