@@ -104,3 +104,19 @@ async def test_each_final_reports_the_streamed_audio_as_usage(endpoint):
     kinds = [e.type for e in events]
     assert kinds.index("final_transcript") < kinds.index("recognition_usage")
     assert abs(events[-1].recognition_usage.audio_duration - 3.0) < 0.01
+
+
+async def test_each_final_reports_only_its_own_audio(endpoint):
+    _, url = endpoint
+    plugin = AsrStreamSTT(url=url, batch=FakeBatch(), vad=None)
+    stream = plugin.stream()
+    stream.push_frame(frame_from_pcm16(pcm(2.0)))
+    stream.flush()
+    first = await collect_until(stream, "recognition_usage")
+    stream.push_frame(frame_from_pcm16(pcm(1.0)))
+    stream.flush()
+    second = await collect_until(stream, "recognition_usage")
+    await stream.aclose()
+
+    assert abs(first[-1].recognition_usage.audio_duration - 2.0) < 0.01
+    assert abs(second[-1].recognition_usage.audio_duration - 1.0) < 0.01

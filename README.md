@@ -251,8 +251,8 @@ mount a volume on the Hugging Face cache
 `ASR_DEVICE=cpu` keeps the model on the CPU; any other value lets Transformers place it
 (`device_map="auto"`).
 
-**Protocol.** One stream per process: a second connection gets `{"type":"error","code":"busy"}` and
-close code 1013.
+**Protocol.** Up to `ASR_STREAM_MAX_SESSIONS` streams per process (default 2); one more connection gets
+`{"type":"error","code":"busy"}` and close code 1013.
 
 1. Optionally send `{"type":"start","sample_rate":16000}` (only 16 kHz is accepted).
 2. Send binary frames of 16 kHz mono PCM16 little-endian audio.

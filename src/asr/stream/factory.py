@@ -1,5 +1,5 @@
 """
-Process-wide state for streaming ASR: the lazily-loaded engine and the single stream slot.
+Process-wide state for streaming ASR: the lazily-loaded engine and the stream slots.
 
 Mirrors ``asr.engine_factory``: a double-checked, lock-guarded singleton built
 from settings on first use, plus a ``set_stream_engine`` test hook so the
