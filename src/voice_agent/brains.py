@@ -53,9 +53,17 @@ def history_from_chat_items(items: Iterable[Any], *, strip_prefixes: tuple[str, 
             continue
         text = text.strip()
         if role == "assistant":
-            for prefix in (p for p in strip_prefixes if p):
-                if text.startswith(prefix):
-                    text = text[len(prefix) :].strip()
+            # Repeat: a turn can open with an ack and then a thinking line.
+            stripped = True
+            while stripped:
+                stripped = False
+                for prefix in (p for p in strip_prefixes if p):
+                    if text.startswith(prefix):
+                        text = text[len(prefix) :].strip()
+                        stripped = True
+            # The caller cut a filler off mid-word ("Oka", "Hmm, let"): nothing the brain said.
+            if text and any(p.startswith(text) for p in strip_prefixes if p):
+                text = ""
         if text:
             turns.append(Turn(role=role, text=text))
     return turns

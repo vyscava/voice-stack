@@ -1,8 +1,8 @@
 """Turn policy: pure functions, so every branch is testable without LiveKit.
 
 * ``voice_for_language`` picks the reply voice from the language ASR detected.
-* ``with_filler`` says something short only when the brain is slow, because a
-  filler in front of a fast answer only adds delay.
+* ``with_fillers`` says short lines of its own while the brain has said
+  nothing yet, each at its own deadline (see fillers.py).
 * ``guarded`` makes a dead or silent brain audible: a caller who hears nothing
   cannot tell a pause from a crash, and talks over it.
 * ``preemptive_generation_allowed`` keeps speculative replies away from a NATS
@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -32,14 +32,29 @@ def preemptive_generation_allowed(enabled: bool, brain: str) -> bool:
     return enabled and brain.strip().lower() == "openai"
 
 
-async def with_filler(chunks: AsyncIterator[str], *, after_s: float, filler: str) -> AsyncIterator[str]:
-    """Yield ``filler`` first only if the first chunk takes longer than ``after_s``."""
+Line = str | Callable[[], str | None] | None
+
+
+async def with_fillers(chunks: AsyncIterator[str], *, stages: Sequence[tuple[float, Line]]) -> AsyncIterator[str]:
+    """Yield each stage's line when its deadline passes before the first chunk.
+
+    ``stages`` are ``(seconds after the call, line)``. A line may be a callable,
+    called only when its deadline passes (so a rotating pick is not used up on
+    a fast turn). A deadline <= 0, or a line that is or returns ``None``/empty,
+    is skipped. Once the first chunk arrives no further line is spoken.
+    """
     iterator = chunks.__aiter__()
     first = asyncio.ensure_future(iterator.__anext__())
     try:
-        done, _ = await asyncio.wait({first}, timeout=after_s)
-        if not done and filler:
-            yield filler
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        for at_s, line in sorted((st for st in stages if st[1] and st[0] > 0), key=lambda st: st[0]):
+            done, _ = await asyncio.wait({first}, timeout=max(0.0, started + at_s - loop.time()))
+            if done:
+                break
+            text = line() if callable(line) else line
+            if text:
+                yield text
         try:
             chunk = await first
         except StopAsyncIteration:
@@ -50,6 +65,12 @@ async def with_filler(chunks: AsyncIterator[str], *, after_s: float, filler: str
     finally:
         if not first.done():
             first.cancel()
+
+
+async def with_filler(chunks: AsyncIterator[str], *, after_s: float, filler: str) -> AsyncIterator[str]:
+    """Yield ``filler`` first only if the first chunk takes longer than ``after_s``."""
+    async for chunk in with_fillers(chunks, stages=[(after_s, filler)]):
+        yield chunk
 
 
 async def guarded(

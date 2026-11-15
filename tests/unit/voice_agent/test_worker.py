@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
+from livekit.agents import FlushSentinel
 
 from core.settings import Settings
 from voice_agent import metrics, worker
@@ -241,3 +243,136 @@ def test_unknown_stt_mode_fails_at_startup():
 def test_preemptive_generation_only_for_the_openai_brain(flag, brain, enabled):
     th = worker.turn_handling(_settings(AGENT_PREEMPTIVE_GENERATION=flag, AGENT_BRAIN=brain))
     assert th["preemptive_generation"] == {"enabled": enabled}
+
+
+class SlowBrain:
+    def __init__(self, delay: float, text: str = "Answer."):
+        self.delay, self.text = delay, text
+
+    async def reply(self, history, *, call_id, turn_id, language):
+        await asyncio.sleep(self.delay)
+        yield self.text
+
+
+def _filler_settings(**kw):
+    base = {
+        "AGENT_ACK_AFTER_S": 0.03,
+        "AGENT_FILLER_AFTER_S": 0.12,
+        "AGENT_ACKS_EN": "Okay.|Sure.",
+        "AGENT_ACKS_PT": "Tá.",
+    }
+    base.update(kw)
+    return _settings(**base)
+
+
+def _fillers(kind):
+    return metrics.FILLERS.labels(kind=kind)._value.get()
+
+
+FLUSH = "<flush>"
+
+
+def _shape(out):
+    return [FLUSH if isinstance(c, FlushSentinel) else c for c in out]
+
+
+def _brain_latency():
+    for m in metrics.STAGE_SECONDS.collect():
+        for smp in m.samples:
+            if smp.labels.get("stage") == "brain_first_text":
+                if smp.name.endswith("_sum"):
+                    total = smp.value
+                elif smp.name.endswith("_count"):
+                    count = smp.value
+    return count, total
+
+
+@pytest.mark.asyncio
+async def test_slow_brain_gets_an_ack_in_the_callers_language_and_it_is_not_brain_latency():
+    agent = worker.VoiceAgent(brain=SlowBrain(0.08, "Resposta."), settings=_filler_settings(), call_id="c")
+    agent.language = "pt"
+    acks_before = _fillers("ack")
+    count0, sum0 = _brain_latency()
+    out = [c async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)]
+    assert _shape(out) == ["Tá. ", FLUSH, "Resposta."]
+    assert _fillers("ack") == acks_before + 1
+    count1, sum1 = _brain_latency()
+    assert count1 == count0 + 1
+    assert sum1 - sum0 >= 0.07, "brain latency must be the brain's words, not the ack"
+
+
+@pytest.mark.asyncio
+async def test_very_slow_brain_gets_ack_then_thinking_line_each_flushed():
+    agent = worker.VoiceAgent(brain=SlowBrain(0.25), settings=_filler_settings(), call_id="c")
+    out = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    assert _shape(out) == ["Okay. ", FLUSH, "Hmm, let me think. ", FLUSH, "Answer."]
+
+
+@pytest.mark.asyncio
+async def test_a_fast_turn_does_not_use_up_an_ack():
+    class FastThenSlow:
+        def __init__(self):
+            self.n = 0
+
+        async def reply(self, history, *, call_id, turn_id, language):
+            self.n += 1
+            if self.n > 1:
+                await asyncio.sleep(0.08)
+            yield "A."
+
+    agent = worker.VoiceAgent(brain=FastThenSlow(), settings=_filler_settings(), call_id="c")
+    assert [c async for c in agent.llm_node(_chat_ctx(("user", "1")), None, None)] == ["A."]
+    out = [c async for c in agent.llm_node(_chat_ctx(("user", "2")), None, None)]
+    assert _shape(out) == ["Okay. ", FLUSH, "A."]
+
+
+@pytest.mark.asyncio
+async def test_dead_slow_brain_gets_fillers_then_the_apology():
+    settings = _filler_settings(AGENT_BRAIN_TIMEOUT_S=0.2, AGENT_MSG_APOLOGY="Sorry!")
+    agent = worker.VoiceAgent(brain=SlowBrain(1.0), settings=settings, call_id="c")
+    out = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    assert _shape(out) == ["Okay. ", FLUSH, "Hmm, let me think. ", FLUSH, "Sorry!"]
+
+
+@pytest.mark.asyncio
+async def test_fast_brain_gets_no_filler():
+    agent = worker.VoiceAgent(brain=ScriptedBrain("Quick."), settings=_filler_settings(), call_id="c")
+    assert [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)] == ["Quick."]
+
+
+@pytest.mark.asyncio
+async def test_ack_and_thinking_line_are_stripped_from_the_history_sent_to_the_brain():
+    brain = ScriptedBrain("ok")
+    agent = worker.VoiceAgent(brain=brain, settings=_filler_settings(), call_id="c")
+    ctx = _chat_ctx(("user", "q1"), ("assistant", "Sure. Hmm, let me think. Answer one."), ("user", "q2"))
+    _ = [c async for c in agent.llm_node(ctx, None, None)]
+    assert brain.seen[0][0] == [Turn("user", "q1"), Turn("assistant", "Answer one."), Turn("user", "q2")]
+
+
+@pytest.mark.asyncio
+async def test_a_filler_cut_off_mid_word_is_dropped_but_the_brains_own_okay_is_kept():
+    brain = ScriptedBrain("ok")
+    agent = worker.VoiceAgent(brain=brain, settings=_filler_settings(), call_id="c")
+    ctx = _chat_ctx(
+        ("user", "q1"),
+        ("assistant", "Oka"),
+        ("user", "q2"),
+        ("assistant", "Okay. Hmm, let"),
+        ("user", "q3"),
+        ("assistant", "Okay, the answer is four."),
+        ("user", "q4"),
+    )
+    _ = [c async for c in agent.llm_node(ctx, None, None)]
+    assert brain.seen[0][0] == [
+        Turn("user", "q1"),
+        Turn("user", "q2"),
+        Turn("user", "q3"),
+        Turn("assistant", "Okay, the answer is four."),
+        Turn("user", "q4"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_acks_can_be_turned_off():
+    agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=_filler_settings(AGENT_ACK_AFTER_S=0), call_id="c")
+    assert [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)] == ["Answer."]

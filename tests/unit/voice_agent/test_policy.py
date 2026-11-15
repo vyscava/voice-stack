@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_filler
+from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_filler, with_fillers
 
 
 async def _collect(gen) -> list[str]:
@@ -120,3 +120,78 @@ def test_preemptive_generation_never_reaches_a_nats_peer():
     assert preemptive_generation_allowed(True, " OpenAI ") is True
     assert preemptive_generation_allowed(True, "nats") is False
     assert preemptive_generation_allowed(False, "openai") is False
+
+
+@pytest.mark.asyncio
+async def test_fillers_fast_brain_gets_none():
+    out = await _collect(with_fillers(_source("Hi"), stages=[(0.2, "Okay."), (0.4, "Hmm.")]))
+    assert out == ["Hi"]
+
+
+@pytest.mark.asyncio
+async def test_fillers_only_the_stages_that_expire_before_the_first_words():
+    out = await _collect(with_fillers(_source("Hi", delay=0.15), stages=[(0.03, "Okay."), (0.5, "Hmm.")]))
+    assert out == ["Okay.", "Hi"]
+
+
+@pytest.mark.asyncio
+async def test_fillers_slow_brain_gets_ack_then_thinking_line_in_order():
+    out = await _collect(with_fillers(_source("Hi", delay=0.25), stages=[(0.1, "Hmm."), (0.03, "Okay.")]))
+    assert out == ["Okay.", "Hmm.", "Hi"]
+
+
+@pytest.mark.asyncio
+async def test_fillers_deadlines_count_from_the_start_not_from_the_previous_line():
+    """The second line comes at its own deadline, not ack + deadline."""
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    gen = with_fillers(_source("Hi", delay=0.6), stages=[(0.15, "Okay."), (0.25, "Hmm.")])
+    seen = [(chunk, loop.time() - t0) async for chunk in gen]
+    assert [c for c, _ in seen] == ["Okay.", "Hmm.", "Hi"]
+    assert seen[1][1] < 0.35  # from the start: 0.25 s; from the previous line it would be 0.40 s
+
+
+@pytest.mark.asyncio
+async def test_fillers_disabled_or_empty_stages_are_skipped():
+    out = await _collect(with_fillers(_source("Hi", delay=0.1), stages=[(0, "Okay."), (0.02, None), (0.03, "")]))
+    assert out == ["Hi"]
+
+
+@pytest.mark.asyncio
+async def test_fillers_call_a_callable_line_only_when_its_deadline_passes():
+    calls: list[str] = []
+
+    def pick():
+        calls.append("x")
+        return "Okay."
+
+    assert await _collect(with_fillers(_source("Hi"), stages=[(0.2, pick)])) == ["Hi"]
+    assert calls == []
+    assert await _collect(with_fillers(_source("Hi", delay=0.1), stages=[(0.02, pick)])) == ["Okay.", "Hi"]
+    assert calls == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_fillers_cancelled_mid_wait_leave_nothing_pending():
+    seen: list[str] = []
+
+    async def slow_brain():
+        try:
+            await asyncio.sleep(10)
+            yield "never"
+        except asyncio.CancelledError:
+            seen.append("cancelled")
+            raise
+
+    async def consume():
+        async for _ in with_fillers(slow_brain(), stages=[(0.01, "Okay."), (5, "Hmm.")]):
+            pass
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert seen == ["cancelled"]
+    pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
+    assert pending == []

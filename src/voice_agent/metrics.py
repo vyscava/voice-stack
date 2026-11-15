@@ -28,6 +28,7 @@ TURNS = Counter("voice_agent_turns_total", "Turns answered, by outcome.", ["outc
 BRAIN_FAILURES = Counter("voice_agent_brain_failures_total", "Brain replies replaced by an apology, by kind.", ["kind"])
 BARGE_INS = Counter("voice_agent_barge_ins_total", "Times the caller started talking while the agent spoke.")
 CALLS = Counter("voice_agent_calls_total", "Calls started.")
+FILLERS = Counter("voice_agent_fillers_total", "Lines the agent said itself before the brain spoke, by kind.", ["kind"])
 STT_STREAM_FALLBACKS = Counter(
     "voice_agent_stt_stream_fallbacks_total",
     "Calls that switched from streaming ASR to batch STT, by reason (busy, disabled, connect, stall, error).",
