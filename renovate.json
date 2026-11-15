@@ -39,6 +39,18 @@
       "matchManagers": ["gitlabci"],
       "groupName": "gitlab ci templates",
       "enabled": true
+    },
+    {
+      "description": "livekit-agents ~=1.8 publishes only for Python <3.15: a 3.15 base image cannot install the agent extra. Lift when livekit-agents supports 3.15.",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.15"
+    },
+    {
+      "description": "torchaudio is in maintenance (2.11 is its last line) and no longer moves with torch. 2.11.0 is measured against the pinned torch (scripts/assert_runtime.py runs its ops at build time); 2.11.1 fails to load its extension against torch 2.15.0. Change it only with a torch bump that passes the runtime assert for every build variant.",
+      "matchManagers": ["pep621"],
+      "matchPackageNames": ["torchaudio"],
+      "allowedVersions": "2.11.0"
     }
   ]
 }
