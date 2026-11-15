@@ -329,6 +329,7 @@ class TTSBase(ABC):
                 target_format=props.response_format,
                 sample_rate=self.sample_rate,
                 channels=1,
+                mp3_bitrate=settings.TTS_MP3_BITRATE,
             )
 
         if props.stream_format == "audio":

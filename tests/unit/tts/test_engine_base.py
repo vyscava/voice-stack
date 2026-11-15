@@ -793,3 +793,36 @@ def test_in_use_releases_its_inflight_slot_when_the_reload_fails() -> None:
         eng.speech()
     assert eng._state()["inflight"] == 0
     assert eng._model_loaded is False  # the next request retries the load
+
+
+def test_package_audio_passes_the_configured_mp3_bitrate(monkeypatch):
+    """The setting must reach the encoder; the encoder's own default would hide a dropped wire."""
+    import numpy as np
+
+    from tts.engine import base
+
+    seen = {}
+
+    def fake_encode(**kwargs):
+        seen.update(kwargs)
+        return b"mp3"
+
+    from utils.audio import ffmpeg_helper
+
+    # base.package_audio imports the encoder at call time, so patch it at its source.
+    monkeypatch.setattr(ffmpeg_helper, "encode_audio_from_wav_bytes", fake_encode)
+    monkeypatch.setattr(base.settings, "TTS_MP3_BITRATE", "96k")
+
+    class Engine(TTSBase):
+        def __init__(self) -> None:
+            self.sample_rate = 24000
+
+        def _load_model(self): ...
+        def _unload_model(self): ...
+        def speech(self, **kwargs): ...
+        def list_voices(self): ...
+
+    out = Engine().package_audio(np.zeros(2400, dtype=np.float32), PropsConf(input="x", response_format="mp3"))
+    assert out == b"mp3"
+    assert seen["mp3_bitrate"] == "96k"
+    assert seen["target_format"] == "mp3"

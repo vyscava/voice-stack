@@ -519,10 +519,14 @@ def encode_audio_from_wav_bytes(
     target_format: str,  # "mp3"|"opus"|"aac"|"flac"|"wav"|"pcm"
     sample_rate: int = 24000,
     channels: int = 1,
+    mp3_bitrate: str = "128k",
 ) -> bytes:
     """
     Transcode WAV-in-memory to the requested target format using ffmpeg-python,
     falling back to ffmpeg CLI on error. For "pcm", returns raw s16le (no header).
+
+    ``mp3_bitrate`` is passed to the MP3 encoder: without it ffmpeg picks
+    32 kbps for 24 kHz mono, which audibly removes most sound above 8 kHz.
 
     Requires a working ffmpeg binary on PATH.
     """
@@ -549,7 +553,7 @@ def encode_audio_from_wav_bytes(
                 ar=sample_rate,
             )
         elif tf == "mp3":
-            out = ffmpeg.output(stream, "pipe:1", format="mp3", ac=channels, ar=sample_rate)
+            out = ffmpeg.output(stream, "pipe:1", format="mp3", ac=channels, ar=sample_rate, audio_bitrate=mp3_bitrate)
         elif tf == "flac":
             out = ffmpeg.output(stream, "pipe:1", format="flac", ac=channels, ar=sample_rate)
         elif tf == "aac":
@@ -573,10 +577,10 @@ def encode_audio_from_wav_bytes(
         return encoded_bytes
     except Exception:
         # CLI fallback
-        return _encode_with_cli(wav_bytes, tf, sample_rate, channels)
+        return _encode_with_cli(wav_bytes, tf, sample_rate, channels, mp3_bitrate)
 
 
-def _encode_with_cli(wav_bytes: bytes, tf: str, sr: int, ch: int) -> bytes:
+def _encode_with_cli(wav_bytes: bytes, tf: str, sr: int, ch: int, mp3_bitrate: str = "128k") -> bytes:
     import tempfile
 
     with (
@@ -601,7 +605,7 @@ def _encode_with_cli(wav_bytes: bytes, tf: str, sr: int, ch: int) -> bytes:
         if tf == "pcm":
             cmd += ["-f", "s16le", "-acodec", "pcm_s16le", fout.name]
         elif tf == "mp3":
-            cmd += ["-f", "mp3", fout.name]
+            cmd += ["-b:a", mp3_bitrate, "-f", "mp3", fout.name]
         elif tf == "flac":
             cmd += ["-f", "flac", fout.name]
         elif tf == "aac":

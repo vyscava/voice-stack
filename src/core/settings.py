@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     TTS_MODEL: str = Field(default="tts_models/multilingual/multi-dataset/xtts_v2")
     TTS_VOICES_DIR: str = Field(default="voices")
     TTS_SAMPLE_RATE: int = Field(default=24000)
+    TTS_MP3_BITRATE: str = Field(
+        default="128k",
+        pattern=r"^[1-9][0-9]{1,2}k$",
+        description="MP3 output bitrate (e.g. 96k, 128k). ffmpeg's default for 24 kHz mono is a muffled 32k.",
+    )
 
     TTS_MAX_CHARS: int = Field(default=180)
     TTS_MIN_CHARS: int = Field(default=70)
