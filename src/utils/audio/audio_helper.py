@@ -15,7 +15,7 @@ What this module provides
    - Silero v6 as the ONNX model bundled with faster-whisper, run on onnxruntime.
    - Apply VAD to PCM16 audio and stitch speech-only regions together.
    - No torch on this path: the slim image ships without it.
-     torch/torchaudio remain optional, imported lazily, for resampling only.
+   Resampling uses resampy only (no torchaudio, which is end of line).
 """
 
 from __future__ import annotations
@@ -74,14 +74,7 @@ def decode_with_soundfile(*, raw_bytes: bytes) -> tuple[npt.NDArray[np.float32],
 
 
 def _torch_available() -> bool:
-    """
-    Cheap probe to check if PyTorch is importable.
-
-    Notes
-    -----
-    - We import inside the function to keep module import time minimal.
-    - Returning False means: use CPU-only fallbacks (e.g., resampy).
-    """
+    """Cheap probe: is PyTorch importable? (Imported lazily to keep module import fast.)"""
     try:
         import torch  # noqa: F401
 
@@ -133,136 +126,24 @@ def pick_torch_device(prefer: tuple[str, ...] = ("mps", "cuda", "cpu")) -> str:
     return "cpu"
 
 
-def _to_torch_device(x: Any, device: str) -> Any:
+def resample_to_16k_mono(*, audio_f32: npt.NDArray[np.float32], sr: int) -> tuple[npt.NDArray[np.float32], int]:
     """
-    Move a torch object (Tensor/Module/Transform) to the requested device.
+    Return the audio as mono float32 at 16 kHz, the rate speech models expect.
 
-    - For "cpu", this is a no-op except ensuring .to("cpu") existence.
-    - For "mps"/"cuda", we call `.to(device)`.
-
-    This is a tiny wrapper to keep call-sites clean and avoid repeating guards.
+    Stereo is averaged to mono. Resampling uses resampy (band-limited sinc,
+    CPU). It used to try torchaudio first, but torchaudio is end of line (2.11
+    is its last release and it no longer moves with torch), the slim image has
+    no torch at all and already took this path in production, and a few
+    seconds of speech resample in milliseconds either way.
     """
-    try:
-        return x.to(device)
-    except AttributeError:
-        return x  # e.g., if x is a plain Python object
-
-
-def _resample_torch_audio(
-    *,
-    audio_f32: npt.NDArray[np.float32],
-    sr: int,
-    target_sr: int = 16000,
-    prefer: tuple[str, ...] = ("mps", "cuda", "cpu"),
-) -> tuple[npt.NDArray[np.float32], int]:
-    """
-    Resample using TorchAudio's highly optimized C++ resampler.
-
-    Device behavior
-    ---------------
-    - Automatically selects "mps" (Apple GPU), "cuda" (NVIDIA GPU), or "cpu".
-    - On GPU/MPS, tensors and the Resample transform are moved to that device.
-    - If torch/torchaudio are unavailable, the caller should fall back.
-
-    Parameters
-    ----------
-    audio_f32 : np.ndarray (float32)
-        Mono waveform in [-1, 1].
-    sr : int
-        Current sample rate.
-    target_sr : int
-        Desired sample rate (default 16 kHz).
-    prefer : tuple[str, ...]
-        Ordered device preferences.
-
-    Returns
-    -------
-    (np.ndarray, int)
-        Resampled mono waveform (float32) and the new sample rate.
-    """
-    import torch
-    import torchaudio
-
-    device = pick_torch_device(prefer)
-    x = torch.from_numpy(np.ascontiguousarray(audio_f32)).to(device=device, dtype=torch.float32)
-
-    if sr != target_sr:
-        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=target_sr)
-        resampler = _to_torch_device(resampler, device)
-        x = resampler(x)
-        sr = target_sr
-
-    return x.to("cpu").numpy().astype("float32", copy=False), sr
-
-
-def resample_to_16k_mono(
-    *,
-    audio_f32: npt.NDArray[np.float32],
-    sr: int,
-    prefer: tuple[str, ...] = ("mps", "cuda", "cpu"),
-) -> tuple[npt.NDArray[np.float32], int]:
-    """
-    Ensure an audio array is mono float32 @ 16 kHz.
-
-    This function standardizes audio for speech processing or model input.
-    It collapses stereo to mono (if needed) and resamples to 16 kHz using:
-
-      1) TorchAudio (with device selection: MPS/CUDA/CPU) — primary path
-      2) resampy (CPU, Python-level)                      — fallback (high quality but slower)
-
-    Parameters
-    ----------
-    audio_f32 : np.ndarray
-        The input audio samples (float32). Can be mono or stereo.
-    sr : int
-        The current sample rate (Hz).
-    prefer : tuple[str, ...]
-        Ordered device preferences for torch (default: ("mps", "cuda", "cpu")).
-
-    Returns
-    -------
-    tuple[np.ndarray, int]
-        - A 1D NumPy array (mono) in float32, resampled to 16 kHz.
-        - The new sample rate (always 16000).
-
-    Why 16 kHz?
-    -----------
-    - 16 kHz is the standard sample rate for speech recognition models
-      such as Whisper, Wav2Vec2, and DeepSpeech.
-    - It provides sufficient frequency resolution for human speech while
-      keeping model input sizes and compute costs manageable.
-
-    Notes on performance
-    --------------------
-    - TorchAudio path typically runs in ~10–30 ms for a few seconds of audio on CPU,
-      and can be faster on MPS/CUDA.
-    - resampy provides excellent quality but is slower (Python-heavy).
-    """
-
-    # Collapse stereo to mono if needed by averaging channels.
     if audio_f32.ndim == 2:
         audio_f32 = audio_f32.mean(axis=1)
-
-    # Already 16 kHz? Just standardize dtype and return.
     if sr == 16000:
         return audio_f32.astype("float32", copy=False), 16000
 
-    # Try TorchAudio first (GPU/MPS/CPU)
-    if _torch_available():
-        try:
-            y, new_sr = _resample_torch_audio(audio_f32=audio_f32, sr=sr, target_sr=16000, prefer=prefer)
-            return y, new_sr
-        except Exception:
-            pass  # fall through to resampy
+    import resampy  # local import: only ASR images ship it
 
-    # Fallback: resampy (CPU)
-    try:
-        import resampy  # local import to keep it optional
-
-        y = resampy.resample(audio_f32, sr, 16000).astype("float32", copy=False)
-        return y, 16000
-    except Exception as e:
-        raise RuntimeError("No resampler available (torch/torchaudio or resampy)") from e
+    return resampy.resample(audio_f32, sr, 16000).astype("float32", copy=False), 16000
 
 
 # Silero's own get_speech_timestamps() defaults (silero-vad 6.x). faster-whisper's
