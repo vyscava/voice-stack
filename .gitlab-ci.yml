@@ -216,6 +216,11 @@ quality:fmt:
   # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
   tags:
     - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: quality
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
@@ -238,6 +243,11 @@ quality:lint:
   # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
   tags:
     - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: quality
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
@@ -311,6 +321,11 @@ unit:core:
   # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
   tags:
     - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
@@ -364,6 +379,11 @@ unit:gateway:
   # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
   tags:
     - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
@@ -392,6 +412,11 @@ unit:agent:
   # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
   tags:
     - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
   # Only the CI image (when this pipeline rebuilds it), not the whole
   # build stage: no waiting on the prod image build these jobs never use.
