@@ -17,6 +17,11 @@ services:
 
     environment:
       SERVICE_MODE: tts
+      # Resident memory crept ~465 MiB -> ~925 MiB in ~10 h until the memory
+      # guard 503'd every synthesis. Each serving thread gets its own glibc
+      # malloc arena that is rarely returned to the OS; two arenas bound that
+      # fragmentation. Watch voice_agent_errors_total{component="tts"}.
+      MALLOC_ARENA_MAX: "2"
       ENV: production
       LOG_LEVEL: info
       HOST: 0.0.0.0

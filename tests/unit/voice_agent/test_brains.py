@@ -158,3 +158,36 @@ def test_build_brain_passes_the_inbox_prefix_setting():
     """AGENT_NATS_INBOX_PREFIX reaches the NatsAgent."""
     brain = build_brain(Settings(AGENT_BRAIN="nats", AGENT_NATS_INBOX_PREFIX="_INBOX.voice-agent"))
     assert brain._agent._inbox_prefix == "_INBOX.voice-agent"
+
+
+async def test_a_cancelled_reply_closes_the_http_stream():
+    """A barge-in stops the generator after the first piece: the stream must be closed, not left open."""
+    closed: list[bool] = []
+
+    class Stream:
+        def __init__(self) -> None:
+            self._pieces = iter(["Hello", " there", " friend"])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return _chunk(next(self._pieces))
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+        async def close(self) -> None:
+            closed.append(True)
+
+    class Completions:
+        async def create(self, **kwargs):
+            return Stream()
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    gen = OpenAICompatBrain(client=client, model="m", system_prompt="p").reply(
+        [], call_id="c", turn_id=1, language=None
+    )
+    assert await gen.__anext__() == "Hello"
+    await gen.aclose()
+    assert closed == [True]

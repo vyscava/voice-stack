@@ -89,11 +89,19 @@ class OpenAICompatBrain:
             max_tokens=self._max_tokens,
             extra_body=self._extra_body or None,
         )
-        async for chunk in stream:
-            choices = getattr(chunk, "choices", None) or []
-            piece = choices[0].delta.content if choices else None
-            if piece:
-                yield piece
+        try:
+            async for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                piece = choices[0].delta.content if choices else None
+                if piece:
+                    yield piece
+        finally:
+            # A barge-in or a discarded generation cancels this generator. Close
+            # the HTTP stream then, so the endpoint stops generating for nobody
+            # instead of waiting for garbage collection to drop the connection.
+            close = getattr(stream, "close", None) or getattr(stream, "aclose", None)
+            if close is not None:
+                await close()
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)
