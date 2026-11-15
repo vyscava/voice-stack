@@ -27,7 +27,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 async def endpoint(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[tuple[FakeEngine, str]]:
-    engine = FakeEngine(language="pt")
+    engine = FakeEngine()  # its default tags the stream <pt-BR> after the second word
     monkeypatch.setattr(stream_factory, "get_stream_config", lambda: config(enabled=True))
     stream_factory.set_stream_engine(engine)
     app = FastAPI()
