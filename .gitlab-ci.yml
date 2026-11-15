@@ -213,6 +213,9 @@ default:
     - cd /workspace
 
 quality:fmt:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: quality
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -227,6 +230,9 @@ quality:fmt:
     - git diff --exit-code
 
 quality:lint:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: quality
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -282,6 +288,9 @@ unit:tts:
     expire_in: 1 week
 
 unit:core:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: test
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -322,6 +331,9 @@ unit:utils:
     expire_in: 1 week
 
 unit:gateway:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: test
   rules:
     - if: '$CI_COMMIT_TAG'
@@ -342,6 +354,9 @@ unit:gateway:
     expire_in: 1 week
 
 unit:agent:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: test
   rules:
     - if: '$CI_COMMIT_TAG'
