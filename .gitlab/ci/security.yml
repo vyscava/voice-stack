@@ -4,10 +4,12 @@
 # Every job carries a fail-closed guard: a scanner's silent fake-pass shape
 # (exit 0 while scanning nothing) is a RED job, not a green one.
 #
-#   test:secrets:mr          gitleaks over the MR commit range. The GitLab
-#                            Secret-Detection template (included in
-#                            .gitlab-ci.yml) only runs on branch pipelines.
-#   test:sast:semgrep        semgrep with a LOCAL rules file (.semgrep/rules.yml)
+#   test:secrets:mr          gitleaks over the MR commit range, and
+#   test:sast:semgrep        semgrep with the LOCAL rules file (.semgrep/rules.yml):
+#                            both come from the shared security.yml template
+#                            (included in .gitlab-ci.yml). The GitLab
+#                            Secret-Detection template only runs on branch
+#                            pipelines.
 #   test:audit:{full,kokoro} pip-audit of the Python set INSIDE each built image
 #   test:scan:trivy:{full,kokoro}  trivy OS-package scan of each published image
 #
@@ -227,135 +229,6 @@ test:audit:agent:
   needs:
     - job: test:freeze:agent
       artifacts: true
-
-# ---------------------------------------------------------------------------
-# Semgrep SAST with a vendored rules file. See .semgrep/rules.yml for why no
-# registry packs. The explicit `.` target is REQUIRED: the semgrep image sets
-# SEMGREP_IN_DOCKER=1 and, with no explicit target, chdirs to /src and dies
-# with exit 2 and no report.
-# ---------------------------------------------------------------------------
-test:sast:semgrep:
-  stage: security
-  image:
-    name: semgrep/semgrep@sha256:ae27024c16f7848cdbfd49c24ed0b78b13f13b85fcd7b87c679aaa8b0c0dce98
-    entrypoint: [""]
-  needs: []
-  before_script: []
-  variables:
-    SEMGREP_SEND_METRICS: "off"
-  script:
-    - semgrep --version
-    - |
-      set +e
-      semgrep scan -j 1 --verbose --config .semgrep/rules.yml --json --output semgrep-report.json .
-      scan_rc=$?
-      export SCAN_EXIT=${scan_rc}
-      echo "SCAN_EXIT=${scan_rc}"
-      ls -la semgrep-report.json 2>&1 || true
-    # Fail-closed: a config/runtime failure exits 0/2 with no report. The
-    # severity decision happens HERE: the scan runs ALL rules; the guard fails
-    # only on ERROR-severity findings (WARNING stays report-only).
-    - |
-      python3 - <<'PY'
-      import json, sys, os
-      rc = int(os.environ.get("SCAN_EXIT", "0"))
-      try:
-          rep = json.load(open("semgrep-report.json"))
-      except FileNotFoundError:
-          print("FAIL: semgrep-report.json missing - scan did not run")
-          sys.exit(1)
-      except json.JSONDecodeError as e:
-          print("FAIL: semgrep-report.json unparsable: %s" % e)
-          sys.exit(1)
-      if "results" not in rep:
-          print("FAIL: report has no results key - scan did not run")
-          sys.exit(1)
-      errs = rep.get("errors") or []
-      if errs:
-          print("FAIL: semgrep reported %d config/runtime errors: %s" % (len(errs), errs[0].get("message")))
-          sys.exit(1)
-      scanned = rep.get("paths", {}).get("scanned") or []
-      if not scanned:
-          print("FAIL: paths.scanned is empty - scan covered no files")
-          sys.exit(1)
-      results = rep.get("results") or []
-      err_findings = [r for r in results if (r.get("extra") or {}).get("severity") == "ERROR"]
-      warn_findings = len(results) - len(err_findings)
-      if err_findings:
-          for r in err_findings:
-              print("  %s:%s %s" % (r["path"], r["start"]["line"], r["check_id"]))
-          print("FAIL: %d ERROR-severity findings (%d WARNING report-only)" % (len(err_findings), warn_findings))
-          sys.exit(1)
-      print("ok   semgrep scanned %d files: %d WARNING findings, no ERROR" % (len(scanned), warn_findings))
-      sys.exit(rc)
-      PY
-  artifacts:
-    when: always
-    expire_in: 1 week
-    paths:
-      - semgrep-report.json
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-
-# ---------------------------------------------------------------------------
-# gitleaks over the MR commit range (the Secret-Detection template covers
-# branch pipelines only). Range scan: only the MR's commits, so it cannot fail
-# on pre-existing history, which is what makes blocking safe.
-# ---------------------------------------------------------------------------
-test:secrets:mr:
-  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
-  tags:
-    - cpu
-  stage: security
-  image:
-    name: zricethezav/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055
-    entrypoint: [""]
-  needs: []
-  before_script: []
-  variables:
-    GIT_DEPTH: "0"   # the diff-base SHA must be resolvable for a range scan
-  script:
-    - gitleaks version
-    - |
-      BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
-      if [ -z "${BASE}" ]; then
-        echo "FAIL: CI_MERGE_REQUEST_DIFF_BASE_SHA is empty - cannot compute a diff range"
-        exit 1
-      fi
-      if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-        echo "FAIL: diff base ${BASE} is not a resolvable commit in this checkout"
-        exit 1
-      fi
-      if ! git merge-base --is-ancestor "${BASE}" HEAD; then
-        echo "FAIL: diff base ${BASE} is not an ancestor of HEAD - range would scan unrelated history"
-        exit 1
-      fi
-      COMMITS=$(git rev-list --count "${BASE}..HEAD")
-      if [ "${COMMITS}" -lt 1 ]; then
-        echo "FAIL: zero commits in range ${BASE}..HEAD - a zero-commit scan trivially reports no leaks"
-        exit 1
-      fi
-      echo "ok   range ${BASE}..HEAD contains ${COMMITS} commit(s)"
-      gitleaks git \
-        --log-opts="${BASE}..HEAD" \
-        --redact \
-        --report-format json --report-path gitleaks-mr.json \
-        --exit-code 1 2>&1 | tee gitleaks-mr.log
-      GL_EXIT=${PIPESTATUS[0]}
-      if grep -q "no leaks found in partial scan" gitleaks-mr.log; then
-        echo "FAIL: partial scan - the diff-base range did not resolve (upstream #1450 trap), scan did not run"
-        exit 1
-      fi
-      exit ${GL_EXIT}
-  artifacts:
-    when: always
-    expire_in: 1 week
-    paths:
-      - gitleaks-mr.log
-      - gitleaks-mr.json
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 # ---------------------------------------------------------------------------
 # Trivy scan of each PUBLISHED image (SHA tag, pre-promotion).
