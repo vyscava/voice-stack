@@ -153,10 +153,16 @@
       docker cp /tmp/speech.opus smoke-asr-${CI_JOB_ID}:/tmp/speech.opus
       docker exec smoke-asr-${CI_JOB_ID} curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions \
         -F 'file=@/tmp/speech.opus;type=audio/ogg' -F 'model=whisper-1' -o /tmp/asr.json
-      docker exec smoke-asr-${CI_JOB_ID} grep -qi 'smoke' /tmp/asr.json \
-        || { echo "FAIL: transcript did not contain the spoken phrase"; \
-             docker exec smoke-asr-${CI_JOB_ID} cat /tmp/asr.json || true; exit 1; }
-      echo "OK: ASR booted and transcribed the synthesised clip."
+      docker exec smoke-asr-${CI_JOB_ID} cat /tmp/asr.json > asr-smoke.json
+      # XTTS samples, so a word can come out garbled ("Smoke test one two three."
+      # once transcribed as "Test 1, 2, 3"). Require two distinct words of the
+      # phrase: real speech passes, silence or noise ("Thank you.") does not.
+      # Captured to a file first: grep under pipefail must not see a closed pipe.
+      hits=$({ grep -oiwE 'smoke|test|one|two|three|1|2|3' asr-smoke.json || true; } \
+        | tr 'A-Z' 'a-z' | sed 's/^1$/one/;s/^2$/two/;s/^3$/three/' | sort -u | wc -l)
+      [ "$hits" -ge 2 ] \
+        || { echo "FAIL: transcript has $hits of the spoken words"; cat asr-smoke.json; exit 1; }
+      echo "OK: ASR booted and transcribed the synthesised clip ($hits phrase words)."
 
       echo "--- ASR VAD: really trims silence ---"
       # The service treats a VAD that fails to load as "transcribe without
