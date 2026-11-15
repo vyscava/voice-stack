@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from livekit.agents import Agent, AgentSession, FlushSentinel, JobContext, JobExecutorType, WorkerOptions, stt
+from livekit.agents.voice.background_audio import BackgroundAudioPlayer
 from livekit.plugins import openai, silero
 
 from core.settings import Settings, get_settings
@@ -28,6 +29,7 @@ from voice_agent.fillers import Filler, FillerPicker, parse_phrases
 from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_fillers
 from voice_agent.stream_audio import stream_url
 from voice_agent.stream_stt import AsrStreamSTT
+from voice_agent.ticks import BackgroundTicker, NullTicker, Ticker
 
 # Never contacted: llm_node is overridden. Port 9 is discard.
 _PLACEHOLDER_LLM_URL = "http://127.0.0.1:9/v1"
@@ -116,8 +118,9 @@ def build_fillers(settings: Settings) -> FillerPicker:
 
 
 class VoiceAgent(Agent):
-    def __init__(self, *, brain: Brain, settings: Settings, call_id: str) -> None:
+    def __init__(self, *, brain: Brain, settings: Settings, call_id: str, ticker: Ticker | None = None) -> None:
         super().__init__(instructions="")
+        self._ticker: Ticker = ticker or NullTicker()
         self._brain = brain
         self._settings = settings
         self._call_id = call_id
@@ -146,23 +149,29 @@ class VoiceAgent(Agent):
             (s.AGENT_ACK_AFTER_S, lambda: self._fillers.ack(lang)),
             (s.AGENT_FILLER_AFTER_S, lambda: self._fillers.think(lang)),
         ]
-        async for chunk in with_fillers(
-            guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=s.AGENT_MSG_APOLOGY, on_failure=failed),
-            stages=stages,
-        ):
-            if isinstance(chunk, Filler):
-                metrics.FILLERS.labels(kind=chunk.kind).inc()
-                yield chunk + " "  # ours, not the brain's
-                # End the TTS segment now. Without this LiveKit's sentence tokenizer
-                # holds a line under 20 characters until more text arrives, and the
-                # ack would only be heard glued to the brain's first sentence.
-                yield FlushSentinel()
-                continue
-            if not spoke["first"]:
-                spoke["first"] = True
-                if outcome["value"] == "ok":  # an apology is not brain latency
-                    metrics.STAGE_SECONDS.labels(stage="brain_first_text").observe(time.monotonic() - started)
-            yield chunk
+        try:
+            async for chunk in with_fillers(
+                guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=s.AGENT_MSG_APOLOGY, on_failure=failed),
+                stages=stages,
+            ):
+                if isinstance(chunk, Filler):
+                    metrics.FILLERS.labels(kind=chunk.kind).inc()
+                    self._ticker.stop()  # never tick over our own words
+                    yield chunk + " "  # ours, not the brain's
+                    # End the TTS segment now. Without this LiveKit's sentence tokenizer
+                    # holds a line under 20 characters until more text arrives, and the
+                    # ack would only be heard glued to the brain's first sentence.
+                    yield FlushSentinel()
+                    self._ticker.start()  # "loading" ticks fill the wait after the line
+                    continue
+                if not spoke["first"]:
+                    spoke["first"] = True
+                    self._ticker.stop()
+                    if outcome["value"] == "ok":  # an apology is not brain latency
+                        metrics.STAGE_SECONDS.labels(stage="brain_first_text").observe(time.monotonic() - started)
+                yield chunk
+        finally:
+            self._ticker.stop()  # barge-in or error: never leave the ticks running
         metrics.TURNS.labels(outcome=outcome["value"]).inc()
 
 
@@ -174,7 +183,18 @@ async def entrypoint(ctx: JobContext) -> None:
     # to this call's event loop.
     brain = build_brain(settings)
     ctx.add_shutdown_callback(brain.aclose)
-    agent = VoiceAgent(brain=brain, settings=settings, call_id=call_id)
+    ticker: Ticker | None = None
+    if settings.AGENT_TICKS:
+        player = BackgroundAudioPlayer()
+        await player.start(room=ctx.room)
+        ctx.add_shutdown_callback(player.aclose)
+        ticker = BackgroundTicker(
+            player,
+            delay_s=settings.AGENT_TICKS_DELAY_S,
+            volume=settings.AGENT_TICKS_VOLUME,
+            interval_s=settings.AGENT_TICKS_INTERVAL_S,
+        )
+    agent = VoiceAgent(brain=brain, settings=settings, call_id=call_id, ticker=ticker)
     vad = await asyncio.to_thread(shared_vad)  # first load reads the model from disk
     session = build_session(settings, vad=vad)
     state = {"agent": "initializing", "voice": settings.AGENT_VOICE_EN}

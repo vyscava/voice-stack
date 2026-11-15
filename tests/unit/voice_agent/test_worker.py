@@ -376,3 +376,58 @@ async def test_a_filler_cut_off_mid_word_is_dropped_but_the_brains_own_okay_is_k
 async def test_acks_can_be_turned_off():
     agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=_filler_settings(AGENT_ACK_AFTER_S=0), call_id="c")
     assert [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)] == ["Answer."]
+
+
+class RecordingTicker:
+    def __init__(self):
+        self.events: list[str] = []
+
+    def start(self):
+        self.events.append("start")
+
+    def stop(self):
+        self.events.append("stop")
+
+
+@pytest.mark.asyncio
+async def test_ticks_run_from_the_ack_until_the_brains_first_words():
+    ticker = RecordingTicker()
+    agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=_filler_settings(), call_id="c", ticker=ticker)
+    seen = [(_shape([c])[0], list(ticker.events)) async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    # started right after the ack's flush; stopped before the answer is yielded
+    assert seen[1] == (FLUSH, ["stop"])
+    assert seen[2] == ("Answer.", ["stop", "start", "stop"])
+
+
+@pytest.mark.asyncio
+async def test_ticks_pause_for_the_thinking_line_and_resume():
+    ticker = RecordingTicker()
+    agent = worker.VoiceAgent(brain=SlowBrain(0.25), settings=_filler_settings(), call_id="c", ticker=ticker)
+    _ = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    assert ticker.events[:4] == ["stop", "start", "stop", "start"]
+    assert ticker.events[-1] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_fast_brain_never_ticks():
+    ticker = RecordingTicker()
+    agent = worker.VoiceAgent(brain=ScriptedBrain("Quick."), settings=_filler_settings(), call_id="c", ticker=ticker)
+    _ = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    assert "start" not in ticker.events
+
+
+@pytest.mark.asyncio
+async def test_barge_in_stops_the_ticks():
+    ticker = RecordingTicker()
+    agent = worker.VoiceAgent(brain=SlowBrain(5), settings=_filler_settings(), call_id="c", ticker=ticker)
+    gen = agent.llm_node(_chat_ctx(("user", "hi")), None, None)
+    assert await gen.__anext__() == "Okay. "
+    await gen.__anext__()  # the flush
+    task = asyncio.ensure_future(gen.__anext__())  # ticks start; waiting on the brain
+    await asyncio.sleep(0.02)
+    assert ticker.events[-1] == "start"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await gen.aclose()
+    assert ticker.events[-1] == "stop"
