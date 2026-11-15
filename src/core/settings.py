@@ -318,8 +318,14 @@ class Settings(BaseSettings):
     AGENT_ACKS_EN: str = Field(default="Okay.|Sure.|Alright.|Got it.", description="English acks, '|'-separated.")
     AGENT_ACKS_PT: str = Field(default="Tá.|Certo.|Beleza.|Ok.", description="Portuguese acks, '|'-separated.")
     AGENT_FILLER_AFTER_S: float = Field(
-        default=2.5, description="Say the thinking line if the brain has still said nothing after this long. 0 = off."
+        default=6.0, description="Say the thinking line if the brain has still said nothing after this long. 0 = off."
     )
+    # Soft "loading" ticks on the background audio track between the ack and the
+    # brain's first words (voice_agent/ticks.py).
+    AGENT_TICKS: bool = Field(default=True, description="Play soft ticks while waiting after the acknowledgement.")
+    AGENT_TICKS_DELAY_S: float = Field(default=0.8, description="Start the ticks this long after the ack is sent.")
+    AGENT_TICKS_VOLUME: float = Field(default=0.25, description="Tick volume, 0.0-1.0.")
+    AGENT_TICKS_INTERVAL_S: float = Field(default=0.45, description="Time between ticks.")
     AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.")
     AGENT_MSG_FILLER_PT: str = Field(default="Hum, deixa eu pensar.")
     AGENT_MSG_APOLOGY: str = Field(default="Sorry, I can't reach my brain right now. Please try again in a moment.")
