@@ -206,8 +206,11 @@ def worker_options(settings: Settings) -> WorkerOptions:
         ws_url=settings.LIVEKIT_URL,
         api_key=settings.LIVEKIT_API_KEY,
         api_secret=settings.LIVEKIT_API_SECRET,
-        # LiveKit assigns a new room's job once and drops it if no runner can take it
-        # right then ("no workers with sufficient capacity"): with one warm runner, the
-        # second of two calls arriving together never got an agent (measured 2026-11-15).
+        # Simultaneous arrivals: with no call running, LiveKit estimates each job's load as
+        # load_threshold (0.7 in prod) / num_idle_processes and reserves that per job it
+        # answers "available" to. With 1, the first reservation already reaches 0.7, so a
+        # second call arriving in the same instant is refused ("no workers with sufficient
+        # capacity") and never retried: that caller waited in an empty room (measured
+        # 2026-11-15). N here admits N arrivals at once; it also keeps N runners warm.
         num_idle_processes=max(1, settings.AGENT_IDLE_RUNNERS),
     )

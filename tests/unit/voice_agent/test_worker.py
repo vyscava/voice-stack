@@ -54,8 +54,43 @@ def test_worker_runs_calls_as_threads():
     assert opts.ws_url == "ws://lk:7880"
 
 
-def test_two_warm_runners_by_default_so_simultaneous_calls_both_get_an_agent():
-    """LiveKit drops a room's job it cannot assign at once: one warm runner lost the second call."""
+def _simultaneous_arrivals_admitted(num_idle_processes: int) -> int:
+    """How many jobs LiveKit's own availability check admits at one instant, with no call running.
+
+    Drives the installed livekit-agents AgentServer._is_available() and its reservation
+    counter (private API: if they move, this fails loudly rather than passing).
+    """
+    import types
+
+    from livekit.agents import JobExecutorType
+    from livekit.agents import worker as lk_worker
+
+    server = lk_worker.AgentServer(
+        job_executor_type=JobExecutorType.THREAD,
+        num_idle_processes=num_idle_processes,
+        ws_url="ws://lk",
+        api_key="k",
+        api_secret="s",
+    )
+    server._devmode, server._draining, server._simulation = False, False, False
+    server._worker_load, server._reserved_slots = 0.0, 0
+    server._proc_pool = types.SimpleNamespace(processes=[])  # no call running
+    admitted = 0
+    for _ in range(4):
+        if server._is_available():
+            server._reserved_slots += 1
+            admitted += 1
+    return admitted
+
+
+def test_two_simultaneous_calls_are_both_admitted_by_default():
+    """One runner admitted one arrival at a time: the second of two simultaneous calls got no agent."""
+    assert _simultaneous_arrivals_admitted(1) == 1  # the measured failure
+    default = worker.worker_options(_settings()).num_idle_processes
+    assert _simultaneous_arrivals_admitted(default) == 2
+
+
+def test_the_idle_runner_setting_is_clamped_and_overridable():
     assert worker.worker_options(_settings()).num_idle_processes == 2
     assert worker.worker_options(_settings(AGENT_IDLE_RUNNERS=3)).num_idle_processes == 3
     assert worker.worker_options(_settings(AGENT_IDLE_RUNNERS=0)).num_idle_processes == 1

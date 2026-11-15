@@ -295,8 +295,8 @@ class Settings(BaseSettings):
     AGENT_IDLE_RUNNERS: int = Field(
         default=2,
         description=(
-            "Warm job runners kept ready. LiveKit drops a job it cannot assign at once (no retry), so two calls"
-            " arriving together need two warm runners; match ASR_STREAM_MAX_SESSIONS."
+            "Calls the worker admits arriving at the same instant (LiveKit's per-job load estimate is"
+            " load_threshold / this; a refused job is never retried). Match ASR_STREAM_MAX_SESSIONS."
         ),
     )
     AGENT_MIN_ENDPOINTING_DELAY_S: float = Field(default=0.5, description="Silence that ends a turn.")
