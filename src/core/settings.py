@@ -333,6 +333,9 @@ class Settings(BaseSettings):
     AGENT_TICKS_DELAY_S: float = Field(default=0.8, description="Start the ticks this long after the ack is sent.")
     AGENT_TICKS_VOLUME: float = Field(default=0.25, description="Tick volume, 0.0-1.0.")
     AGENT_TICKS_INTERVAL_S: float = Field(default=0.45, description="Time between ticks.")
+    AGENT_TICKS_MAX_TAIL_S: float = Field(
+        default=2.0, description="After the brain's first words, stop the ticks this long later even if no audio came."
+    )
     AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.")
     AGENT_MSG_FILLER_PT: str = Field(default="Hum, deixa eu pensar.")
     AGENT_MSG_APOLOGY: str = Field(default="Sorry, I can't reach my brain right now. Please try again in a moment.")

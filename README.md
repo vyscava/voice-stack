@@ -444,9 +444,10 @@ What it does on its own:
   ack in the caller's language ("Okay.", "Certo."), rotating through
   `AGENT_ACKS_EN` / `AGENT_ACKS_PT` (`|`-separated). 0 turns it off.
 - **Loading ticks:** after the ack, a soft "tuk ... tuk" plays on the
-  background audio track until the brain's first words (`AGENT_TICKS`,
-  `AGENT_TICKS_DELAY_S`, `AGENT_TICKS_VOLUME`, `AGENT_TICKS_INTERVAL_S`), so
-  the wait never sounds like a dropped call. The sound is generated in code.
+  background audio track until the brain's answer starts sounding (`AGENT_TICKS`,
+  `AGENT_TICKS_DELAY_S`, `AGENT_TICKS_VOLUME`, `AGENT_TICKS_INTERVAL_S`;
+  `AGENT_TICKS_MAX_TAIL_S` stops them if that audio never comes), so the wait
+  never sounds like a dropped call. The sound is generated in code.
 - **Slow brain:** if it is still silent after `AGENT_FILLER_AFTER_S` (6 s),
   a thinking line follows (`AGENT_MSG_FILLER`, `AGENT_MSG_FILLER_PT`). A fast
   answer gets none of these, and no filler is sent back to the brain as history.

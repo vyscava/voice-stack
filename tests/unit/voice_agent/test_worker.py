@@ -388,15 +388,87 @@ class RecordingTicker:
     def stop(self):
         self.events.append("stop")
 
+    def stop_later(self, delay_s):
+        self.events.append(f"stop_later:{delay_s}")
+
 
 @pytest.mark.asyncio
-async def test_ticks_run_from_the_ack_until_the_brains_first_words():
+async def test_ticks_run_from_the_ack_and_outlive_the_brains_text_until_its_audio():
+    ticker = RecordingTicker()
+    settings = _filler_settings(AGENT_TICKS_MAX_TAIL_S=1.5)
+    agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=settings, call_id="c", ticker=ticker)
+    seen = [(_shape([c])[0], list(ticker.events)) async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    # quiet at the turn start; ticks started after the ack's flush
+    assert seen[1] == (FLUSH, ["stop", "stop"])
+    # the answer's text does not stop them: only a deadline is armed
+    assert seen[2] == ("Answer.", ["stop", "stop", "start", "stop_later:1.5"])
+    assert ticker.events[-1] == "stop_later:1.5", "a normal end leaves the ticks for the answer's audio"
+
+
+@pytest.mark.asyncio
+async def test_the_answers_first_audio_frame_stops_the_ticks(monkeypatch):
+    async def fake_tts(agent, text, model_settings):
+        async for _ in text:
+            pass
+        yield "frame-1"
+        yield "frame-2"
+
+    monkeypatch.setattr(worker.Agent.default, "tts_node", fake_tts)
+
+    async def words(*xs):
+        for x in xs:
+            yield x
+
     ticker = RecordingTicker()
     agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=_filler_settings(), call_id="c", ticker=ticker)
-    seen = [(_shape([c])[0], list(ticker.events)) async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
-    # started right after the ack's flush; stopped before the answer is yielded
-    assert seen[1] == (FLUSH, ["stop"])
-    assert seen[2] == ("Answer.", ["stop", "start", "stop"])
+    _ = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    n = len(ticker.events)
+    tts = agent.tts_node(words("Answer."), None)
+    assert await tts.__anext__() == "frame-1"
+    assert ticker.events[n:] == ["stop"], "stopped as the first frame goes out, not at the end"
+    assert [f async for f in tts] == ["frame-2"]
+    assert ticker.events[n:] == ["stop"], "exactly one stop"
+
+
+@pytest.mark.asyncio
+async def test_filler_audio_does_not_stop_the_ticks(monkeypatch):
+    async def fake_tts(agent, text, model_settings):
+        yield "frame"
+
+    monkeypatch.setattr(worker.Agent.default, "tts_node", fake_tts)
+    ticker = RecordingTicker()
+    agent = worker.VoiceAgent(brain=SlowBrain(5), settings=_filler_settings(), call_id="c", ticker=ticker)
+    gen = agent.llm_node(_chat_ctx(("user", "hi")), None, None)
+    assert await gen.__anext__() == "Okay. "
+    await gen.__anext__()  # flush; ticks are told to start on the next pull
+    n = len(ticker.events)
+    _ = [f async for f in agent.tts_node(_one("Okay. "), None)]  # the ack's own audio
+    assert ticker.events[n:] == []
+    await gen.aclose()
+
+
+async def _one(x):
+    yield x
+
+
+@pytest.mark.asyncio
+async def test_tts_interrupted_before_the_answer_sounds_stops_the_ticks(monkeypatch):
+    async def fake_tts(agent, text, model_settings):
+        await asyncio.sleep(10)
+        yield "never"
+
+    monkeypatch.setattr(worker.Agent.default, "tts_node", fake_tts)
+    ticker = RecordingTicker()
+    agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=_filler_settings(), call_id="c", ticker=ticker)
+    _ = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    tts = agent.tts_node(_one("Answer."), None)
+    task = asyncio.ensure_future(tts.__anext__())
+    await asyncio.sleep(0.02)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await tts.aclose()
+    assert ticker.events[-1] == "stop"
 
 
 @pytest.mark.asyncio
@@ -404,8 +476,8 @@ async def test_ticks_pause_for_the_thinking_line_and_resume():
     ticker = RecordingTicker()
     agent = worker.VoiceAgent(brain=SlowBrain(0.25), settings=_filler_settings(), call_id="c", ticker=ticker)
     _ = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
-    assert ticker.events[:4] == ["stop", "start", "stop", "start"]
-    assert ticker.events[-1] == "stop"
+    assert ticker.events[:5] == ["stop", "stop", "start", "stop", "start"]
+    assert ticker.events[-1].startswith("stop_later:")
 
 
 @pytest.mark.asyncio
