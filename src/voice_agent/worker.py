@@ -15,9 +15,10 @@ import asyncio
 import logging
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 
+from livekit import rtc
 from livekit.agents import Agent, AgentSession, FlushSentinel, JobContext, JobExecutorType, WorkerOptions, stt
 from livekit.agents.voice.background_audio import BackgroundAudioPlayer
 from livekit.plugins import openai, silero
@@ -121,6 +122,9 @@ class VoiceAgent(Agent):
     def __init__(self, *, brain: Brain, settings: Settings, call_id: str, ticker: Ticker | None = None) -> None:
         super().__init__(instructions="")
         self._ticker: Ticker = ticker or NullTicker()
+        # Set when the brain's first words are on their way to TTS: the ticks keep
+        # going until that audio starts (tts_node), so the wait has no silent tail.
+        self._ticks_until_audio = False
         self._brain = brain
         self._settings = settings
         self._call_id = call_id
@@ -149,6 +153,9 @@ class VoiceAgent(Agent):
             (s.AGENT_ACK_AFTER_S, lambda: self._fillers.ack(lang)),
             (s.AGENT_FILLER_AFTER_S, lambda: self._fillers.think(lang)),
         ]
+        self._ticks_until_audio = False
+        self._ticker.stop()  # a new turn starts quiet
+        completed = False
         try:
             async for chunk in with_fillers(
                 guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=s.AGENT_MSG_APOLOGY, on_failure=failed),
@@ -166,13 +173,34 @@ class VoiceAgent(Agent):
                     continue
                 if not spoke["first"]:
                     spoke["first"] = True
-                    self._ticker.stop()
+                    # Keep ticking until the answer's audio starts (tts_node); the
+                    # deadline covers a TTS that never produces any.
+                    self._ticks_until_audio = True
+                    self._ticker.stop_later(s.AGENT_TICKS_MAX_TAIL_S)
                     if outcome["value"] == "ok":  # an apology is not brain latency
                         metrics.STAGE_SECONDS.labels(stage="brain_first_text").observe(time.monotonic() - started)
                 yield chunk
+            completed = True
         finally:
-            self._ticker.stop()  # barge-in or error: never leave the ticks running
+            if not (completed and self._ticks_until_audio):
+                self._ticks_until_audio = False
+                self._ticker.stop()  # barge-in or error: never leave the ticks running
         metrics.TURNS.labels(outcome=outcome["value"]).inc()
+
+    async def tts_node(  # type: ignore[override]
+        self, text: AsyncIterable[str], model_settings: Any
+    ) -> AsyncIterator[rtc.AudioFrame]:
+        """LiveKit's TTS, plus: stop the ticks when the brain's answer starts sounding."""
+        try:
+            async for frame in Agent.default.tts_node(self, text, model_settings):
+                if self._ticks_until_audio:
+                    self._ticks_until_audio = False
+                    self._ticker.stop()
+                yield frame
+        finally:
+            if self._ticks_until_audio:  # interrupted before the answer was heard
+                self._ticks_until_audio = False
+                self._ticker.stop()
 
 
 async def entrypoint(ctx: JobContext) -> None:

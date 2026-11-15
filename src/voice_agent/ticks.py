@@ -54,6 +54,8 @@ class Ticker(Protocol):
 
     def stop(self) -> None: ...
 
+    def stop_later(self, delay_s: float) -> None: ...
+
 
 class NullTicker:
     """Ticks turned off (and the default in tests)."""
@@ -62,6 +64,9 @@ class NullTicker:
         return None
 
     def stop(self) -> None:
+        return None
+
+    def stop_later(self, delay_s: float) -> None:
         return None
 
 
@@ -76,8 +81,10 @@ class BackgroundTicker:
         self._interval_s = interval_s
         self._pending: asyncio.Task[None] | None = None
         self._handle: Any = None
+        self._deadline: asyncio.TimerHandle | None = None
 
     def start(self) -> None:
+        self._cancel_deadline()
         if self._pending is not None or self._handle is not None:
             return
         self._pending = asyncio.ensure_future(self._start_later())
@@ -90,7 +97,18 @@ class BackgroundTicker:
         self._handle = self._player.play(cfg)
         self._pending = None
 
+    def stop_later(self, delay_s: float) -> None:
+        """Safety net: stop after ``delay_s`` unless stopped (or restarted) first."""
+        self._cancel_deadline()
+        self._deadline = asyncio.get_running_loop().call_later(delay_s, self.stop)
+
+    def _cancel_deadline(self) -> None:
+        if self._deadline is not None:
+            self._deadline.cancel()
+            self._deadline = None
+
     def stop(self) -> None:
+        self._cancel_deadline()
         if self._pending is not None:
             self._pending.cancel()
             self._pending = None

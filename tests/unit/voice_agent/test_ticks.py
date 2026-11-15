@@ -90,3 +90,24 @@ async def test_start_twice_plays_once_and_stop_is_idempotent():
     t.start()
     await asyncio.sleep(0.05)
     assert len(player.played) == 2, "a stopped ticker can tick again on the next wait"
+
+
+@pytest.mark.asyncio
+async def test_stop_later_stops_unless_restarted_or_stopped_first():
+    player = FakePlayer()
+    t = _ticker(player, delay=0.0)
+    t.start()
+    await asyncio.sleep(0.01)
+    t.stop_later(0.03)
+    await asyncio.sleep(0.01)
+    assert not player.handles[0].stopped
+    await asyncio.sleep(0.04)
+    assert player.handles[0].stopped, "the deadline stops ticks nobody stopped"
+
+    t.start()
+    await asyncio.sleep(0.01)
+    t.stop_later(0.03)
+    t.start()  # a new wait cancels the old deadline
+    await asyncio.sleep(0.05)
+    assert not player.handles[1].stopped
+    t.stop()
