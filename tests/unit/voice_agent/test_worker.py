@@ -154,3 +154,48 @@ async def test_failure_after_first_words_is_partial_and_apology_is_not_latency()
     )
     assert [c async for c in dead.llm_node(_chat_ctx(("user", "hi")), None, None)] == ["Sorry!"]
     assert latency_count() == count_before, "an apology must not be recorded as brain latency"
+
+
+@pytest.mark.asyncio
+async def test_stt_mode_defaults_to_batch(monkeypatch):
+    monkeypatch.delenv("AGENT_STT_MODE", raising=False)
+    from livekit.plugins import openai
+
+    assert isinstance(worker.build_stt(_settings(), vad=None), openai.STT)
+
+
+@pytest.mark.asyncio
+async def test_stt_mode_stream_from_env_derives_the_websocket_url(monkeypatch):
+    from voice_agent.stream_stt import AsrStreamSTT
+
+    monkeypatch.setenv("AGENT_STT_MODE", "stream")
+    session = worker.build_session(_settings(), vad=None)
+    assert isinstance(session.stt, AsrStreamSTT)
+    assert session.stt.url == "ws://asr:5001/v1/stream"
+    # The fallback is the same batch STT batch mode would use.
+    assert session.stt.batch._opts.detect_language is True
+    assert str(session.stt.batch._client.base_url).rstrip("/") == "http://asr:5001/v1"
+
+
+@pytest.mark.asyncio
+async def test_stt_stream_url_override(monkeypatch):
+    monkeypatch.setenv("AGENT_STT_MODE", "stream")
+    monkeypatch.setenv("AGENT_ASR_STREAM_URL", "wss://stream.example/v1/stream")
+    monkeypatch.setenv("AGENT_ASR_STREAM_FINAL_TIMEOUT_S", "1.5")
+    plugin = worker.build_stt(_settings(), vad=None)
+    assert plugin.url == "wss://stream.example/v1/stream"
+    assert plugin.final_timeout_s == 1.5
+
+
+def test_unknown_stt_mode_fails_at_startup():
+    with pytest.raises(ValueError, match="AGENT_STT_MODE"):
+        worker.worker_options(_settings(AGENT_STT_MODE="streaming"))
+
+
+@pytest.mark.parametrize(
+    ("flag", "brain", "enabled"),
+    [(True, "openai", True), (True, "nats", False), (False, "openai", False), (False, "nats", False)],
+)
+def test_preemptive_generation_only_for_the_openai_brain(flag, brain, enabled):
+    th = worker.turn_handling(_settings(AGENT_PREEMPTIVE_GENERATION=flag, AGENT_BRAIN=brain))
+    assert th["preemptive_generation"] == {"enabled": enabled}

@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from voice_agent.policy import guarded, voice_for_language, with_filler
+from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_filler
 
 
 async def _collect(gen) -> list[str]:
@@ -114,3 +114,9 @@ async def test_barge_in_cancels_the_brain_and_leaves_nothing_pending():
     assert seen == ["cancelled"]
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
     assert pending == []
+
+
+def test_preemptive_generation_never_reaches_a_nats_peer():
+    assert preemptive_generation_allowed(True, " OpenAI ") is True
+    assert preemptive_generation_allowed(True, "nats") is False
+    assert preemptive_generation_allowed(False, "openai") is False

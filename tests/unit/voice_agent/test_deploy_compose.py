@@ -31,6 +31,14 @@ def test_every_brain_setting_is_forwarded():
     assert not missing, f"settings never reach the container: {sorted(missing)}"
 
 
+def test_stt_and_preemptive_settings_are_forwarded_with_safe_defaults():
+    env = _agent_environment()
+    assert env["AGENT_STT_MODE"] == "${AGENT_STT_MODE:-batch}"
+    assert env["AGENT_ASR_STREAM_URL"] == "${AGENT_ASR_STREAM_URL:-}"
+    assert env["AGENT_ASR_STREAM_FINAL_TIMEOUT_S"] == "${AGENT_ASR_STREAM_FINAL_TIMEOUT_S:-2.0}"
+    assert env["AGENT_PREEMPTIVE_GENERATION"] == "${AGENT_PREEMPTIVE_GENERATION:-false}"
+
+
 def test_api_key_falls_back_to_the_settings_default_not_empty():
     # An empty bearer is not the same as "no key needed": keep the settings default when unset.
     assert _agent_environment()["AGENT_LLM_API_KEY"] == "${AGENT_LLM_API_KEY:-unused}"

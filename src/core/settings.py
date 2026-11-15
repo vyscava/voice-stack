@@ -220,6 +220,18 @@ class Settings(BaseSettings):
     AGENT_WEB_PORT: int = Field(default=5004, description="Port of the built-in call page, token, health, metrics.")
     AGENT_ASR_URL: str = Field(default="http://localhost:5001", description="Base URL of the ASR service.")
     AGENT_TTS_URL: str = Field(default="http://localhost:5002", description="Base URL of the TTS service.")
+    # How the caller's speech reaches ASR. batch: one HTTP request per VAD
+    # segment. stream: the ASR /v1/stream WebSocket, partials while they speak;
+    # falls back to batch for the call when the stream refuses or fails.
+    AGENT_STT_MODE: str = Field(default="batch", description="batch | stream")
+    AGENT_ASR_STREAM_URL: str = Field(
+        default="", description="ASR streaming WebSocket URL. Empty = AGENT_ASR_URL as ws(s)://.../v1/stream."
+    )
+    AGENT_ASR_STREAM_FINAL_TIMEOUT_S: float = Field(
+        default=2.0,
+        description="A stream that sends no final this long after a flush, or blocks a send this long, has "
+        "stalled: the call falls back to batch.",
+    )
 
     LIVEKIT_URL: str = Field(default="ws://localhost:7880", description="LiveKit server URL the worker connects to.")
     LIVEKIT_API_KEY: str = Field(default="", description="LiveKit API key (worker registration and call tokens).")
@@ -269,6 +281,11 @@ class Settings(BaseSettings):
     AGENT_MIN_ENDPOINTING_DELAY_S: float = Field(default=0.5, description="Silence that ends a turn.")
     AGENT_MAX_ENDPOINTING_DELAY_S: float = Field(default=3.0, description="Upper bound on that wait.")
     AGENT_MAX_USER_TURN_S: float = Field(default=20.0, description="A turn ends after this long even without silence.")
+    # Speculative replies before the turn is final. Applies to the openai brain
+    # only: a NATS peer would receive every discarded speculative turn.
+    AGENT_PREEMPTIVE_GENERATION: bool = Field(
+        default=False, description="Start the reply before the turn is final (openai brain only)."
+    )
 
     # Spoken lines. Failure must be audible.
     AGENT_GREETING: str = Field(default="Hi, I'm listening.", description="Spoken when a call starts. Empty = none.")
