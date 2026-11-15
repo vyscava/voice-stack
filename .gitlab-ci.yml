@@ -189,6 +189,8 @@ build:prod-image:
     # The deploy jobs (.gitlab/ci/deploy.yml) pin exactly this build.
     - echo "VOICE_STACK_PUBLISHED_IMAGE=${KOKORO_IMAGE_SHA}" > deploy.env
     - echo "VOICE_AGENT_PUBLISHED_IMAGE=${AGENT_IMAGE_SHA}" >> deploy.env
+    # Streaming ASR needs torch, so it runs from the full image.
+    - echo "VOICE_STACK_FULL_PUBLISHED_IMAGE=${PROD_IMAGE_SHA}" >> deploy.env
     - echo "Image will be promoted to latest in release stage after all checks pass"
 
   artifacts:
@@ -213,7 +215,20 @@ default:
     - cd /workspace
 
 quality:fmt:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: quality
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -227,7 +242,20 @@ quality:fmt:
     - git diff --exit-code
 
 quality:lint:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: quality
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -243,6 +271,11 @@ quality:lint:
 
 unit:asr:
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -262,7 +295,20 @@ unit:asr:
     expire_in: 1 week
 
 unit:tts:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -282,7 +328,20 @@ unit:tts:
     expire_in: 1 week
 
 unit:core:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -302,7 +361,20 @@ unit:core:
     expire_in: 1 week
 
 unit:utils:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -322,7 +394,20 @@ unit:utils:
     expire_in: 1 week
 
 unit:gateway:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -342,7 +427,20 @@ unit:gateway:
     expire_in: 1 week
 
 unit:agent:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
+  # The cpu runner never builds ci:latest, so a cached copy would go stale
+  # after a rebuild: check the registry digest on every job.
+  image:
+    name: $CI_IMAGE
+    pull_policy: [always, if-not-present]
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never
@@ -363,6 +461,11 @@ unit:agent:
 
 integration:
   stage: test
+  # Only the CI image (when this pipeline rebuilds it), not the whole
+  # build stage: no waiting on the prod image build these jobs never use.
+  needs:
+    - job: build:ci-image
+      optional: true
   rules:
     - if: '$CI_COMMIT_TAG'
       when: never

@@ -14,13 +14,19 @@ queue until the next chunk is complete. The chunk arithmetic
 One utterance = one ``generate`` call on one daemon thread. ``finish()`` pads
 silence so the last real chunk is emitted, ends the generator and joins.
 
+Language: the prompt is "auto", and in that mode the model emits a special
+``<xx-YY>`` token after each sentence's final punctuation. The streamer drops
+special tokens from the text; the collector reads them first and keeps the
+last one, so the language costs no extra decode.
+
 Concurrency: the model's ``generate`` keeps per-call state ON THE MODEL
 INSTANCE (``_prompt_ids``, a wrapped ``get_audio_features``, ``_streaming``,
 ``_stream_exhausted``, ...; see transformers' ``generation_nemotron3_5_asr`` and
 ``generation_nemotron_asr_streaming``) and deletes it when the call returns.
-The streaming decode of an utterance and its background language detection
-overlap, so two ``generate`` calls on one instance would corrupt each other.
-Every call therefore runs on ``copy.copy(model)``: a new instance ``__dict__``
+Utterances can overlap briefly (a session still winding down, for example
+after a cancelled close, while the next one starts), and two ``generate``
+calls on one instance would corrupt each other. Every session therefore runs
+on ``copy.copy(model)``: a new instance ``__dict__``
 for that per-call state, the same parameter and submodule objects (no extra
 weights in memory).
 
@@ -40,6 +46,7 @@ from typing import Any
 import numpy as np
 
 from asr.stream.base import STREAM_SAMPLE_RATE, AudioArray, StreamConfig, parse_language_tag
+from asr.stream.language import TextLanguageDetector
 from core.logging import logger_asr as logger
 
 # Silence appended on finish so the final chunk (current frames + lookahead)
@@ -53,15 +60,32 @@ STREAM_LANGUAGE = "auto"
 _END = None  # queue sentinel: no more audio for this utterance
 
 
-def _make_collector(tokenizer: Any, on_text: Callable[[str], None]) -> Any:
-    """A transformers TextStreamer that hands each finalized piece of text to ``on_text``.
+def _make_collector(tokenizer: Any, on_text: Callable[[str], None], on_language: Callable[[str], None]) -> Any:
+    """A transformers TextStreamer that hands finalized text to ``on_text`` and language tags to ``on_language``.
 
     TextIteratorStreamer (the card's choice) is this same class with a queue
-    in ``on_finalized_text``; a callback avoids a second consumer thread.
+    in ``on_finalized_text``; a callback avoids a second consumer thread. The
+    text is decoded with special tokens skipped, so the ``<xx-YY>`` tags are
+    picked out of the raw token ids in ``put`` before that happens.
     """
     from transformers import TextStreamer
 
     class _Collector(TextStreamer):
+        # generate() puts the prompt ids first. A tag there is what was asked
+        # for, not what was heard, so the first put is never scanned for one.
+        prompt_pending = True
+
+        def put(self, value: Any) -> None:
+            if self.prompt_pending:
+                self.prompt_pending = False
+            else:
+                ids = value[0] if len(value.shape) > 1 else value
+                for token in tokenizer.convert_ids_to_tokens([int(i) for i in ids.tolist()]):
+                    language = parse_language_tag(str(token))
+                    if language is not None:
+                        on_language(language)
+            super().put(value)
+
         def on_finalized_text(self, text: str, stream_end: bool = False) -> None:
             if text:
                 on_text(text)
@@ -80,6 +104,7 @@ class NemotronStreamSession:
         self._audio: AudioArray = np.zeros(0, dtype=np.float32)
         self._received = 0  # real (unpadded) samples fed
         self._text: list[str] = []
+        self._language: str | None = None
         self._text_lock = threading.Lock()
         self._error: BaseException | None = None
         self._ended = False
@@ -111,9 +136,22 @@ class NemotronStreamSession:
         self._thread.join(JOIN_TIMEOUT_SECONDS)
 
     @property
-    def text(self) -> str:
+    def language(self) -> str | None:
         with self._text_lock:
-            return "".join(self._text).strip()
+            return self._language
+
+    @property
+    def text(self) -> str:
+        """The hypothesis with whitespace collapsed.
+
+        In language="auto" mode the model emits an ``<xx-YY>`` tag (a special
+        token, preceded by a word-boundary token) after every sentence. The
+        streamer strips the tag but keeps the boundary, which left a double
+        space mid-transcript ("seven thirty.  Could you"), seen on the first
+        real-model run.
+        """
+        with self._text_lock:
+            return " ".join("".join(self._text).split())
 
     # ------------------------------------------------------------ internals
     def _end(self) -> None:
@@ -181,6 +219,10 @@ class NemotronStreamSession:
         with self._text_lock:
             self._text.append(piece)
 
+    def _set_language(self, language: str) -> None:
+        with self._text_lock:
+            self._language = language  # the last tag of the utterance wins
+
     def _run(self) -> None:
         try:
             first_len = int(self._processor.num_samples_first_audio_chunk)
@@ -188,7 +230,7 @@ class NemotronStreamSession:
                 if not self._pull():
                     return  # closed before a single chunk arrived: nothing to decode
             first_inputs = self._chunk_inputs(self._audio[:first_len], first=True)
-            streamer = _make_collector(self._processor.tokenizer, self._append_text)
+            streamer = _make_collector(self._processor.tokenizer, self._append_text, self._set_language)
             self._model.generate(
                 **{**first_inputs, "input_features": self._features(first_inputs), "streamer": streamer}
             )
@@ -210,21 +252,31 @@ class NemotronStreamEngine:
                 "does not include. Install voice-stack[stream] or leave ASR_STREAM_ENABLED off."
             ) from exc
 
-        self._torch = torch
         if config.threads > 0:
             torch.set_num_threads(config.threads)
         dtype = torch.bfloat16 if config.dtype == "bfloat16" else torch.float32
-        device_map = "cpu" if config.device == "cpu" else "auto"
+        load_kwargs = self.model_load_kwargs(config, dtype)
 
         logger.info(
-            f"Loading streaming ASR model {config.model} (dtype={config.dtype}, device_map={device_map}, "
+            f"Loading streaming ASR model {config.model} (dtype={config.dtype}, "
+            f"device_map={load_kwargs.get('device_map', 'none (cpu)')}, "
             f"lookahead={config.lookahead}, threads={config.threads})"
         )
         self._processor = AutoProcessor.from_pretrained(config.model)
         self._processor.set_num_lookahead_tokens(config.lookahead)
-        self._model = AutoModelForRNNT.from_pretrained(config.model, dtype=dtype, device_map=device_map)
+        self._model = AutoModelForRNNT.from_pretrained(config.model, **load_kwargs)
         self._model.eval()
+        self._text_language = TextLanguageDetector(config.languages)
         logger.info(f"Streaming ASR model loaded; latency {self._processor.streaming_latency_ms} ms per chunk")
+
+    @staticmethod
+    def model_load_kwargs(config: StreamConfig, dtype: Any) -> dict[str, Any]:
+        """from_pretrained() arguments. On CPU, NO device_map: the model loads on the CPU anyway,
+        and any device_map (even "cpu") makes transformers require the accelerate package."""
+        kwargs: dict[str, Any] = {"dtype": dtype}
+        if config.device != "cpu":
+            kwargs["device_map"] = "auto"
+        return kwargs
 
     def _isolated_model(self) -> Any:
         """A shallow copy that shares weights but keeps generate()'s per-call attributes to itself."""
@@ -233,14 +285,5 @@ class NemotronStreamEngine:
     def new_session(self) -> NemotronStreamSession:
         return NemotronStreamSession(self._isolated_model(), self._processor)
 
-    def detect_language(self, samples: AudioArray) -> str | None:
-        """One offline ``generate`` with language="auto", keeping special tokens so the tag survives."""
-        model = self._isolated_model()
-        inputs = self._processor(samples, sampling_rate=STREAM_SAMPLE_RATE, language="auto", return_tensors="pt")
-        inputs = inputs.to(model.device, dtype=model.dtype)
-        with self._torch.inference_mode():
-            output = model.generate(**inputs, return_dict_in_generate=True)
-        decoded = self._processor.decode(output.sequences, skip_special_tokens=False)
-        if isinstance(decoded, list):
-            decoded = decoded[0] if decoded else ""
-        return parse_language_tag(str(decoded))
+    def detect_text_language(self, text: str) -> str | None:
+        return self._text_language.detect(text)

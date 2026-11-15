@@ -20,6 +20,8 @@ from typing import Any, Protocol
 import numpy as np
 import numpy.typing as npt
 
+from asr.stream.language import parse_languages
+
 # The protocol is fixed at 16 kHz mono PCM16, the rate the model was trained on.
 STREAM_SAMPLE_RATE = 16000
 
@@ -67,14 +69,11 @@ class StreamConfig:
     dtype: str
     threads: int
     device: str
+    languages: tuple[str, ...] = ("en", "pt")
 
     @classmethod
     def from_settings(cls, settings: Any) -> StreamConfig:
-        """Build and validate a config from the application settings.
-
-        ASR_STREAM_THREADS <= 0 falls back to ASR_CPU_THREADS, so one knob sizes
-        both engines unless the operator splits them on purpose.
-        """
+        """Build and validate a config from the application settings. Raises ValueError on a bad value."""
         lookahead = int(settings.ASR_STREAM_LOOKAHEAD)
         if lookahead not in SUPPORTED_LOOKAHEAD:
             raise ValueError(
@@ -85,7 +84,7 @@ class StreamConfig:
             raise ValueError(f"ASR_STREAM_DTYPE={dtype!r} is not supported; use one of {sorted(SUPPORTED_DTYPES)}")
         threads = int(settings.ASR_STREAM_THREADS)
         if threads <= 0:
-            threads = int(settings.ASR_CPU_THREADS)
+            raise ValueError(f"ASR_STREAM_THREADS={threads} must be at least 1")
         return cls(
             enabled=bool(settings.ASR_STREAM_ENABLED),
             model=str(settings.ASR_STREAM_MODEL),
@@ -93,6 +92,7 @@ class StreamConfig:
             dtype=dtype,
             threads=threads,
             device=str(settings.ASR_DEVICE).lower(),
+            languages=parse_languages(str(settings.ASR_STREAM_LANGUAGES)),
         )
 
 
@@ -111,6 +111,15 @@ class StreamSession(Protocol):
         """Abandon the utterance (client went away). Must be safe to call more than once."""
         ...
 
+    @property
+    def language(self) -> str | None:
+        """Primary subtag ("en", "pt") of the LAST language tag the model emitted in this utterance, or None.
+
+        The model tags a sentence only after its final punctuation, so an
+        utterance without a completed sentence has none.
+        """
+        ...
+
 
 class StreamEngine(Protocol):
     """A loaded streaming model. One per process."""
@@ -119,6 +128,6 @@ class StreamEngine(Protocol):
         """Start a new utterance."""
         ...
 
-    def detect_language(self, samples: AudioArray) -> str | None:
-        """Batch-decode ``samples`` with automatic language detection; return e.g. ``"en"`` or None."""
+    def detect_text_language(self, text: str) -> str | None:
+        """Language of a final transcript, restricted to the configured set; None if empty or ambiguous."""
         ...

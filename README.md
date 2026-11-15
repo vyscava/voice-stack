@@ -230,20 +230,23 @@ through Hugging Face Transformers. It is **off by default**: with `ASR_STREAM_EN
 endpoint accepts the socket, sends `{"type":"error","code":"disabled"}` and closes with code 1008.
 Nothing else in the ASR service changes either way.
 
-**Enabling it.** It needs `transformers` (>= 5.13) and `torch`, the `stream` extra
-(`pip install -e '.[server,asr,stream]'`). The full image (`:latest` / `:xtts`) already carries both
-at the pinned versions, so there it is only `-e ASR_STREAM_ENABLED=true`. The slim `:kokoro` image
-is torch-free by design and does not include it. The model (about 2.5 GB download) is fetched and
-loaded on the first stream connection, not at startup; mount a volume on the Hugging Face cache
+**Enabling it.** It needs the `stream` extra (`pip install -e '.[server,asr,stream]'`): `transformers`
+(>= 5.13), `torch`, `librosa` and `lingua-language-detector`, plus `accelerate` off-CPU. The full
+image (`:latest` / `:xtts`) installs it; the slim `:kokoro` image is torch-free by design, and the GPU
+images do not carry it yet. The model (about 2.5 GB download) is fetched and
+loaded on the first stream connection, or in the background at startup with `ASR_STREAM_WARMUP=true`;
+mount a volume on the Hugging Face cache
 (`HF_HOME`) to keep it across restarts.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ASR_STREAM_ENABLED` | `false` | Turn the endpoint on |
 | `ASR_STREAM_MODEL` | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Hugging Face model id |
-| `ASR_STREAM_LOOKAHEAD` | `3` | `0`, `3`, `6` or `13` lookahead tokens; 3 = 320 ms chunks, more = more latency and accuracy |
+| `ASR_STREAM_LOOKAHEAD` | `6` | `0`, `3`, `6` or `13` lookahead tokens. 6 = 560 ms chunks. On an 8-core CPU shared with Kokoro TTS under load, 6 measured RTF p95 0.30 and WER 1.5 % against 0.46 and 5.6 % for 3, and a lower flush-to-final latency (fewer chunks left to decode at the end). The cost is about 240 ms more latency on partials; use `3` if live captions matter more than the final. |
 | `ASR_STREAM_DTYPE` | `float32` | `float32` or `bfloat16`. The checkpoint is float32. bf16 halves memory but is only fast with native bf16 (AVX512-BF16/AMX CPUs, or a GPU); on CPUs without it, it is slower than float32. |
-| `ASR_STREAM_THREADS` | `0` | torch CPU threads; `0` reuses `ASR_CPU_THREADS` |
+| `ASR_STREAM_THREADS` | `4` | torch CPU threads. With TTS running on the same CPU, 4 threads measured RTF p95 0.46 against 0.54 for 6 and 0.56 for 8 (lookahead 3). |
+| `ASR_STREAM_WARMUP` | `false` | Load the model at startup, in the background. The service is healthy and serves batch ASR meanwhile; a stream that connects before the load finishes waits for it. |
+| `ASR_STREAM_LANGUAGES` | `en,pt` | ISO 639-1 codes the text language fallback may answer with (see `language_source` below). An unknown code fails at startup. |
 
 `ASR_DEVICE=cpu` keeps the model on the CPU; any other value lets Transformers place it
 (`device_map="auto"`).
@@ -255,11 +258,27 @@ close code 1013.
 2. Send binary frames of 16 kHz mono PCM16 little-endian audio.
 3. Receive `{"type":"partial","text":"..."}` (the full hypothesis so far) whenever it changes.
 4. Send `{"type":"flush"}` at the end of an utterance. You get
-   `{"type":"final","text":"...","language":"en"}` and the connection is ready for the next utterance.
+   `{"type":"final","text":"...","language":"en","language_source":"text"}` and the connection is
+   ready for the next utterance.
 5. Send `{"type":"close"}` or just disconnect.
 
-`language` is detected once per utterance, from its first 2 seconds, in the background. A shorter
-utterance reuses the previous utterance's language on the same connection, or `null`.
+`language` is the first of these that gives an answer, and `language_source` says which one did:
+
+| `language_source` | Where the language came from |
+|---|---|
+| `stream_tag` | The model's own tag. In automatic mode it emits one (such as `<pt-BR>`) after each completed sentence; the last one of the utterance wins. It never punctuates an utterance's final sentence, though, so one-sentence turns rarely carry a tag. |
+| `text` | The final transcript, classified by [lingua](https://github.com/pemistahl/lingua-py) restricted to `ASR_STREAM_LANGUAGES`, when the top language scores at least 0.7 (well under 5 ms per final). |
+| `previous` | The previous final's language on the same connection, when the text is empty or too ambiguous (a lone name, "no"). |
+| `null` | Nothing above gave an answer on the connection's first utterance; `language` is `null` too. |
+
+**Metrics.** The ASR service serves Prometheus metrics on `/metrics`:
+`voice_asr_stream_flush_seconds` (flush to final, the latency a caller feels),
+`voice_asr_stream_feed_seconds` (compute per audio feed), `voice_asr_stream_connections_total{outcome}`
+(one per connection: `accepted`, `busy`, `disabled`, `misconfigured`, `unavailable`),
+`voice_asr_stream_refusals_total{code}` (an accepted connection closed for `unsupported_sample_rate`),
+`voice_asr_stream_finals_total{language_source}`, `voice_asr_stream_errors_total`,
+`voice_asr_stream_active` and `voice_asr_stream_engine_loaded`. `/health/detailed` reports
+`stream.model_loaded` too.
 
 ### TTS Endpoints
 

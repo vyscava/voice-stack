@@ -8,7 +8,8 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from asr.api.api_v1.api import api_router
 from core.error_handler import register_exception_handlers
@@ -43,6 +44,32 @@ async def idle_timeout_checker() -> None:
             logger.error(f"Error in idle timeout checker: {e}")
 
 
+def _log_warmup(future: asyncio.Future[Any]) -> None:
+    if future.cancelled():
+        return
+    if future.exception() is not None:
+        # The first stream connection retries the load and refuses with "unavailable" if it fails again.
+        logger.error("Streaming ASR warmup failed", exc_info=future.exception())
+    else:
+        logger.info("Streaming ASR warmup done")
+
+
+def start_stream_warmup() -> asyncio.Future[Any] | None:
+    """Load the streaming model in the background when ASR_STREAM_ENABLED and ASR_STREAM_WARMUP are set.
+
+    The service is healthy (and serves batch ASR) while the model downloads and
+    loads; without this the first caller waits for both.
+    """
+    if not (settings.ASR_STREAM_ENABLED and settings.ASR_STREAM_WARMUP):
+        return None
+    from asr.stream import factory as stream_factory
+
+    logger.info("Streaming ASR warmup started")
+    future = asyncio.get_running_loop().run_in_executor(None, stream_factory.get_stream_engine)
+    future.add_done_callback(_log_warmup)
+    return future
+
+
 @asynccontextmanager
 async def app_init(app: FastAPI) -> AsyncIterator[None]:
     """
@@ -64,6 +91,8 @@ async def app_init(app: FastAPI) -> AsyncIterator[None]:
     app.include_router(api_router, prefix=settings.API_V1_STR)
     logger.info("API routes loaded...")
 
+    warmup = start_stream_warmup()
+
     # Start background task for idle timeout checking
     if settings.ASR_IDLE_TIMEOUT_MINUTES > 0:
         idle_task = asyncio.create_task(idle_timeout_checker())
@@ -76,6 +105,9 @@ async def app_init(app: FastAPI) -> AsyncIterator[None]:
 
     # Cleanup on shutdown
     logger.info("Shutting down ASR service...")
+
+    if warmup is not None and not warmup.done():
+        logger.info("Streaming ASR warmup still running at shutdown")
 
     # Stop idle timeout checker
     if idle_task is not None:
@@ -159,6 +191,12 @@ async def index_head() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    """Prometheus metrics (streaming ASR; batch ASR has none yet)."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/health")
 @app.head("/health")
 @app.get("/healthz")
@@ -173,6 +211,12 @@ async def healthcheck() -> JSONResponse:
         dict: A JSON response with the key "status" and value "ok".
     """
     return JSONResponse({"status": "ok"})
+
+
+def _stream_engine_loaded() -> bool:
+    from asr.stream import factory as stream_factory
+
+    return stream_factory.is_stream_engine_loaded()
 
 
 @app.get("/health/detailed")
@@ -230,6 +274,10 @@ async def detailed_health() -> JSONResponse:
             "engine": settings.ASR_ENGINE,
             "model_name": settings.ASR_MODEL,
             "device": settings.ASR_DEVICE,
+        },
+        "stream": {
+            "enabled": settings.ASR_STREAM_ENABLED,
+            "model_loaded": _stream_engine_loaded(),
         },
         "concurrency": {
             "active_requests": active_requests,

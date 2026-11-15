@@ -6,8 +6,8 @@ for the model: no download, no torch.
 
 from __future__ import annotations
 
+import functools
 import json
-import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -15,7 +15,8 @@ from typing import Any
 import anyio
 import numpy as np
 
-from asr.stream.base import StreamConfig
+from asr.stream.base import StreamConfig, parse_language_tag
+from asr.stream.language import TextLanguageDetector
 
 SR = 16000
 WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight"]
@@ -23,14 +24,28 @@ SAMPLES_PER_WORD = SR // 2  # the fake hypothesis grows by one word per 0.5 s
 
 
 class FakeSession:
+    """Streams one fake word per 0.5 s, with the engine's language tags interleaved like the model's."""
+
     def __init__(self, engine: FakeEngine) -> None:
         self.engine = engine
         self.samples = 0
         self.finished = False
         self.closed = False
 
+    def stream_output(self) -> list[str]:
+        """Raw decoded tokens so far: words, plus an ``<xx-YY>`` tag wherever the engine scripts one."""
+        out: list[str] = []
+        for n, word in enumerate(WORDS[: self.samples // SAMPLES_PER_WORD], start=1):
+            out.append(word)
+            out.extend(tag for after, tag in self.engine.tags if after == n)
+        return out
+
     def hypothesis(self) -> str:
-        return " ".join(WORDS[: self.samples // SAMPLES_PER_WORD])
+        return " ".join(t for t in self.stream_output() if parse_language_tag(t) is None)
+
+    @property
+    def language(self) -> str | None:
+        return parse_language_tag(" ".join(self.stream_output()))
 
     def feed(self, samples: Any) -> str:
         assert samples.dtype == np.float32
@@ -43,6 +58,8 @@ class FakeSession:
         self.finished = True
         if self.engine.finish_fails:
             raise TimeoutError("fake: streaming decode did not finish in time")
+        if self.engine.final_text is not None:
+            return self.engine.final_text
         return self.hypothesis().capitalize() + "."
 
     def close(self) -> None:
@@ -50,26 +67,31 @@ class FakeSession:
 
 
 class FakeEngine:
-    def __init__(self, language: str | None = "pt") -> None:
-        self.language = language
+    def __init__(self) -> None:
+        # (after word N, tag): the model's tag after a sentence. Default: "one two." then <pt-BR>,
+        # so any utterance of at least 1 s carries a Portuguese tag.
+        self.tags: list[tuple[int, str]] = [(2, "<pt-BR>")]
         self.sessions: list[FakeSession] = []
-        self.detect_calls: list[int] = []
-        self.release_detection = threading.Event()
-        self.release_detection.set()  # set = detection answers at once
-        self.detect_returned = threading.Event()
         self.feed_fails_after: int | None = None  # samples into a session before feed() raises
         self.finish_fails = False
+        self.final_text: str | None = None  # overrides the final transcript when set
+        self.text_language_calls: list[str] = []
 
     def new_session(self) -> FakeSession:
         session = FakeSession(self)
         self.sessions.append(session)
         return session
 
-    def detect_language(self, samples: Any) -> str | None:
-        self.detect_calls.append(int(samples.size))
-        self.release_detection.wait(5)
-        self.detect_returned.set()
-        return self.language
+    def detect_text_language(self, text: str) -> str | None:
+        """The REAL text language ID (lingua, en+pt), as the Nemotron engine runs it."""
+        self.text_language_calls.append(text)
+        return text_detector().detect(text)
+
+
+@functools.lru_cache(maxsize=1)
+def text_detector() -> TextLanguageDetector:
+    """Built once for the whole test session (about 0.1 s)."""
+    return TextLanguageDetector(("en", "pt"))
 
 
 def config(enabled: bool = True) -> StreamConfig:

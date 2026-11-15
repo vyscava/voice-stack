@@ -8,7 +8,6 @@ No model is downloaded. transformers itself is only needed for TextStreamer.
 
 from __future__ import annotations
 
-import contextlib
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -37,9 +36,18 @@ class FakeInputs(dict):  # type: ignore[type-arg]
         return self
 
 
+PT_TAG, EN_TAG, PAD, AUTO = 900, 901, 902, 903
+SPECIAL = {PT_TAG: "<pt-BR>", EN_TAG: "<en-US>", PAD: "<pad>", AUTO: "<|auto|>"}
+
+
 class FakeTokenizer:
-    def decode(self, ids: list[int], **kwargs: Any) -> str:
-        return " ".join(f"w{i}" for i in ids)
+    """Word ids decode to "w<id>"; ids 900+ are special tokens, like the model's language tags."""
+
+    def convert_ids_to_tokens(self, ids: list[int]) -> list[str]:
+        return [SPECIAL.get(i, f"w{i}") for i in ids]
+
+    def decode(self, ids: list[int], skip_special_tokens: bool = False, **kwargs: Any) -> str:
+        return " ".join(SPECIAL.get(i, f"w{i}") for i in ids if not (skip_special_tokens and i in SPECIAL))
 
 
 class FakeProcessor:
@@ -68,9 +76,6 @@ class FakeProcessor:
             frames = NEXT_FRAMES
         return FakeInputs(input_features=np.zeros((1, frames, 4)), num_lookahead_tokens=LOOKAHEAD, prompt_ids=[101])
 
-    def decode(self, sequences: Any, skip_special_tokens: bool = True) -> list[str]:
-        return ["Olá. <pt-BR>" if not skip_special_tokens else "Olá."]
-
 
 class FakeModel:
     """generate() keeps per-call state on self and deletes it after, like the real mixin does."""
@@ -78,8 +83,12 @@ class FakeModel:
     device = "cpu"
     dtype = None
 
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(
+        self, fail: bool = False, tags: dict[int, list[int]] | None = None, prompt: list[int] | None = None
+    ) -> None:
         self.fail = fail
+        self.tags = tags or {}  # chunk index -> special ids emitted after that chunk's word
+        self.prompt = prompt if prompt is not None else [AUTO]  # put first, like GenerationMixin does
         self.first_chunk_seen = threading.Event()
         self.chunk_frames: list[int] = []
 
@@ -91,12 +100,15 @@ class FakeModel:
                 return SimpleNamespace(sequences=[[1, 2]])
             assert kwargs["num_lookahead_tokens"] == LOOKAHEAD
             streamer = kwargs["streamer"]
+            streamer.put(np.array(self.prompt))
             for i, chunk in enumerate(features):
                 if self.fail:
                     raise RuntimeError("boom")
                 assert self._streaming is True, "another generate() call clobbered this one's state"
                 self.chunk_frames.append(chunk.shape[1])
                 streamer.put(np.array([i]))
+                for special in self.tags.get(i, []):
+                    streamer.put(np.array([special]))
                 self.first_chunk_seen.set()
             streamer.end()
             return SimpleNamespace(sequences=[[0]])
@@ -162,22 +174,117 @@ def _engine(model: FakeModel) -> NemotronStreamEngine:
     engine = NemotronStreamEngine.__new__(NemotronStreamEngine)  # skip the model download
     engine._model = model
     engine._processor = FakeProcessor()
-    engine._torch = SimpleNamespace(inference_mode=contextlib.nullcontext)
     return engine
 
 
 @pytest.mark.unit
 @pytest.mark.asr
-def test_language_detection_during_a_stream_does_not_corrupt_it() -> None:
-    """The real generate() keeps per-call state on the model; overlapping calls must not share it."""
+def test_overlapping_sessions_do_not_corrupt_each_other() -> None:
+    """The real generate() keeps per-call state on the model; a session winding down while the next
+    runs must not share it."""
     model = FakeModel()
     engine = _engine(model)
-    session = engine.new_session()
-    session.feed(_audio(0.5))
+    first = engine.new_session()
+    first.feed(_audio(0.5))
     assert model.first_chunk_seen.wait(5), "the stream never started decoding"
 
-    # A whole batch generate() runs and cleans up while the streaming one is mid-utterance.
-    assert engine.detect_language(_audio(2.0)) == "pt"
+    # A whole second utterance runs and cleans up while the first is mid-decode.
+    second = engine.new_session()
+    second.feed(_audio(0.5))
+    assert second.finish().startswith("w0")
 
+    first.feed(_audio(1.0))
+    assert first.finish().startswith("w0 w1")
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_language_comes_from_the_tag_emitted_after_a_sentence() -> None:
+    session = NemotronStreamSession(FakeModel(tags={1: [PT_TAG, PAD]}), FakeProcessor())
     session.feed(_audio(1.0))
-    assert session.finish().startswith("w0 w1")
+    text = session.finish()
+    assert session.language == "pt"
+    assert "<" not in text  # the tag sets the language but never reaches the transcript
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_the_last_language_tag_of_an_utterance_wins() -> None:
+    session = NemotronStreamSession(FakeModel(tags={0: [EN_TAG], 2: [PT_TAG]}), FakeProcessor())
+    session.feed(_audio(1.0))
+    session.finish()
+    assert session.language == "pt"
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_no_language_tag_means_no_language() -> None:
+    session = NemotronStreamSession(FakeModel(tags={1: [PAD]}), FakeProcessor())
+    session.feed(_audio(1.0))
+    session.finish()
+    assert session.language is None
+
+
+def _config(device: str) -> Any:
+    from asr.stream.base import StreamConfig
+
+    return StreamConfig(enabled=True, model="m", lookahead=3, dtype="float32", threads=0, device=device)
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_cpu_load_passes_no_device_map() -> None:
+    """Any device_map, even "cpu", makes transformers demand accelerate; the CPU path must not pass one."""
+    assert NemotronStreamEngine.model_load_kwargs(_config("cpu"), "f32") == {"dtype": "f32"}
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_gpu_load_lets_transformers_place_the_model() -> None:
+    assert NemotronStreamEngine.model_load_kwargs(_config("cuda"), "bf16") == {"dtype": "bf16", "device_map": "auto"}
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_stream_extra_declares_what_the_model_needs_at_runtime() -> None:
+    """transformers loads the model without these but refuses at runtime (found on the first real run)."""
+    import re
+    from pathlib import Path
+
+    import tomllib
+
+    pyproject = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())
+    names = {
+        re.split(r"[<>=\[ ]", dep, maxsplit=1)[0] for dep in pyproject["project"]["optional-dependencies"]["stream"]
+    }
+    assert {"transformers", "torch", "librosa", "accelerate"} <= names
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_session_text_collapses_the_gap_a_stripped_language_tag_leaves() -> None:
+    session = NemotronStreamSession(FakeModel(), FakeProcessor())
+    try:
+        for piece in ["Seven thirty. ", " ", "Could you", " help?\n"]:  # the tag itself was stripped
+            session._append_text(piece)
+        assert session.text == "Seven thirty. Could you help?"
+    finally:
+        session.close()
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_language_tag_in_the_prompt_is_not_the_speech_language() -> None:
+    session = NemotronStreamSession(FakeModel(prompt=[PT_TAG], tags={1: [PAD]}), FakeProcessor())
+    session.feed(_audio(1.0))
+    session.finish()
+    assert session.language is None
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_tag_right_after_the_prompt_still_counts() -> None:
+    session = NemotronStreamSession(FakeModel(prompt=[PT_TAG], tags={0: [EN_TAG]}), FakeProcessor())
+    session.feed(_audio(1.0))
+    session.finish()
+    assert session.language == "en"

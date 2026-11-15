@@ -132,6 +132,8 @@ asr = [
   # Floor: the bundled silero_vad_v6.onnx asset and the VadOptions fields the
   # VAD path passes exist from 1.2.1 (the version the slim image was verified on).
   "faster-whisper>=1.2.1,<2",
+  # The ASR app serves /metrics (streaming ASR counters). Pure Python, tiny.
+  "prometheus-client>=0.20.0",
   "numpy",
   "soundfile",
   "resampy",
@@ -153,6 +155,18 @@ asr-whisper = [
 stream = [
   "transformers==5.22.2",
   "torch==2.15.0",
+  # The model's feature extractor (NemotronAsrStreamingFeatureExtractor) refuses
+  # to load without librosa, and transformers does not declare it. Found on the
+  # first real-model run: without it every stream is refused as "unavailable".
+  "librosa>=0.11",
+  # transformers needs accelerate for device_map, which the engine passes only
+  # off-CPU (ASR_DEVICE != cpu). Light, pure Python.
+  "accelerate>=1.15",
+  # Language of finals that carry no stream tag (most one-sentence turns): text
+  # language ID restricted to ASR_STREAM_LANGUAGES. Apache-2.0, wheels only, no
+  # dependencies, well under 5 ms per final. Pinned because src/asr/stream/language.py
+  # lists the codes it supports.
+  "lingua-language-detector==2.1.1",
   "numpy",
 ]
 gateway = [
@@ -211,7 +225,7 @@ packages = ["src"]
 type = "virtual"
 path = ".venv"
 # gateway included so CI installs the same set the production image does
-# (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway]). Without it, any module importing a
+# (Dockerfile full target: .[server,asr,asr-whisper,tts,gateway,stream]). Without it, any module importing a
 # gateway-only dependency passes locally and fails in CI at IMPORT time.
 features = ["dev", "server", "tts", "asr", "asr-whisper", "stream", "gateway", "agent"]
 dependencies = []

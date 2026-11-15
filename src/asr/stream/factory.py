@@ -11,6 +11,7 @@ from __future__ import annotations
 from threading import Lock
 from typing import Final
 
+from asr.stream import metrics as stream_metrics
 from asr.stream.base import StreamConfig, StreamEngine
 from core.logging import logger_asr as logger
 from core.settings import get_settings
@@ -38,8 +39,14 @@ def get_stream_engine() -> StreamEngine:
                 from asr.stream.nemotron import NemotronStreamEngine
 
                 _engine = NemotronStreamEngine(get_stream_config())
+                stream_metrics.ENGINE_LOADED.set(1)
                 logger.info("Streaming ASR engine initialized")
     return _engine
+
+
+def is_stream_engine_loaded() -> bool:
+    """True once the streaming engine exists in this process (never loads it)."""
+    return _engine is not None
 
 
 def set_stream_engine(engine: StreamEngine | None) -> None:

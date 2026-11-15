@@ -163,6 +163,9 @@ test:freeze:agent:
     MIN_DISTS: "40"
 
 .audit-image:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: security
   image: python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
   extends: .image-gate-rules
@@ -301,6 +304,9 @@ test:sast:semgrep:
 # on pre-existing history, which is what makes blocking safe.
 # ---------------------------------------------------------------------------
 test:secrets:mr:
+  # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
+  tags:
+    - cpu
   stage: security
   image:
     name: zricethezav/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055
