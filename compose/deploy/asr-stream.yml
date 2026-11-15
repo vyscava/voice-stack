@@ -43,6 +43,9 @@ services:
       ASR_STREAM_DTYPE: float32
       ASR_STREAM_THREADS: "4"
       ASR_STREAM_LANGUAGES: en,pt
+      # Two calls can stream at once (each on its own shallow model copy, shared
+      # weights); a third falls back to batch ASR in the agent.
+      ASR_STREAM_MAX_SESSIONS: "2"
       # The batch Whisper model loads on the first batch request, and nothing
       # sends one here, so there is nothing for the idle checker to unload.
       ASR_IDLE_TIMEOUT_MINUTES: "0"

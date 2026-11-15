@@ -12,7 +12,7 @@ Protocol (JSON text frames for control, binary frames for audio):
   ready for the next utterance
 - client -> ``{"type":"close"}`` (or just disconnect) ends the connection
 - server -> ``{"type":"error","code":"..."}`` then a close, for: ``disabled`` (1008),
-  ``busy`` (1013, one stream per process), ``unsupported_sample_rate`` (1003),
+  ``busy`` (1013, ASR_STREAM_MAX_SESSIONS streams already open), ``unsupported_sample_rate`` (1003),
   ``unavailable``/``misconfigured``/``decode_failed`` (1011). ``bad_message`` keeps
   the connection open.
 

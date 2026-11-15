@@ -19,10 +19,14 @@ from core.settings import get_settings
 _engine: StreamEngine | None = None
 _LOCK: Final[Lock] = Lock()
 
-# One active stream per process. A threading.Lock taken with blocking=False is
-# a try-acquire that never waits and is not bound to any event loop, so it
-# behaves the same under uvicorn and under the test client's portal thread.
-_SLOT: Final[Lock] = Lock()
+# Concurrent streams per process, up to ASR_STREAM_MAX_SESSIONS. Each session
+# decodes on its own shallow model copy (shared weights, see nemotron.py), so
+# the limit is a CPU guard, not a correctness one. A counter under a plain
+# threading.Lock never waits and is not bound to any event loop, so it behaves
+# the same under uvicorn and under the test client's portal thread.
+_SLOTS_LOCK: Final[Lock] = Lock()
+_in_use = 0
+_max_sessions: int | None = None  # test override; None reads the setting
 
 
 def get_stream_config() -> StreamConfig:
@@ -56,11 +60,32 @@ def set_stream_engine(engine: StreamEngine | None) -> None:
         _engine = engine
 
 
+def _limit() -> int:
+    if _max_sessions is not None:
+        return _max_sessions
+    return max(1, int(get_settings().ASR_STREAM_MAX_SESSIONS))
+
+
+def set_max_sessions(limit: int | None) -> None:
+    """Test helper: fix the number of concurrent streams (None: back to the setting)."""
+    global _max_sessions
+    _max_sessions = limit
+
+
 def try_acquire_stream_slot() -> bool:
-    """Claim the process's single stream slot without waiting. True if claimed."""
-    return _SLOT.acquire(blocking=False)
+    """Claim one of the process's stream slots without waiting. True if claimed."""
+    global _in_use
+    with _SLOTS_LOCK:
+        if _in_use >= _limit():
+            return False
+        _in_use += 1
+        return True
 
 
 def release_stream_slot() -> None:
-    """Give the slot back. Call exactly once per successful try_acquire_stream_slot()."""
-    _SLOT.release()
+    """Give a slot back. Call exactly once per successful try_acquire_stream_slot()."""
+    global _in_use
+    with _SLOTS_LOCK:
+        if _in_use <= 0:
+            raise RuntimeError("release_stream_slot() without a claimed slot")
+        _in_use -= 1
