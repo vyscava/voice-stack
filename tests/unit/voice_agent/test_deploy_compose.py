@@ -57,3 +57,9 @@ def test_stream_url_points_at_the_streaming_asr_stack():
     assert host == service["container_name"]
     assert port == service["environment"]["ASR_PORT"]
     assert path == "/v1/stream"
+
+
+def test_deployed_brain_gets_one_session_per_call():
+    """The deployed Hermes api_server merges header-less calls that open with the same words."""
+    env = _agent_environment()
+    assert env["AGENT_LLM_SESSION_HEADER"] == "${AGENT_LLM_SESSION_HEADER:-X-Hermes-Session-Id}"

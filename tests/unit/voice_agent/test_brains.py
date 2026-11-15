@@ -191,3 +191,39 @@ async def test_a_cancelled_reply_closes_the_http_stream():
     assert await gen.__anext__() == "Hello"
     await gen.aclose()
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_session_header_carries_one_id_per_call():
+    client, completions = _client(["ok"])
+    brain = OpenAICompatBrain(client=client, model="m", system_prompt="p", session_header=" X-Hermes-Session-Id ")
+    await _collect(brain.reply([Turn("user", "hi")], call_id="call-1", turn_id=1, language="en"))
+    first = completions.kwargs["extra_headers"]
+    await _collect(brain.reply([Turn("user", "again")], call_id="call-1", turn_id=2, language="en"))
+    same_call = completions.kwargs["extra_headers"]
+    await _collect(brain.reply([Turn("user", "hi")], call_id="call-2", turn_id=1, language="en"))
+    other_call = completions.kwargs["extra_headers"]
+    assert first == same_call == {"X-Hermes-Session-Id": "voice-call-1"}
+    assert other_call == {"X-Hermes-Session-Id": "voice-call-2"}
+
+
+@pytest.mark.asyncio
+async def test_no_session_header_unless_configured():
+    client, completions = _client(["ok"])
+    brain = OpenAICompatBrain(client=client, model="m", system_prompt="p")
+    await _collect(brain.reply([Turn("user", "hi")], call_id="call-1", turn_id=1, language="en"))
+    assert completions.kwargs["extra_headers"] is None
+
+
+def test_build_brain_passes_the_session_header_setting():
+    s = Settings(AGENT_BRAIN="openai", AGENT_LLM_SESSION_HEADER="X-Hermes-Session-Id")
+    brain = build_brain(s)
+    assert brain._headers("c9") == {"X-Hermes-Session-Id": "voice-c9"}
+
+
+def test_session_id_is_header_and_filename_safe_and_short():
+    client, _ = _client(["ok"])
+    brain = OpenAICompatBrain(client=client, model="m", system_prompt="p", session_header="X-S")
+    assert brain._headers("call-_+13055550100_ab/../c\r\nd") == {"X-S": "voice-call-_-13055550100_ab-..-c--d"}
+    assert len(brain._headers("x" * 500)["X-S"]) == len("voice-") + 64
+    assert brain._headers("") is None

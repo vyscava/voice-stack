@@ -268,6 +268,13 @@ class Settings(BaseSettings):
     AGENT_LLM_EXTRA_BODY: str = Field(
         default="", description='JSON merged into each request, e.g. {"chat_template_kwargs":{"enable_thinking":false}}'
     )
+    AGENT_LLM_SESSION_HEADER: str = Field(
+        default="",
+        description=(
+            "Header that carries a per-call session id (voice-<call id>), for endpoints that keep their own"
+            " conversation per session, e.g. X-Hermes-Session-Id for a Hermes api_server. Empty = not sent."
+        ),
+    )
     AGENT_SYSTEM_PROMPT: str = Field(
         default=(
             "You are a friendly voice assistant on a live call. Answer in one to three short, natural spoken "

@@ -416,7 +416,7 @@ The **brain** is pluggable and only ever sees text:
 
 | `AGENT_BRAIN` | What answers |
 |---|---|
-| `openai` (default) | Any OpenAI-compatible `/v1/chat/completions` endpoint (llama.cpp, vLLM, a hosted API): `AGENT_LLM_URL`, `AGENT_LLM_MODEL`, optional `AGENT_LLM_API_KEY` (bearer key) and `AGENT_LLM_EXTRA_BODY` JSON |
+| `openai` (default) | Any OpenAI-compatible `/v1/chat/completions` endpoint (llama.cpp, vLLM, a hosted API): `AGENT_LLM_URL`, `AGENT_LLM_MODEL`, optional `AGENT_LLM_API_KEY` (bearer key), `AGENT_LLM_EXTRA_BODY` JSON, and `AGENT_LLM_SESSION_HEADER`: a header that carries `voice-<call id>` for servers that keep one conversation per session (e.g. `X-Hermes-Session-Id`) |
 | `nats` | An agent on a NATS bus, over request/reply (`AGENT_NATS_URL`, `AGENT_PEER`); each turn carries the call id and turn number so the peer can keep one conversation per call |
 
 ```bash
