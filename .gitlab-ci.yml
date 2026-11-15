@@ -680,3 +680,14 @@ include:
       semgrep_rules: .semgrep/rules.yml
   - local: .gitlab/ci/deploy.yml
   - local: .gitlab/ci/gpu-images.yml
+
+# The shared security template's MR secret scan (gitleaks) and semgrep are
+# light CPU work: run them on the mini cpu runner. Overridden here per job, not
+# through the template's tags input, which would move every security job.
+test:secrets:mr:
+  tags:
+    - cpu
+
+test:sast:semgrep:
+  tags:
+    - cpu

@@ -313,6 +313,9 @@ smoke:agent-image:
       grep -q "failed to connect to livekit" agent-smoke.log \
         || { echo "FAIL: expected the worker to be retrying LiveKit"; exit 1; }
       echo "OK: agent image boots, serves page/token/health/metrics, and survives without LiveKit."
+  # The agent image holds no speech model (~1 GB image, ~450 MB running): a
+  # light docker job for the mini cpu runner, over its unix socket.
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
   tags:
-    - docker
-    - nuc
+    - cpu

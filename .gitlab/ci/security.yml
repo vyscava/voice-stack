@@ -71,6 +71,12 @@
 .freeze-image:
   stage: security
   image: docker:29
+  # Light docker work (pull, then `pip freeze` in a throwaway container): the
+  # mini cpu runner's daemon, over its unix socket (no TCP API there).
+  tags:
+    - cpu
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
   extends: .image-gate-rules
   needs:
     - build:prod-image
