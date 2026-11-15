@@ -54,6 +54,13 @@ def test_worker_runs_calls_as_threads():
     assert opts.ws_url == "ws://lk:7880"
 
 
+def test_two_warm_runners_by_default_so_simultaneous_calls_both_get_an_agent():
+    """LiveKit drops a room's job it cannot assign at once: one warm runner lost the second call."""
+    assert worker.worker_options(_settings()).num_idle_processes == 2
+    assert worker.worker_options(_settings(AGENT_IDLE_RUNNERS=3)).num_idle_processes == 3
+    assert worker.worker_options(_settings(AGENT_IDLE_RUNNERS=0)).num_idle_processes == 1
+
+
 class ScriptedBrain:
     def __init__(self, *pieces, fail=False):
         self.pieces = pieces

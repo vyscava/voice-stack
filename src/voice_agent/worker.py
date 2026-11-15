@@ -206,5 +206,8 @@ def worker_options(settings: Settings) -> WorkerOptions:
         ws_url=settings.LIVEKIT_URL,
         api_key=settings.LIVEKIT_API_KEY,
         api_secret=settings.LIVEKIT_API_SECRET,
-        num_idle_processes=1,
+        # LiveKit assigns a new room's job once and drops it if no runner can take it
+        # right then ("no workers with sufficient capacity"): with one warm runner, the
+        # second of two calls arriving together never got an agent (measured 2026-11-15).
+        num_idle_processes=max(1, settings.AGENT_IDLE_RUNNERS),
     )

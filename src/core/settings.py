@@ -292,6 +292,13 @@ class Settings(BaseSettings):
 
     # Turn taking. A caller in a noisy room (TV, radio, a car) never goes
     # silent, so the turn length is capped or the agent would wait forever.
+    AGENT_IDLE_RUNNERS: int = Field(
+        default=2,
+        description=(
+            "Warm job runners kept ready. LiveKit drops a job it cannot assign at once (no retry), so two calls"
+            " arriving together need two warm runners; match ASR_STREAM_MAX_SESSIONS."
+        ),
+    )
     AGENT_MIN_ENDPOINTING_DELAY_S: float = Field(default=0.5, description="Silence that ends a turn.")
     AGENT_MAX_ENDPOINTING_DELAY_S: float = Field(default=3.0, description="Upper bound on that wait.")
     AGENT_MAX_USER_TURN_S: float = Field(default=20.0, description="A turn ends after this long even without silence.")
