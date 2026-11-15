@@ -16,10 +16,15 @@
 # branch only; a fork that does not deploy sets DEPLOY_DISABLED=true.
 #
 # `stack` is the compose project name on the host and the docker context name.
+#
+# prune_before_pull: each deploy pulls multi-GB images, and several deploys in
+# one day fill the host before its own image prune runs, so a pull fails
+# mid-extract. The template first removes this repository's superseded images
+# (unused, older than an hour; never volumes or another project's images).
 
 include:
   - project: gitops/ci-templates
-    ref: v1.1.4
+    ref: v1.4.0
     file: /templates/deploy.yml
     inputs:
       stack: voice-stack-asr
@@ -28,12 +33,13 @@ include:
       published_var: VOICE_STACK_PUBLISHED_IMAGE
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
+      prune_before_pull: true
       health_timeout: 420
   # Streaming ASR (/v1/stream) on the full image: it needs torch, which the
   # slim image leaves out by design. Its own stack, so the model's memory and
   # CPU threads never starve batch ASR, which stays the agent's fallback.
   - project: gitops/ci-templates
-    ref: v1.1.4
+    ref: v1.4.0
     file: /templates/deploy.yml
     inputs:
       stack: voice-stack-asr-stream
@@ -42,9 +48,10 @@ include:
       published_var: VOICE_STACK_FULL_PUBLISHED_IMAGE
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
+      prune_before_pull: true
       health_timeout: 300
   - project: gitops/ci-templates
-    ref: v1.1.4
+    ref: v1.4.0
     file: /templates/deploy.yml
     inputs:
       stack: voice-stack-tts
@@ -53,9 +60,10 @@ include:
       published_var: VOICE_STACK_PUBLISHED_IMAGE
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
+      prune_before_pull: true
       health_timeout: 300
   - project: gitops/ci-templates
-    ref: v1.1.4
+    ref: v1.4.0
     file: /templates/deploy.yml
     inputs:
       stack: voice-stack-gateway
@@ -64,9 +72,10 @@ include:
       published_var: VOICE_STACK_PUBLISHED_IMAGE
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
+      prune_before_pull: true
 
   - project: gitops/ci-templates
-    ref: v1.1.4
+    ref: v1.4.0
     file: /templates/deploy.yml
     inputs:
       stack: voice-stack-agent
@@ -75,6 +84,7 @@ include:
       published_var: VOICE_AGENT_PUBLISHED_IMAGE
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
+      prune_before_pull: true
 
 # The gateway joins the ASR and TTS networks as external networks, which only
 # exist once those stacks are up, so it deploys after both. A job with `needs`
