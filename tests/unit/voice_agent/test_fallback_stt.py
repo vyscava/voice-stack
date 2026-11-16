@@ -181,9 +181,17 @@ async def test_a_skipped_primary_does_not_extend_its_cooldown() -> None:
 def test_the_fallback_series_exist_before_the_first_event() -> None:
     # increase() needs a sample before the first event: a series born at 1
     # loses that event, and the "2 in 30m" alert would fire on the third.
-    from prometheus_client import generate_latest
+    # A fresh interpreter: in this process earlier tests have already
+    # incremented these labels, which would hide a missing pre-init.
+    import os
+    import subprocess
+    import sys
 
-    text = generate_latest().decode()
+    code = (
+        "import voice_agent.metrics; from prometheus_client import generate_latest; print(generate_latest().decode())"
+    )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    text = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True).stdout
     for reason in ("timeout", "error"):
         assert f'voice_agent_stt_primary_fallbacks_total{{reason="{reason}"}}' in text
     for service in ("primary", "fallback"):
