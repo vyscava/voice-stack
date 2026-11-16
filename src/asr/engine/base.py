@@ -301,6 +301,7 @@ class ASRBase(ABC):
         "large-v1",
         "large-v2",
         "large-v3",
+        "large-v3-turbo",
     ]
 
     def __init__(self) -> None:
@@ -846,8 +847,9 @@ class ASRBase(ABC):
             if m == v:
                 return v
 
-        # Substring matches (handles paths like "Systran/faster-whisper-large-v3")
-        for v in self._WHISPER_VARIANTS:
+        # Substring matches (handles paths like "Systran/faster-whisper-large-v3").
+        # Longest first, so "...-large-v3-turbo" is not taken for "large-v3".
+        for v in sorted(self._WHISPER_VARIANTS, key=len, reverse=True):
             if v in m:
                 return v
 

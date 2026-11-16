@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     ASR_ENGINE: str = Field(default="fasterwhisper", description="fasterwhisper|whisper")
     ASR_DEVICE: str = Field(default="cpu", description="cpu|cuda|auto")
     ASR_MODEL: str = Field(default="base", description="Faster-Whisper model.")
+    ASR_MODEL_REVISION: str | None = Field(
+        default=None,
+        description=(
+            "Hugging Face commit of the model repo to download (a 40-character sha pins the exact weights). "
+            "Empty = the repo's current main."
+        ),
+    )
     ASR_MODEL_LOCATION: str | None = Field(default=None, description="Location where to store the downloaded models.")
     ASR_CPU_THREADS: int = Field(default=8, description="Whisper Threads Number (CPU Threads)")
     ASR_NUM_OF_WORKERS: int = Field(default=1, description="Number of ASR Workers (Max Concurrency on ASR)")

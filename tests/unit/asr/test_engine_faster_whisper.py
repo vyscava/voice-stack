@@ -41,6 +41,7 @@ def test_faster_whisper_initialization_with_settings() -> None:
         mock_settings.ASR_NUM_OF_WORKERS = 1
         mock_settings.ASR_VAD_ENABLED = False
         mock_settings.ASR_CACHE_ENABLED = False
+        mock_settings.ASR_MODEL_REVISION = None
 
         mock_instance = Mock()
         mock_model.return_value = mock_instance
@@ -54,6 +55,7 @@ def test_faster_whisper_initialization_with_settings() -> None:
             download_root="/models",
             cpu_threads=4,
             num_workers=1,
+            revision=None,
         )
 
 
@@ -637,3 +639,37 @@ def test_touch_does_not_mark_the_model_loaded() -> None:
         engine._model_loaded = False
         engine._touch()
         assert engine._model_loaded is False
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+@pytest.mark.parametrize(("revision", "expected"), [("0" * 40, "0" * 40), ("", None), (None, None)])
+def test_model_revision_reaches_whisper_model(revision: str | None, expected: str | None) -> None:
+    with (
+        patch("asr.engine.fasterwhisper.WhisperModel") as mock_model,
+        patch("asr.engine.fasterwhisper.settings") as mock_settings,
+    ):
+        mock_settings.ASR_MODEL_REVISION = revision
+        ASRFasterWhisper()
+        assert mock_model.call_args.kwargs["revision"] == expected
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+@pytest.mark.parametrize(
+    ("model", "variant"),
+    [
+        ("large-v3-turbo", "large-v3-turbo"),
+        ("mobiuslabsgmbh/faster-whisper-large-v3-turbo", "large-v3-turbo"),
+        ("Systran/faster-whisper-large-v3", "large-v3"),
+        ("small", "small"),
+    ],
+)
+def test_active_variant_prefers_the_longest_match(model: str, variant: str) -> None:
+    with (
+        patch("asr.engine.fasterwhisper.WhisperModel"),
+        patch("asr.engine.base.settings") as base_settings,
+    ):
+        engine = ASRFasterWhisper()
+        base_settings.ASR_MODEL = model
+        assert engine._infer_active_variant() == variant

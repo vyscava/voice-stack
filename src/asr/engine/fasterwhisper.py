@@ -38,6 +38,7 @@ class ASRFasterWhisper(ASRBase):
             download_root=settings.ASR_MODEL_LOCATION,
             cpu_threads=settings.ASR_CPU_THREADS,
             num_workers=settings.ASR_NUM_OF_WORKERS,
+            revision=settings.ASR_MODEL_REVISION or None,
         )
 
     def _unload_model(self) -> None:

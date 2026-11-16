@@ -325,3 +325,83 @@ smoke:agent-image:
     DOCKER_HOST: "unix:///var/run/docker.sock"
   tags:
     - cpu
+
+# The GPU ASR image, booted on the CPU (nothing in CI has a GPU). The CUDA build
+# of CTranslate2 also runs on the CPU, so this proves the shipped image starts,
+# loads a model and TRANSCRIBES: real speech from the slim image's Kokoro TTS
+# must come back as words. The GPU path itself is proven at deploy time: the
+# service loads its model on start, so a CUDA library that does not resolve on
+# the GPU host fails the deploy's health check.
+smoke:asr-cuda-image:
+  stage: smoke
+  image: docker:29
+  needs:
+    - build:prod-image
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - pyproject.toml
+        - Dockerfile
+        - .gitlab-ci.yml
+        - .gitlab/ci/smoke.yml
+        - scripts/entrypoint.sh
+        - scripts/assert_runtime.py
+        - src/**/*
+  variables:
+    ASR_MODEL_CACHE: voice-stack-ci-asr-models
+  before_script:
+    - |
+      if [ -n "$DOCKER_REGISTRY" ] && [ -n "$DOCKER_REGISTRY_USER" ]; then
+        echo "$DOCKER_REGISTRY_PASSWORD" | docker login -u "$DOCKER_REGISTRY_USER" --password-stdin "$DOCKER_REGISTRY"
+      fi
+  script:
+    - docker pull $KOKORO_IMAGE_SHA
+    - docker pull $ASR_CUDA_IMAGE_SHA
+    - |
+      set -e
+      TTS=smoke-cuda-tts-${CI_JOB_ID}; ASR=smoke-cuda-asr-${CI_JOB_ID}
+      cleanup() { docker rm -f $TTS $ASR >/dev/null 2>&1 || true; }
+      trap cleanup EXIT
+      cleanup
+      wait_healthy() {
+        name=$1; port=$2
+        for _ in $(seq 1 72); do
+          docker exec "$name" curl -fsS "http://localhost:$port/health" >/dev/null 2>&1 && return 0
+          if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != "true" ]; then
+            echo "FAIL: $name exited during startup"; docker logs --tail 40 "$name"; return 1
+          fi
+          sleep 5
+        done
+        echo "FAIL: $name never became healthy within 360s"; docker logs --tail 40 "$name"; return 1
+      }
+
+      docker run -d --name $TTS -e SERVICE_MODE=tts -e TTS_DEVICE=cpu -e LOG_LEVEL=info "$KOKORO_IMAGE_SHA"
+      wait_healthy $TTS 5002
+      docker exec $TTS curl -fsS -X POST http://localhost:5002/v1/audio/speech \
+        -H 'Content-Type: application/json' \
+        -d '{"model":"tts-1","voice":"af_heart","input":"Smoke test one two three.","response_format":"wav"}' \
+        -o /tmp/speech.wav
+      docker cp $TTS:/tmp/speech.wav /tmp/speech-${CI_JOB_ID}.wav
+
+      docker run -d --name $ASR -e LOG_LEVEL=info -e ASR_DEVICE=cpu -e ASR_COMPUTE_TYPE=int8 \
+        -e ASR_MODEL_LOCATION=/app/models -v "$ASR_MODEL_CACHE":/app/models "$ASR_CUDA_IMAGE_SHA"
+      wait_healthy $ASR 5001
+      docker cp /tmp/speech-${CI_JOB_ID}.wav $ASR:/tmp/speech.wav
+      docker exec $ASR curl -fsS -X POST http://localhost:5001/v1/audio/transcriptions \
+        -F 'file=@/tmp/speech.wav;type=audio/wav' -F 'model=whisper-1' -o /tmp/asr.json
+      docker exec $ASR cat /tmp/asr.json > asr-cuda-smoke.json
+      rm -f /tmp/speech-${CI_JOB_ID}.wav
+      # Two distinct words of the phrase: real speech passes, silence or noise does not.
+      hits=$({ grep -oiwE 'smoke|test|one|two|three|1|2|3' asr-cuda-smoke.json || true; } \
+        | tr 'A-Z' 'a-z' | sed 's/^1$/one/;s/^2$/two/;s/^3$/three/' | sort -u | wc -l)
+      [ "$hits" -ge 2 ] || { echo "FAIL: transcript has $hits of the spoken words"; cat asr-cuda-smoke.json; exit 1; }
+      echo "OK: asr-cuda image booted (CPU mode) and transcribed real speech ($hits phrase words)."
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - asr-cuda-smoke.json
+  tags:
+    - docker
+    - nuc

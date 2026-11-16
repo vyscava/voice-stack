@@ -64,6 +64,9 @@ variables:
   # Voice agent image (Dockerfile target "agent"): LiveKit worker, no speech model.
   AGENT_IMAGE: ${DOCKER_REGISTRY}/voice-stack:agent
   AGENT_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack:agent-$CI_COMMIT_SHA
+  # GPU batch ASR image (Dockerfile target "asr-cuda"): faster-whisper on CUDA 12, no torch.
+  ASR_CUDA_IMAGE: ${DOCKER_REGISTRY}/voice-stack:asr-cuda
+  ASR_CUDA_IMAGE_SHA: ${DOCKER_REGISTRY}/voice-stack:asr-cuda-$CI_COMMIT_SHA
 
   # Enable Docker BuildKit
   DOCKER_BUILDKIT: 1
@@ -185,12 +188,16 @@ build:prod-image:
     - echo "Building the voice agent image (LiveKit worker, no speech model)..."
     - docker build --pull --file Dockerfile --target agent --tag $AGENT_IMAGE_SHA --cache-from $AGENT_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 --build-arg APT_REFRESH=$APT_REFRESH .
     - docker push $AGENT_IMAGE_SHA
+    - echo "Building the GPU ASR image (faster-whisper on CUDA 12, no torch)..."
+    - docker build --pull --file Dockerfile --target asr-cuda --tag $ASR_CUDA_IMAGE_SHA --cache-from $ASR_CUDA_IMAGE --cache-from $KOKORO_IMAGE --build-arg BUILDKIT_INLINE_CACHE=1 --build-arg APT_REFRESH=$APT_REFRESH .
+    - docker push $ASR_CUDA_IMAGE_SHA
     - echo "Production image built and pushed with SHA tag"
     # The deploy jobs (.gitlab/ci/deploy.yml) pin exactly this build.
     - echo "VOICE_STACK_PUBLISHED_IMAGE=${KOKORO_IMAGE_SHA}" > deploy.env
     - echo "VOICE_AGENT_PUBLISHED_IMAGE=${AGENT_IMAGE_SHA}" >> deploy.env
     # Streaming ASR needs torch, so it runs from the full image.
     - echo "VOICE_STACK_FULL_PUBLISHED_IMAGE=${PROD_IMAGE_SHA}" >> deploy.env
+    - echo "VOICE_STACK_ASR_CUDA_PUBLISHED_IMAGE=${ASR_CUDA_IMAGE_SHA}" >> deploy.env
     - echo "Image will be promoted to latest in release stage after all checks pass"
 
   artifacts:
@@ -551,6 +558,7 @@ release:latest:
     - smoke:image-works
     - smoke:kokoro-image
     - smoke:agent-image
+    - smoke:asr-cuda-image
     - coverage:report
     - secret_detection
     # Security gates (.gitlab/ci/security.yml). The needs edge is what makes
@@ -561,6 +569,8 @@ release:latest:
     - test:scan:trivy_kokoro
     - test:audit:agent
     - test:scan:trivy_agent
+    - test:audit:asr_cuda
+    - test:scan:trivy_asr_cuda
     - test:sast:semgrep
 
   rules:
@@ -589,6 +599,9 @@ release:latest:
     - docker pull $AGENT_IMAGE_SHA
     - docker tag $AGENT_IMAGE_SHA $AGENT_IMAGE
     - docker push $AGENT_IMAGE
+    - docker pull $ASR_CUDA_IMAGE_SHA
+    - docker tag $ASR_CUDA_IMAGE_SHA $ASR_CUDA_IMAGE
+    - docker push $ASR_CUDA_IMAGE
     # Gated markers: only this job, which needs every gate, writes them, and
     # release:version re-tags only these. A tag on a commit main never
     # promoted therefore has nothing to release.

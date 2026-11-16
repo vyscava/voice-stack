@@ -85,6 +85,23 @@ include:
       image_repository: $DOCKER_REGISTRY/voice-stack
       ci_fallback: false
       prune_before_pull: true
+  # GPU batch ASR on its own host: the asr-cuda image (faster-whisper on CUDA
+  # 12). The host comes from the VOICE_STACK_GPU_DEPLOY_HOST CI/CD variable, so
+  # a fork without a GPU host leaves it unset and sets DEPLOY_DISABLED, as for
+  # every other stack. Nothing depends on it: the CPU ASR stays the fallback.
+  - project: gitops/ci-templates
+    ref: v1.4.0
+    file: /templates/deploy.yml
+    inputs:
+      stack: voice-stack-asr-gpu
+      compose_file: compose/deploy/asr-gpu.yml
+      image_var: VOICE_STACK_ASR_CUDA_IMAGE
+      published_var: VOICE_STACK_ASR_CUDA_PUBLISHED_IMAGE
+      image_repository: $DOCKER_REGISTRY/voice-stack
+      host: $VOICE_STACK_GPU_DEPLOY_HOST
+      ci_fallback: false
+      prune_before_pull: true
+      health_timeout: 420
 
 # The gateway joins the ASR and TTS networks as external networks, which only
 # exist once those stacks are up, so it deploys after both. A job with `needs`
@@ -113,3 +130,11 @@ deploy:voice-stack-agent:
     - release:latest
     - deploy:voice-stack-asr
     - deploy:voice-stack-tts
+
+# An unset VOICE_STACK_GPU_DEPLOY_HOST would make the deployer fall back to
+# DEPLOY_HOST, the CPU host, where the GPU service cannot start. Fail loudly
+# instead (the template leaves before_script empty for exactly this kind of
+# per-stack guard).
+deploy:voice-stack-asr-gpu:
+  before_script:
+    - '[ -n "${VOICE_STACK_GPU_DEPLOY_HOST:-}" ] || { echo "FAIL: VOICE_STACK_GPU_DEPLOY_HOST is not set; refusing to fall back to DEPLOY_HOST"; exit 1; }'
