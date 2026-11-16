@@ -533,3 +533,76 @@ async def test_stream_mode_falls_back_to_the_primary_first_batch(monkeypatch):
     monkeypatch.setenv("AGENT_STT_MODE", "stream")
     plugin = worker.build_stt(_settings(AGENT_ASR_PRIMARY_URL="http://gpu:5011"), vad=None)
     assert isinstance(plugin.batch, FallbackBatchSTT)
+
+
+class ToolBrain:
+    """Speaks, runs a tool (progress events), then answers."""
+
+    def __init__(self, *items):
+        self.items = items
+
+    async def reply(self, history, *, call_id, turn_id, language):
+        for item in items_with_delays(self.items):
+            delay, chunk = item
+            await asyncio.sleep(delay)
+            yield chunk
+
+
+def items_with_delays(items):
+    return [(i if isinstance(i, tuple) else (0, i)) for i in items]
+
+
+def _tool(status="running"):
+    from voice_agent.brains import ToolProgress
+
+    return ToolProgress(tool="kb_search", label="KB", status=status)
+
+
+def _tool_turns(preamble):
+    return metrics.TOOL_TURNS.labels(preamble=preamble)._value.get()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_start_flushes_the_preamble_and_events_never_reach_tts():
+    yes = _tool_turns("yes")
+    brain = ToolBrain("Let me check the KB.", _tool(), _tool("completed"), "\n\nFound it.")
+    settings = _filler_settings(AGENT_ACK_AFTER_S=0, AGENT_FILLER_AFTER_S=0, AGENT_PROGRESS_AFTER_S=0)
+    agent = worker.VoiceAgent(brain=brain, settings=settings, call_id="c")
+    out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "kb?")), None, None)])
+    assert out == ["Let me check the KB.", FLUSH, FLUSH, "\n\nFound it."]
+    assert _tool_turns("yes") == yes + 1
+
+
+@pytest.mark.asyncio
+async def test_a_silent_tool_turn_counts_as_no_preamble():
+    no = _tool_turns("no")
+    settings = _filler_settings(AGENT_ACK_AFTER_S=0, AGENT_FILLER_AFTER_S=0)
+    agent = worker.VoiceAgent(brain=ToolBrain(_tool(), "Found it."), settings=settings, call_id="c")
+    out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "kb?")), None, None)])
+    assert out == ["Found it."]
+    assert _tool_turns("no") == no + 1
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_tool_run_after_the_preamble_gets_a_progress_line():
+    before = _fillers("progress")
+    brain = ToolBrain("Vou verificar.", _tool(), (0.2, "Pronto."))
+    settings = _filler_settings(AGENT_ACK_AFTER_S=0, AGENT_FILLER_AFTER_S=0, AGENT_PROGRESS_AFTER_S=0.05)
+    agent = worker.VoiceAgent(brain=brain, settings=settings, call_id="c")
+    agent.language = "pt"
+    out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)])
+    assert out == ["Vou verificar.", FLUSH, "Ainda estou verificando. ", FLUSH, "Pronto."]
+    assert _fillers("progress") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_a_portuguese_turn_gets_the_portuguese_apology():
+    agent = worker.VoiceAgent(
+        brain=ScriptedBrain(fail=True), settings=_settings(AGENT_MSG_APOLOGY_PT="Desculpa!"), call_id="c"
+    )
+    agent.language = "pt"
+    out = [c async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)]
+    assert out == ["Desculpa!"]
+    agent.language = "en"
+    out = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
+    assert out[0].startswith("Sorry")

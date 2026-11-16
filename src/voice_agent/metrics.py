@@ -51,6 +51,13 @@ for _reason in ("timeout", "error"):
     STT_PRIMARY_FALLBACKS.labels(reason=_reason)
 for _service in ("primary", "fallback"):
     STT_REQUESTS.labels(service=_service)
+TOOL_TURNS = Counter(
+    "voice_agent_tool_turns_total",
+    "Turns where the brain ran a tool, by whether it spoke before the first tool (preamble yes/no).",
+    ["preamble"],
+)
+for _preamble in ("yes", "no"):
+    TOOL_TURNS.labels(preamble=_preamble)
 
 # LiveKit's session "error" events. A TTS failing every request leaves the
 # caller in silence while the process looks healthy; this is how that shows.

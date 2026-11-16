@@ -56,3 +56,24 @@ def test_phrases_lists_every_line_longest_first():
     phrases = _picker().phrases()
     assert set(phrases) == {"Okay.", "Sure.", "Tá.", "Certo.", "Hmm, let me think.", "Hum, deixa eu pensar."}
     assert [len(x) for x in phrases] == sorted((len(x) for x in phrases), reverse=True)
+
+
+def test_progress_and_think_lines_rotate_per_language_and_are_stripped_from_history():
+    picker = FillerPicker(
+        acks={"en": ("Okay.",)},
+        think={"en": "Hmm.|Let me see."},
+        progress={"en": "Still checking.|Almost there.", "pt": "Ainda verificando."},
+    )
+    assert [picker.progress("en"), picker.progress("en"), picker.progress("en")] == [
+        "Still checking.",
+        "Almost there.",
+        "Still checking.",
+    ]
+    assert picker.progress("pt-BR") == "Ainda verificando."
+    assert picker.progress("pt").kind == "progress"
+    assert [picker.think("en"), picker.think("en")] == ["Hmm.", "Let me see."]
+    assert {"Still checking.", "Almost there.", "Ainda verificando.", "Let me see."} <= set(picker.phrases())
+
+
+def test_no_progress_phrases_means_no_line():
+    assert FillerPicker(acks={}, think={}).progress("en") is None
