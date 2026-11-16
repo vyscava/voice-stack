@@ -368,9 +368,23 @@ class Settings(BaseSettings):
     AGENT_TICKS_MAX_TAIL_S: float = Field(
         default=2.0, description="After the brain's first words, stop the ticks this long later even if no audio came."
     )
-    AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.")
-    AGENT_MSG_FILLER_PT: str = Field(default="Hum, deixa eu pensar.")
+    AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.", description="Thinking line(s), '|'-separated.")
+    AGENT_MSG_FILLER_PT: str = Field(default="Hum, deixa eu pensar.", description="Thinking line(s), '|'-separated.")
+    # After the brain has started speaking, a tool run that leaves the caller in
+    # silence gets one short line (tool activity comes from the brain's stream,
+    # see voice_agent/brains.py ToolProgress). 0 = off.
+    AGENT_PROGRESS_AFTER_S: float = Field(
+        default=4.0, description="Say a progress line when a tool runs this long after the brain spoke. 0 = off."
+    )
+    AGENT_MSG_PROGRESS: str = Field(default="Still checking.|Almost there.", description="'|'-separated.")
+    AGENT_MSG_PROGRESS_PT: str = Field(
+        default="Ainda estou verificando.|Só mais um instante.", description="'|'-separated."
+    )
     AGENT_MSG_APOLOGY: str = Field(default="Sorry, I can't reach my brain right now. Please try again in a moment.")
+    AGENT_MSG_APOLOGY_PT: str = Field(
+        default="Desculpa, não consegui pensar nisso agora. Tenta de novo daqui a pouco.",
+        description="The apology for a Portuguese turn.",
+    )
 
     # Debug settings
     DEBUG_PRESERVE_FAILED_UPLOADS: bool = Field(

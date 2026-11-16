@@ -456,7 +456,20 @@ What it does on its own:
   a thinking line follows (`AGENT_MSG_FILLER`, `AGENT_MSG_FILLER_PT`). A fast
   answer gets none of these, and no filler is sent back to the brain as history.
 - **Dead brain:** a timeout or error before the first words becomes a spoken
-  apology (`AGENT_MSG_APOLOGY`), never silence.
+  apology in the turn's language (`AGENT_MSG_APOLOGY`, `AGENT_MSG_APOLOGY_PT`),
+  never silence. The deploy allows 45 s (`AGENT_BRAIN_TIMEOUT_S`), since a
+  tool-using brain can take 20 s before it says anything.
+- **Tool-using brains:** an agent server that reports tool activity as named
+  SSE events on the same chat-completions stream (Hermes sends
+  `event: hermes.tool.progress` with `status: running|completed`; any
+  `*.tool.progress` event is read) lets the agent speak what the brain said
+  *before* a tool the moment the tool starts, instead of after it (LiveKit
+  would otherwise hold that sentence until more text arrives). If a tool then
+  runs `AGENT_PROGRESS_AFTER_S` (4 s) with nothing said, one short line follows
+  (`AGENT_MSG_PROGRESS`, `AGENT_MSG_PROGRESS_PT`), once per quiet stretch.
+  `voice_agent_tool_turns_total{preamble="yes|no"}` counts tool turns by
+  whether the brain spoke before its first tool. Thinking and progress lines
+  accept several `|`-separated phrases, which take turns.
 - **Noisy rooms:** background speech never goes quiet, so a turn also ends
   after `AGENT_MAX_USER_TURN_S`.
 - **Streaming ASR (opt-in):** `AGENT_STT_MODE=stream` sends the caller's audio

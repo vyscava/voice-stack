@@ -195,3 +195,75 @@ async def test_fillers_cancelled_mid_wait_leave_nothing_pending():
     assert seen == ["cancelled"]
     pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()]
     assert pending == []
+
+
+class Tool:
+    """A non-text brain event, as voice_agent.brains.ToolProgress looks to the policy layer."""
+
+    def __init__(self, running=True):
+        self.running = running
+
+
+async def _timed(*items):
+    """(delay_before, item) pairs."""
+    for delay, item in items:
+        await asyncio.sleep(delay)
+        yield item
+
+
+@pytest.mark.asyncio
+async def test_guarded_ignores_events_when_waiting_for_the_first_words():
+    t = Tool()
+    out = await _collect(guarded(_timed((0, t), (0.02, "Hi")), timeout_s=1, apology="Sorry."))
+    assert out == [t, "Hi"]
+
+
+@pytest.mark.asyncio
+async def test_guarded_times_out_on_text_even_when_events_keep_coming():
+    failures: list[str] = []
+    gen = _timed((0, Tool()), (0.05, Tool()), (0.05, Tool()), (0.5, "late"))
+    out = await _collect(guarded(gen, timeout_s=0.12, apology="Sorry.", on_failure=failures.append))
+    assert out[-1] == "Sorry." and "late" not in out
+    assert failures == ["timeout"]
+
+
+@pytest.mark.asyncio
+async def test_an_event_does_not_cancel_the_ack():
+    t = Tool()
+    out = await _collect(with_fillers(_timed((0, t), (0.15, "Answer.")), stages=[(0.05, "Okay.")]))
+    assert out == [t, "Okay.", "Answer."]
+
+
+@pytest.mark.asyncio
+async def test_progress_line_covers_a_quiet_tool_run_after_the_preamble():
+    from voice_agent.policy import with_progress
+
+    t = Tool()
+    out = await _collect(
+        with_progress(_timed((0, "Checking."), (0, t), (0.15, "Done.")), after_s=0.05, line="Still checking.")
+    )
+    assert out == ["Checking.", t, "Still checking.", "Done."]
+
+
+@pytest.mark.asyncio
+async def test_no_progress_line_when_the_answer_comes_in_time_or_before_any_words():
+    from voice_agent.policy import with_progress
+
+    t = Tool()
+    fast = await _collect(with_progress(_timed((0, "Checking."), (0, t), (0.01, "Done.")), after_s=0.1, line="Still."))
+    assert fast == ["Checking.", t, "Done."]
+    # Before the first words the ack/thinking line cover the wait, not this.
+    early = await _collect(with_progress(_timed((0, t), (0.1, "Done.")), after_s=0.02, line="Still."))
+    assert early == [t, "Done."]
+    off = await _collect(with_progress(_timed((0, "A."), (0, t), (0.08, "B.")), after_s=0, line="Still."))
+    assert off == ["A.", t, "B."]
+
+
+@pytest.mark.asyncio
+async def test_a_chain_of_tools_gets_one_progress_line_until_the_brain_speaks():
+    from voice_agent.policy import with_progress
+
+    a, b, c = Tool(), Tool(), Tool()
+    gen = _timed((0, "Checking."), (0, a), (0.08, b), (0.08, "Half."), (0, c), (0.08, "Done."))
+    out = await _collect(with_progress(gen, after_s=0.04, line="Still."))
+    assert out == ["Checking.", a, "Still.", b, "Half.", c, "Still.", "Done."]

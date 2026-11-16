@@ -41,23 +41,56 @@ def _lang_key(lang: str | None) -> str:
     return "pt" if (lang or "").strip().lower().startswith("pt") else "en"
 
 
+class Progress(Filler):
+    kind = "progress"
+
+
+Phrases = str | tuple[str, ...]
+
+
+def _phrases(value: Phrases) -> tuple[str, ...]:
+    return parse_phrases(value) if isinstance(value, str) else tuple(p for p in value if p)
+
+
 class FillerPicker:
-    """Per-call phrase choice: rotating acknowledgements, one thinking line per language."""
+    """Per-call phrase choice; each kind rotates through its phrases per language.
 
-    def __init__(self, *, acks: dict[str, tuple[str, ...]], think: dict[str, str]) -> None:
-        self._acks = {k: v for k, v in acks.items() if v}
-        self._think = {k: v for k, v in think.items() if v}
-        self._cycles: dict[str, Iterator[str]] = {k: itertools.cycle(v) for k, v in self._acks.items()}
+    A setting with one phrase behaves as before; ``|``-separated phrases take
+    turns, so a long call does not repeat the same line.
+    """
 
-    def ack(self, lang: str | None) -> Ack | None:
-        cycle = self._cycles.get(_lang_key(lang)) or self._cycles.get("en")
-        return Ack(next(cycle)) if cycle else None
+    def __init__(
+        self,
+        *,
+        acks: dict[str, Phrases],
+        think: dict[str, Phrases],
+        progress: dict[str, Phrases] | None = None,
+    ) -> None:
+        self._kinds: dict[type[Filler], dict[str, tuple[str, ...]]] = {
+            Ack: {k: _phrases(v) for k, v in acks.items() if _phrases(v)},
+            Think: {k: _phrases(v) for k, v in think.items() if _phrases(v)},
+            Progress: {k: _phrases(v) for k, v in (progress or {}).items() if _phrases(v)},
+        }
+        self._cycles: dict[tuple[type[Filler], str], Iterator[str]] = {
+            (kind, lang): itertools.cycle(phrases)
+            for kind, by_lang in self._kinds.items()
+            for lang, phrases in by_lang.items()
+        }
 
-    def think(self, lang: str | None) -> Think | None:
-        text = self._think.get(_lang_key(lang)) or self._think.get("en")
-        return Think(text) if text else None
+    def _pick(self, kind: type[Filler], lang: str | None) -> Filler | None:
+        cycle = self._cycles.get((kind, _lang_key(lang))) or self._cycles.get((kind, "en"))
+        return kind(next(cycle)) if cycle else None
+
+    def ack(self, lang: str | None) -> Filler | None:
+        return self._pick(Ack, lang)
+
+    def think(self, lang: str | None) -> Filler | None:
+        return self._pick(Think, lang)
+
+    def progress(self, lang: str | None) -> Filler | None:
+        return self._pick(Progress, lang)
 
     def phrases(self) -> tuple[str, ...]:
         """Every line this picker can say, longest first (for stripping history)."""
-        every = {p for v in self._acks.values() for p in v} | set(self._think.values())
+        every = {p for by_lang in self._kinds.values() for v in by_lang.values() for p in v}
         return tuple(sorted(every, key=len, reverse=True))

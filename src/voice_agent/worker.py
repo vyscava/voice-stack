@@ -25,10 +25,10 @@ from livekit.plugins import openai, silero
 
 from core.settings import Settings, get_settings
 from voice_agent import metrics
-from voice_agent.brains import Brain, build_brain, history_from_chat_items
+from voice_agent.brains import Brain, ToolProgress, build_brain, history_from_chat_items
 from voice_agent.fallback_stt import FallbackBatchSTT
 from voice_agent.fillers import Filler, FillerPicker, parse_phrases
-from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_fillers
+from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_fillers, with_progress
 from voice_agent.stream_audio import stream_url
 from voice_agent.stream_stt import AsrStreamSTT
 from voice_agent.ticks import BackgroundTicker, NullTicker, Ticker
@@ -129,7 +129,14 @@ def build_fillers(settings: Settings) -> FillerPicker:
     return FillerPicker(
         acks={"en": parse_phrases(settings.AGENT_ACKS_EN), "pt": parse_phrases(settings.AGENT_ACKS_PT)},
         think={"en": settings.AGENT_MSG_FILLER, "pt": settings.AGENT_MSG_FILLER_PT},
+        progress={"en": settings.AGENT_MSG_PROGRESS, "pt": settings.AGENT_MSG_PROGRESS_PT},
     )
+
+
+def apology_for(settings: Settings, lang: str | None) -> str:
+    if (lang or "").strip().lower().startswith("pt") and settings.AGENT_MSG_APOLOGY_PT:
+        return settings.AGENT_MSG_APOLOGY_PT
+    return settings.AGENT_MSG_APOLOGY
 
 
 class VoiceAgent(Agent):
@@ -170,11 +177,21 @@ class VoiceAgent(Agent):
         self._ticks_until_audio = False
         self._ticker.stop()  # a new turn starts quiet
         completed = False
+        tools: dict[str, bool | None] = {"preamble": None}  # None: no tool this turn
+        brain = guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=apology_for(s, lang), on_failure=failed)
+        brain = with_progress(brain, after_s=s.AGENT_PROGRESS_AFTER_S, line=lambda: self._fillers.progress(lang))
         try:
-            async for chunk in with_fillers(
-                guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=s.AGENT_MSG_APOLOGY, on_failure=failed),
-                stages=stages,
-            ):
+            async for chunk in with_fillers(brain, stages=stages):
+                if isinstance(chunk, ToolProgress):
+                    if chunk.running:
+                        if tools["preamble"] is None:
+                            tools["preamble"] = spoke["first"]
+                        if spoke["first"]:
+                            # Speak what the brain said before the tool NOW: LiveKit's
+                            # sentence tokenizer would otherwise hold the last sentence
+                            # until more text arrives, i.e. until the tool is done.
+                            yield FlushSentinel()
+                    continue
                 if isinstance(chunk, Filler):
                     metrics.FILLERS.labels(kind=chunk.kind).inc()
                     self._ticker.stop()  # never tick over our own words
@@ -183,8 +200,17 @@ class VoiceAgent(Agent):
                     # holds a line under 20 characters until more text arrives, and the
                     # ack would only be heard glued to the brain's first sentence.
                     yield FlushSentinel()
-                    self._ticker.start()  # "loading" ticks fill the wait after the line
+                    if not spoke["first"]:
+                        # "loading" ticks fill the wait after the ack/thinking line. Not
+                        # after a progress line: the answer's audio already stopped them
+                        # once, and nothing would stop them again before the next words.
+                        self._ticker.start()
                     continue
+                if spoke["first"] and tools["preamble"] is not None and chunk.startswith("\n"):
+                    # A new paragraph after a tool round: its own sentence, not glued
+                    # to the preamble. Only in a tool turn, so a plain answer's
+                    # paragraphs keep their prosody.
+                    yield FlushSentinel()
                 if not spoke["first"]:
                     spoke["first"] = True
                     # Keep ticking until the answer's audio starts (tts_node); the
@@ -200,6 +226,8 @@ class VoiceAgent(Agent):
                 self._ticks_until_audio = False
                 self._ticker.stop()  # barge-in or error: never leave the ticks running
         metrics.TURNS.labels(outcome=outcome["value"]).inc()
+        if tools["preamble"] is not None:
+            metrics.TOOL_TURNS.labels(preamble="yes" if tools["preamble"] else "no").inc()
 
     async def tts_node(  # type: ignore[override]
         self, text: AsyncIterable[str], model_settings: Any
