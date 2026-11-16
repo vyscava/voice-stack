@@ -42,6 +42,9 @@ services:
       ASR_TRANSCRIBE_BEAM_SIZE: "1"
       ASR_TRANSCRIBE_TEMPERATURE: "0"
       ASR_TRANSCRIBE_BEST_OF: "1"
+      # Vocabulary biasing (names the household uses), from the deploy's
+      # secret store so personal words stay out of this repo. Empty = off.
+      ASR_TRANSCRIBE_HOTWORDS: ${ASR_TRANSCRIBE_HOTWORDS:-}
       ASR_VAD_ENABLED: "true"
       ASR_IDLE_TIMEOUT_MINUTES: "60"
       ASR_MAX_CONCURRENT_REQUESTS: "2"

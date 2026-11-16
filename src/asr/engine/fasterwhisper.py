@@ -132,6 +132,7 @@ class ASRFasterWhisper(ASRBase):
             temperature=props.temperature or 0,
             best_of=props.best_of or 1,
             word_timestamps=props.word_timestamps if props.word_timestamps is not None else False,
+            hotwords=props.hotwords,
         )
 
         # Stop Running time for Faster-Whisper

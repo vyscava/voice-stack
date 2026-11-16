@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     ASR_TRANSCRIBE_BEST_OF: int = Field(
         default=1, description="Number of parallel sampling candidates when beam_size == 1"
     )
+    ASR_TRANSCRIBE_HOTWORDS: str | None = Field(
+        default=None,
+        description=(
+            "Words the speaker is likely to say (names, products), e.g. 'Iris, Plex, NAS'. faster-whisper "
+            "prepends them to every decoding window as a prompt, which biases recognition toward them. "
+            "Empty = off. Only the first ~223 tokens count; put the most important words first."
+        ),
+    )
 
     # Streaming ASR (WebSocket /v1/stream). Off by default; needs the "stream" extra
     # (transformers + torch). The model loads on the first stream connection.

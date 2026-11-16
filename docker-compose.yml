@@ -62,6 +62,8 @@ services:
 
       # Performance tuning
       ASR_TRANSCRIBE_BEAM_SIZE: ${ASR_TRANSCRIBE_BEAM_SIZE:-5}
+      # Vocabulary biasing: names the speakers use, most important first.
+      ASR_TRANSCRIBE_HOTWORDS: ${ASR_TRANSCRIBE_HOTWORDS:-}
       ASR_NUM_OF_WORKERS: ${ASR_NUM_OF_WORKERS:-1}
 
       # Debugging (disable in production)
