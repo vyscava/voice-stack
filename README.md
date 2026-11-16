@@ -21,7 +21,7 @@ The fastest way to get running. Requires Docker; a GPU is optional.
 
 ### Build
 
-Pick the image for your hardware. All four serve the same API.
+Pick the image for your hardware. They all serve the same API (`:asr-cuda` serves ASR only).
 
 ```bash
 git clone https://github.com/vyscava/voice-stack.git
@@ -30,6 +30,7 @@ docker build -t voice-stack:latest .                          # CPU, full: ASR +
 docker build --target kokoro -t voice-stack:kokoro .          # CPU, slim: ASR + Kokoro + gateway
 docker build -f docker/Dockerfile.cuda -t voice-stack:cuda .  # NVIDIA GPU (driver >= 580)
 docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .  # AMD GPU (ROCm 7)
+docker build --target asr-cuda -t voice-stack:asr-cuda .      # NVIDIA GPU, ASR only, no torch (~3.5 GB)
 ```
 
 | Image | Dockerfile | ASR (faster-whisper) | XTTS | Kokoro |
@@ -38,6 +39,7 @@ docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .  # AMD GPU (ROCm 7)
 | `:latest` / `:xtts` | `Dockerfile` | CPU | CPU | CPU |
 | `:cuda` | `docker/Dockerfile.cuda` | GPU | GPU | GPU (`TTS_KOKORO_DEVICE=cuda`) |
 | `:rocm` | `docker/Dockerfile.rocm` | GPU | GPU | CPU, by design (no onnxruntime ROCm build) |
+| `:asr-cuda` | `Dockerfile --target asr-cuda` | GPU (CUDA 12, `float16`) | not included | not included |
 
 The GPU images default to the GPU (`ASR_DEVICE=cuda`, `TTS_DEVICE=cuda`; ROCm uses the
 same `cuda` device name). There is no published GPU image: build the one you need as
@@ -186,7 +188,8 @@ Bare-metal/systemd installs use the per-service templates instead:
 | `SERVICE_MODE` | _(required)_ | `asr` or `tts` — selects which service the container runs |
 | `ASR_DEVICE` / `TTS_DEVICE` | `cpu` (`cuda` in the GPU images) | `cuda` runs on the GPU, NVIDIA or AMD; needs a GPU image |
 | `TTS_KOKORO_DEVICE` | `cpu` (`cuda` in the CUDA image) | `cpu`, `cuda` or `auto` for Kokoro's ONNX Runtime; `cuda` fails the start if the GPU is not used |
-| `ASR_MODEL` | `base` | Whisper model: `tiny`, `base`, `small`, `medium`, `large-v3` |
+| `ASR_MODEL` | `base` | Whisper model: `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, or a Hugging Face repo id |
+| `ASR_MODEL_REVISION` | _(empty)_ | Commit of the model repo to download; a 40-character sha pins the exact weights. Empty = the repo's current `main` |
 | `ASR_ENGINE` | `fasterwhisper` | `fasterwhisper` (recommended) or `whisper` |
 | `TTS_ENGINE` | `kokoro` | `kokoro` or `coqui` (aliases `xtts`, `xtts-2`); see [TTS Engines](#tts-engines) |
 | `TTS_MODEL` | `tts_models/multilingual/multi-dataset/xtts_v2` | Coqui model ID (XTTS only) |
