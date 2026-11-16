@@ -411,6 +411,7 @@ def test_transcribe_uses_cache() -> None:
         mock_settings.ASR_CACHE_MAX_ITEMS = 10
         mock_settings.ASR_ENGINE = "fasterwhisper"
         mock_settings.ASR_MODEL = "base"
+        mock_settings.ASR_DEVICE = "cpu"  # a CPU engine: no warm-up call to count
 
         mock_segment = Mock()
         mock_segment.start = 0.0
@@ -673,3 +674,53 @@ def test_active_variant_prefers_the_longest_match(model: str, variant: str) -> N
         engine = ASRFasterWhisper()
         base_settings.ASR_MODEL = model
         assert engine._infer_active_variant() == variant
+
+
+def _engine_on(device: str) -> tuple[ASRFasterWhisper, Mock, list[str]]:
+    consumed: list[str] = []
+
+    def lazy_segments():
+        consumed.append("iterated")
+        yield Mock(text="")
+
+    with (
+        patch("asr.engine.fasterwhisper.WhisperModel") as model_cls,
+        patch("asr.engine.fasterwhisper.settings") as engine_settings,
+    ):
+        engine_settings.ASR_DEVICE = device
+        engine_settings.ASR_MODEL_REVISION = None
+        model = Mock()
+        model.transcribe.side_effect = lambda *a, **kw: (lazy_segments(), Mock(language="en"))
+        model_cls.return_value = model
+        return ASRFasterWhisper(), model, consumed
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_gpu_model_is_warmed_up_at_load() -> None:
+    _, model, consumed = _engine_on("cuda")
+    assert model.transcribe.call_count == 1
+    audio = model.transcribe.call_args.args[0]
+    assert audio.dtype == np.float32 and audio.size == 16000
+    assert consumed == ["iterated"], "transcribe is lazy: the warm-up must iterate the segments"
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_cpu_model_is_not_warmed_up() -> None:
+    _, model, _ = _engine_on("cpu")
+    model.transcribe.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asr
+def test_a_failing_warm_up_never_stops_the_service() -> None:
+    with (
+        patch("asr.engine.fasterwhisper.WhisperModel") as model_cls,
+        patch("asr.engine.fasterwhisper.settings") as engine_settings,
+    ):
+        engine_settings.ASR_DEVICE = "cuda"
+        engine_settings.ASR_MODEL_REVISION = None
+        model_cls.return_value.transcribe.side_effect = RuntimeError("CUDA error")
+        engine = ASRFasterWhisper()
+    assert engine.model is model_cls.return_value

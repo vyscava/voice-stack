@@ -40,6 +40,29 @@ class ASRFasterWhisper(ASRBase):
             num_workers=settings.ASR_NUM_OF_WORKERS,
             revision=settings.ASR_MODEL_REVISION or None,
         )
+        if str(settings.ASR_DEVICE).lower() != "cpu":
+            self._warm_up()
+
+    def _warm_up(self) -> None:
+        """Run one tiny transcription so the first real request does not pay the GPU warm-up.
+
+        The first CUDA call compiles kernels and sets up cuDNN: measured above
+        3 s for large-v3-turbo on an RTX 3060, against ~0.3 s once warm, long
+        enough for a live caller's client to give up on the request. This runs
+        while the service starts, before it reports healthy. A failure here is
+        logged, never fatal: the first real request then just pays the cost.
+        """
+        t0 = time.time()
+        try:
+            segments, _ = self.model.transcribe(
+                np.zeros(16000, dtype=np.float32), language="en", beam_size=1, vad_filter=False
+            )
+            for _ in segments:  # transcribe is lazy: the work happens while iterating
+                pass
+        except Exception:  # noqa: BLE001
+            logger.warning("ASR warm-up transcription failed; the first request will be slower", exc_info=True)
+            return
+        logger.info(f"ASR warm-up done in {int((time.time() - t0) * 1000)} ms")
 
     def _unload_model(self) -> None:
         """
