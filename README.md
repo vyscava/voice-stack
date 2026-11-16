@@ -40,8 +40,8 @@ docker build -f docker/Dockerfile.rocm -t voice-stack:rocm .  # AMD GPU (ROCm 7)
 | `:rocm` | `docker/Dockerfile.rocm` | GPU | GPU | CPU, by design (no onnxruntime ROCm build) |
 
 The GPU images default to the GPU (`ASR_DEVICE=cuda`, `TTS_DEVICE=cuda`; ROCm uses the
-same `cuda` device name). There is no published GPU image: build the one you need as
-above. See
+same `cuda` device name). This project's CI publishes `:asr-cuda` (batch ASR on an NVIDIA GPU);
+build any other GPU image yourself as above. See
 [`DOCKER_DEPLOYMENT.md`](DOCKER_DEPLOYMENT.md#gpu-support) for host setup, GPU targets
 and what has been verified on real GPUs.
 
@@ -476,6 +476,9 @@ What it does on its own:
 | `AGENT_STT_MODE` | `batch` | `batch` (one ASR request per VAD segment) or `stream` (the `/v1/stream` WebSocket, batch as fallback) |
 | `AGENT_ASR_STREAM_URL` | empty | Streaming WebSocket URL; empty derives it from `AGENT_ASR_URL` (`http` becomes `ws`, `https` becomes `wss`, plus `/v1/stream`) |
 | `AGENT_ASR_STREAM_FINAL_TIMEOUT_S` | `2.0` | Seconds a flush may go without a final (or a send may block) before the call falls back to batch |
+| `AGENT_ASR_PRIMARY_URL` | empty | A batch ASR tried first for every utterance (typically a GPU service with a bigger model); `AGENT_ASR_URL` becomes its fallback for the same audio. Empty = `AGENT_ASR_URL` alone |
+| `AGENT_ASR_PRIMARY_TIMEOUT_S` | `3.0` | Seconds to wait for the primary before the fallback transcribes the same audio |
+| `AGENT_ASR_PRIMARY_COOLDOWN_S` | `30.0` | After a primary failure, skip it for this long, so a dead host costs one timeout rather than one per turn. Counted in `voice_agent_stt_primary_fallbacks_total{reason}`; `voice_agent_stt_requests_total{service}` shows which ASR answered |
 | `AGENT_PREEMPTIVE_GENERATION` | `false` | Start the reply before the turn is final. Applies to the `openai` brain only: a `nats` peer would receive every discarded speculative turn, so it never gets it |
 
 ## TTS Engines
