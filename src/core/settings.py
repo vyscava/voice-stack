@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     ASR_TRANSCRIBE_HOTWORDS: str | None = Field(
         default=None,
         description=(
-            "Words the speaker is likely to say (names, products), e.g. 'Iris, Plex, NAS'. faster-whisper "
+            "Words the speaker is likely to say (names, products), e.g. 'Ana, Jellyfin, NAS'. faster-whisper "
             "prepends them to every decoding window as a prompt, which biases recognition toward them. "
             "Empty = off. Only the first ~223 tokens count; put the most important words first."
         ),

@@ -32,8 +32,8 @@ def _options() -> base.CacheConf:
         (None, None),
         ("", None),
         ("   \n\t ", None),
-        ("Iris, Plex", "Iris, Plex"),
-        ("  Iris,\n  Plex,\tNAS  ", "Iris, Plex, NAS"),
+        ("Ana, Jellyfin", "Ana, Jellyfin"),
+        ("  Ana,\n  Jellyfin,\tNAS  ", "Ana, Jellyfin, NAS"),
     ],
 )
 def test_normalize_hotwords(raw: str | None, expected: str | None) -> None:
@@ -41,8 +41,8 @@ def test_normalize_hotwords(raw: str | None, expected: str | None) -> None:
 
 
 def test_options_carry_the_configured_hotwords(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", "Iris,\n Plex")
-    assert _options().hotwords == "Iris, Plex"
+    monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", "Ana,\n Jellyfin")
+    assert _options().hotwords == "Ana, Jellyfin"
 
 
 def test_options_have_no_hotwords_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -56,7 +56,7 @@ def test_hotwords_are_part_of_the_cache_key(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", None)
     without = base.ASRBase.create_hash_cache_key(audio_bytes=audio, conf=_options())
     again = base.ASRBase.create_hash_cache_key(audio_bytes=audio, conf=_options())
-    monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", "Iris")
+    monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", "Ana")
     with_words = base.ASRBase.create_hash_cache_key(audio_bytes=audio, conf=_options())
     assert without == again  # the key is stable; only the word list changed it
     assert with_words != without
@@ -89,7 +89,7 @@ def _transcribe_kwargs(monkeypatch: pytest.MonkeyPatch, hotwords: str | None) ->
 
 
 def test_engine_passes_hotwords_to_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _transcribe_kwargs(monkeypatch, "Iris, Plex")["hotwords"] == "Iris, Plex"
+    assert _transcribe_kwargs(monkeypatch, "Ana, Jellyfin")["hotwords"] == "Ana, Jellyfin"
 
 
 def test_engine_passes_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
