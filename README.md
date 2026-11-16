@@ -193,6 +193,7 @@ Bare-metal/systemd installs use the per-service templates instead:
 | `ASR_PORT` / `TTS_PORT` | `5001` / `5002` | Service ports |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
 | `ASR_VAD_ENABLED` | `true` | Voice Activity Detection (30-50% faster transcription) |
+| `ASR_TRANSCRIBE_HOTWORDS` | _(empty)_ | Words the speakers are likely to say (names, product names), comma-separated, e.g. `Ana, Jellyfin, NAS`. faster-whisper prepends them to every decoding window, which biases recognition toward those spellings. Only the first ~223 tokens count, so list the most important words first. Measure with negatives (sound-alikes that must not become a listed word) before trusting a long list. faster-whisper engine only |
 | `TTS_VOICES_DIR` | `/app/voices` | Directory with .wav samples for voice cloning |
 
 ### Resource / Concurrency

@@ -58,6 +58,7 @@ class CacheConf:
     best_of: int | None = None
     word_timestamps: bool | None = None
     use_vad: bool | None = None
+    hotwords: str | None = None
     detect_lang_offset: float | None = None
     detect_lang_length: float | None = None
 
@@ -257,6 +258,12 @@ def _normalize_enum(*, v: str | Enum | None, default: str) -> str:
     return str(v)
 
 
+def normalize_hotwords(value: str | None) -> str | None:
+    """Collapse whitespace (a multi-line env value reads as one line); blank means off."""
+    text = " ".join((value or "").split())
+    return text or None
+
+
 def transcribe_effective_options(
     *,
     request_language: str | None,
@@ -279,6 +286,7 @@ def transcribe_effective_options(
         best_of=int(best_of or settings.ASR_TRANSCRIBE_BEST_OF or 1),
         word_timestamps=bool(word_timestamps if word_timestamps is not None else False),
         use_vad=bool(vad if vad is not None else settings.ASR_VAD_ENABLED or False),
+        hotwords=normalize_hotwords(settings.ASR_TRANSCRIBE_HOTWORDS),
         detect_lang_length=None,
         detect_lang_offset=None,
     )
