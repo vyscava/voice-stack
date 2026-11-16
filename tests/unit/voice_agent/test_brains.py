@@ -300,3 +300,14 @@ async def test_iter_sse_follows_the_format():
         )
     ]
     assert got == [("a", "1\n2"), (None, "x"), (None, "tail")]
+
+
+@pytest.mark.asyncio
+async def test_nothing_after_done_is_spoken():
+    client, completions = _client(["Hi."])
+    lines = _sse_lines(["Hi."]) + _sse_chunk(" stray")
+    completions.create = lambda **kw: FakeStreamingCall(lines, completions.closed)
+    out = await _collect(
+        OpenAICompatBrain(client=client, model="m", system_prompt="p").reply([], call_id="c", turn_id=1, language="en")
+    )
+    assert out == ["Hi."]
