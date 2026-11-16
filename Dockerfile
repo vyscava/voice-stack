@@ -182,6 +182,81 @@ EXPOSE 5001 5002
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # -----------------------------------------------------------------------------
+# GPU ASR image (target "asr-cuda"): batch ASR only, faster-whisper on an
+# NVIDIA GPU. No TTS, no gateway, no torch: CTranslate2 needs only cuBLAS 12
+# and cuDNN 9, which come as pip wheels (the asr-cuda extra), on the same
+# python:3.11-slim base as every other image. A few GB instead of the full
+# CUDA image's ~10, so a GPU host can run ASR beside whatever else it serves.
+# The driver (libcuda.so.1) is injected at run time by the NVIDIA Container
+# Toolkit. Built in CI without a GPU; assert_runtime.py --variant asr-cuda
+# proves the GPU build and its libraries resolve.
+# -----------------------------------------------------------------------------
+FROM builder-base AS builder-asr-cuda
+RUN /build/.venv/bin/pip install --no-cache-dir -e ".[server,asr-cuda]" && finish-venv
+
+FROM python:3.11-slim AS asr-cuda
+
+LABEL description="Voice Stack GPU ASR image: faster-whisper on NVIDIA (CUDA 12)"
+LABEL version="0.1.0"
+
+# APT_REFRESH: see the kokoro stage.
+ARG APT_REFRESH=unset
+RUN echo "apt refresh: ${APT_REFRESH}" && apt-get update -y && \
+    apt-get upgrade -y --no-install-recommends && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 -s /bin/bash voicestack
+WORKDIR /app
+
+COPY --from=builder-asr-cuda --chown=voicestack:voicestack /build/.venv /app/.venv
+COPY --chown=voicestack:voicestack src/ /app/src/
+COPY --chown=voicestack:voicestack scripts/.env.production.* /app/config/
+COPY --chown=voicestack:voicestack scripts/assert_runtime.py /app/scripts/
+
+# CTranslate2 dlopen()s libcublas.so.12 and libcudnn*.so.9 by soname and does
+# not search site-packages, so every pip-installed CUDA library directory goes
+# into the linker cache (generated from what was installed, not hard-coded).
+RUN find /app/.venv/lib/python3.11/site-packages/nvidia -type f -name 'lib*.so*' -printf '%h\n' \
+        | sort -u > /etc/ld.so.conf.d/voice-stack-cuda.conf && \
+    cat /etc/ld.so.conf.d/voice-stack-cuda.conf && \
+    test -s /etc/ld.so.conf.d/voice-stack-cuda.conf && \
+    ldconfig
+
+RUN /app/.venv/bin/python /app/scripts/assert_runtime.py --variant asr-cuda
+
+COPY --chown=voicestack:voicestack scripts/entrypoint.sh /app/
+RUN chmod +x /app/entrypoint.sh && \
+    mkdir -p /app/models && chown voicestack:voicestack /app/models
+
+USER voicestack
+
+# GPU defaults: float16 is CTranslate2's GPU precision. NVIDIA_* tell the
+# container toolkit to expose the GPU and its compute libraries.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    ENV=production \
+    LOG_LEVEL=info \
+    HOST=0.0.0.0 \
+    SERVICE_MODE=asr \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    ASR_DEVICE=cuda \
+    ASR_COMPUTE_TYPE=float16
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:${ASR_PORT:-5001}/health || exit 1
+
+EXPOSE 5001
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# -----------------------------------------------------------------------------
 # Voice agent image: live calls through LiveKit. It holds no speech model (ASR
 # and TTS are reached over HTTP), so no torch, no CTranslate2, no Kokoro.
 # assert_runtime.py --variant agent enforces it. Built with --target agent;

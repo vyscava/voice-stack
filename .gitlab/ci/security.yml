@@ -167,6 +167,14 @@ test:freeze:agent:
     EXPECT_TORCH: "false"
     MIN_DISTS: "40"
 
+test:freeze:asr_cuda:
+  extends: .freeze-image
+  variables:
+    SCAN_IMAGE: $ASR_CUDA_IMAGE_SHA
+    AUDIT_NAME: asr_cuda
+    EXPECT_TORCH: "false"
+    MIN_DISTS: "50"
+
 .audit-image:
   # Light (well under 1 GB): the mini cpu runner, off the busy docker runner.
   tags:
@@ -231,6 +239,14 @@ test:audit:agent:
     AUDIT_IGNORE: ""
   needs:
     - job: test:freeze:agent
+      artifacts: true
+
+test:audit:asr_cuda:
+  extends: .audit-image
+  variables:
+    AUDIT_IGNORE: ""
+  needs:
+    - job: test:freeze:asr_cuda
       artifacts: true
 
 # ---------------------------------------------------------------------------
@@ -337,3 +353,8 @@ test:scan:trivy_agent:
   extends: .trivy-image
   variables:
     SCAN_IMAGE: $AGENT_IMAGE_SHA
+
+test:scan:trivy_asr_cuda:
+  extends: .trivy-image
+  variables:
+    SCAN_IMAGE: $ASR_CUDA_IMAGE_SHA

@@ -1,0 +1,87 @@
+# Voice Stack GPU ASR: batch transcription on an NVIDIA GPU, deployed by CI to
+# its own GPU host through the shared compose deployer (.gitlab/ci/deploy.yml).
+# The host comes from the VOICE_STACK_GPU_DEPLOY_HOST CI/CD variable.
+#
+# The asr-cuda image (Dockerfile target "asr-cuda") runs faster-whisper on CUDA
+# 12 with no torch. large-v3-turbo in float16 holds ~2.1 GiB of GPU memory and
+# transcribes a 2-4 s turn in ~0.55 s with automatic language detection
+# (~0.3 s when the language is given). The CPU ASR stack stays up as the
+# fallback, so this one being down never stops a call.
+#
+# The service listens on the host's port 5011 (the agent on the CPU host calls
+# it over the LAN); nothing on it changes state beyond a transcript cache.
+
+services:
+  asr-gpu:
+    image: ${VOICE_STACK_ASR_CUDA_IMAGE}
+    container_name: voice-stack-asr-gpu
+    restart: unless-stopped
+
+    environment:
+      SERVICE_MODE: asr
+      ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      ASR_PORT: "5001"
+      CORS_ORIGINS: ""
+      DEBUGPY_ENABLE: "false"
+      ASR_ENGINE: fasterwhisper
+      ASR_DEVICE: cuda
+      ASR_COMPUTE_TYPE: float16
+      ASR_MODEL: mobiuslabsgmbh/faster-whisper-large-v3-turbo
+      # The exact weights, so a change upstream never reaches this service
+      # unreviewed. Bump on purpose, after re-running the accuracy check.
+      ASR_MODEL_REVISION: 0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf
+      ASR_MODEL_LOCATION: /app/models
+      ASR_NUM_OF_WORKERS: "1"
+      ASR_CACHE_ENABLED: "true"
+      ASR_CACHE_MAX_ITEMS: "100"
+      # Beam 5: on the GPU it costs little, and it is what the accuracy
+      # measurement used.
+      ASR_TRANSCRIBE_BEAM_SIZE: "5"
+      ASR_TRANSCRIBE_TEMPERATURE: "0"
+      ASR_TRANSCRIBE_BEST_OF: "1"
+      # Names the speakers use, from the deploy's secret store so personal
+      # words stay out of this repo. Empty = off.
+      ASR_TRANSCRIBE_HOTWORDS: ${ASR_TRANSCRIBE_HOTWORDS:-}
+      ASR_VAD_ENABLED: "true"
+      # Never unload: a reload costs seconds on the first turn of a call.
+      ASR_IDLE_TIMEOUT_MINUTES: "0"
+      ASR_MAX_CONCURRENT_REQUESTS: "2"
+      MAX_UPLOAD_SIZE_MB: "50"
+      HF_HOME: /app/models
+
+    ports:
+      - "5011:5001"
+
+    volumes:
+      - asr-gpu-models:/app/models
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Covers a first start that downloads large-v3-turbo (~1.6 GB) into an
+      # empty volume; a warm volume is up in about 15 s.
+      start_period: 300s
+
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  asr-gpu-models:
+    driver: local
