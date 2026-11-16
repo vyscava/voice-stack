@@ -53,6 +53,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConn
 from livekit.agents.utils import AudioBuffer, aio
 
 from voice_agent import metrics
+from voice_agent.aio_util import within as _within
 from voice_agent.stream_audio import SAMPLE_RATE, ReplayBuffer, frame_from_pcm16, mono_frame, pcm16_mono
 
 logger = logging.getLogger("voice_agent")
@@ -68,25 +69,6 @@ REFUSALS = ("busy", "disabled")
 
 class _Stalled(Exception):
     """A send did not complete in time: the server stopped reading."""
-
-
-async def _within(aw: Awaitable[T], timeout: float) -> T:
-    """``asyncio.wait_for`` without its Python 3.10/3.11 flaw.
-
-    There, a cancellation that lands as the awaited operation completes is
-    swallowed: the task carries on (here: back to waiting for audio) and
-    ``cancel_and_wait`` hangs on it forever. ``asyncio.wait`` never swallows it.
-    """
-    task = asyncio.ensure_future(aw)
-    try:
-        done, _ = await asyncio.wait({task}, timeout=timeout)
-    except asyncio.CancelledError:
-        task.cancel()
-        raise
-    if not done:
-        task.cancel()
-        raise asyncio.TimeoutError
-    return task.result()
 
 
 class AsrStreamSTT(stt.STT[Any]):

@@ -29,6 +29,7 @@ services:
       # the CPU ASR is its fallback for the same audio.
       AGENT_ASR_PRIMARY_URL: ${AGENT_ASR_PRIMARY_URL:-}
       AGENT_ASR_PRIMARY_TIMEOUT_S: ${AGENT_ASR_PRIMARY_TIMEOUT_S:-3.0}
+      AGENT_ASR_PRIMARY_COOLDOWN_S: ${AGENT_ASR_PRIMARY_COOLDOWN_S:-30.0}
       AGENT_TTS_URL: http://voice-stack-tts:5002
       # Streaming STT from the voice-stack-asr-stream stack (its own process, so
       # the model never competes with batch ASR). A stream that is refused,

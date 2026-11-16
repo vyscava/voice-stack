@@ -24,6 +24,7 @@ from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 
 from voice_agent import metrics
+from voice_agent.aio_util import within
 
 logger = logging.getLogger("voice_agent")
 
@@ -72,9 +73,11 @@ class FallbackBatchSTT(stt.STT[Any]):
             # One attempt, no retries: a retry is exactly the wait the fallback avoids.
             once = APIConnectOptions(max_retry=0, timeout=self.primary_timeout_s)
             try:
-                event = await asyncio.wait_for(
+                # within(), not asyncio.wait_for: on 3.11 wait_for can swallow
+                # the call teardown's cancellation and hang it (see aio_util).
+                event = await within(
                     self._primary.recognize(buffer, language=language, conn_options=once),
-                    timeout=self.primary_timeout_s,
+                    self.primary_timeout_s,
                 )
             except Exception as exc:  # noqa: BLE001 - any failure of the primary means: use the fallback
                 self._skip_primary_until = self._clock() + self.cooldown_s
@@ -87,7 +90,11 @@ class FallbackBatchSTT(stt.STT[Any]):
             else:
                 metrics.STT_REQUESTS.labels(service="primary").inc()
                 return event
-        event = await self._fallback.recognize(buffer, language=language, conn_options=conn_options)
+        # One attempt here too: STT.recognize already retries this whole method
+        # with the session's conn_options, and retrying inside as well would
+        # multiply the attempts when both services are down.
+        single = APIConnectOptions(max_retry=0, timeout=conn_options.timeout)
+        event = await self._fallback.recognize(buffer, language=language, conn_options=single)
         metrics.STT_REQUESTS.labels(service="fallback").inc()
         return event
 

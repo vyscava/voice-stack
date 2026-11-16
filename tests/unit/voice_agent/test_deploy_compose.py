@@ -69,3 +69,11 @@ def test_deployed_voices_are_overridable_with_the_chosen_defaults():
     env = _agent_environment()
     assert env["AGENT_VOICE_EN"] == "${AGENT_VOICE_EN:-bf_isabella}"
     assert env["AGENT_VOICE_PT"] == "${AGENT_VOICE_PT:-pf_dora}"
+
+
+def test_every_agent_asr_setting_reaches_the_container():
+    """A setting with no compose line is silently stuck at its default in the deploy."""
+    env = _agent_environment()
+    missing = sorted(n for n in Settings.model_fields if n.startswith("AGENT_ASR_") and n not in env)
+    assert not missing, f"not forwarded by compose/deploy/agent.yml: {missing}"
+    assert env["AGENT_ASR_PRIMARY_URL"] == "${AGENT_ASR_PRIMARY_URL:-}"  # empty = today's single batch STT

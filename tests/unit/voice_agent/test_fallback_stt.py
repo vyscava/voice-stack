@@ -116,3 +116,63 @@ async def test_after_a_failure_the_primary_is_skipped_until_the_cooldown_ends() 
     clock.now += 1.0  # cooldown over: the next utterance tries the primary again
     assert await _text(adapter) == "from gpu"
     assert len(primary.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_primary_just_under_its_timeout_still_answers() -> None:
+    clock = Clock()
+    primary, fallback = FakeSTT("gpu", delay_s=0.05), FakeSTT("cpu")
+    adapter = _adapter(primary, fallback, clock=clock, primary_timeout_s=0.5)
+    assert await _text(adapter) == "from gpu"
+    assert fallback.calls == []
+    assert await _text(adapter) == "from gpu"  # no cooldown was armed
+    assert len(primary.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_timed_out_primary_request_is_cancelled() -> None:
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    class Hanging(FakeSTT):
+        async def _recognize_impl(self, buffer, *, language=NOT_GIVEN, conn_options):  # type: ignore[override]
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            raise AssertionError("unreachable")
+
+    assert await _text(_adapter(Hanging("gpu"), FakeSTT("cpu"), primary_timeout_s=0.05)) == "from cpu"
+    assert started.is_set()
+    await asyncio.wait_for(cancelled.wait(), 1.0)
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_gets_one_attempt_per_pass() -> None:
+    primary, fallback = FakeSTT("gpu", fail=RuntimeError("down")), FakeSTT("cpu")
+    await _text(_adapter(primary, fallback))
+    assert fallback.calls[0][1].max_retry == 0
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_failure_reaches_the_caller() -> None:
+    primary = FakeSTT("gpu", fail=RuntimeError("gpu down"))
+    fallback = FakeSTT("cpu", fail=RuntimeError("cpu down"))
+    adapter = _adapter(primary, fallback)
+    with pytest.raises(Exception, match="cpu down"):
+        await adapter.recognize(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_primary_does_not_extend_its_cooldown() -> None:
+    clock = Clock()
+    primary, fallback = FakeSTT("gpu", fail=RuntimeError("down")), FakeSTT("cpu")
+    adapter = _adapter(primary, fallback, clock=clock, cooldown_s=30.0)
+    await _text(adapter)  # fails at t=1000: skipped until t=1030
+    primary.fail = None
+    for _ in range(5):  # turns during the cooldown answer from the fallback ...
+        clock.now += 5.0
+        await _text(adapter)
+    clock.now = 1030.0  # ... and do not push the retry later
+    assert await _text(adapter) == "from gpu"
