@@ -71,6 +71,7 @@ import importlib
 import importlib.util
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # Image variants. "full" is the default because Dockerfile.ci runs this script
@@ -78,7 +79,7 @@ from pathlib import Path
 # the root Dockerfile; "cuda" and "rocm" are docker/Dockerfile.cuda / .rocm.
 # "agent" is the voice agent's own target: no speech engines at all, because
 # it reaches ASR and TTS over HTTP.
-VARIANTS = ("full", "kokoro", "cuda", "rocm", "agent")
+# (VARIANTS itself is derived from VARIANT_CHECKS, at the end of this file.)
 
 # Which build of each torch package a variant must carry, as the prefix of the
 # version's local part ("2.15.0+cu132" -> "cu132"), and the index that has it.
@@ -491,6 +492,51 @@ def check_stream(failures: list[str]) -> None:
         failures.append(f"lingua could not detect a language: {exc!r}")
 
 
+def checks_full(failures: list[str]) -> None:
+    check_asr(failures)
+    if check_torch(failures):
+        check_whisper_torch(failures)
+        check_xtts(failures)
+        check_stream(failures)
+    check_kokoro(failures, require_model=False)
+
+
+def checks_kokoro(failures: list[str]) -> None:
+    check_asr(failures)
+    check_kokoro(failures, require_model=True)
+    check_absent(failures, KOKORO_FORBIDDEN)
+
+
+def _checks_gpu(variant: str) -> Callable[[list[str]], None]:
+    def checks(failures: list[str]) -> None:
+        check_asr(failures)
+        if check_torch(failures, variant):
+            check_whisper_torch(failures)
+            check_xtts(failures, variant)
+        check_ctranslate2_gpu(failures, variant)
+        check_onnxruntime_variant(failures, variant)
+        check_kokoro(failures, require_model=True)
+
+    return checks
+
+
+def checks_agent(failures: list[str]) -> None:
+    check_agent(failures)
+    check_absent(failures, AGENT_FORBIDDEN)
+
+
+# What each image variant must satisfy. One entry per Dockerfile target; a new
+# variant is a new entry here, not another branch in main().
+VARIANT_CHECKS: dict[str, Callable[[list[str]], None]] = {
+    "full": checks_full,
+    "kokoro": checks_kokoro,
+    "cuda": _checks_gpu("cuda"),
+    "rocm": _checks_gpu("rocm"),
+    "agent": checks_agent,
+}
+VARIANTS = tuple(VARIANT_CHECKS)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--variant", choices=VARIANTS, default="full")
@@ -500,27 +546,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"variant: {args.variant}")
 
     check_interpreter(failures)
-    if args.variant != "agent":
-        check_asr(failures)
-    if args.variant == "agent":
-        check_agent(failures)
-        check_absent(failures, AGENT_FORBIDDEN)
-    elif args.variant == "full":
-        if check_torch(failures):
-            check_whisper_torch(failures)
-            check_xtts(failures)
-            check_stream(failures)
-        check_kokoro(failures, require_model=False)
-    elif args.variant in ("cuda", "rocm"):
-        if check_torch(failures, args.variant):
-            check_whisper_torch(failures)
-            check_xtts(failures, args.variant)
-        check_ctranslate2_gpu(failures, args.variant)
-        check_onnxruntime_variant(failures, args.variant)
-        check_kokoro(failures, require_model=True)
-    else:
-        check_kokoro(failures, require_model=True)
-        check_absent(failures, KOKORO_FORBIDDEN)
+    VARIANT_CHECKS[args.variant](failures)
 
     if failures:
         print("\nRUNTIME ASSERTIONS FAILED:", file=sys.stderr)

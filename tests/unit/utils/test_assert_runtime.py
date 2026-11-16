@@ -154,3 +154,46 @@ def test_check_absent_flags_an_installed_forbidden_module() -> None:
     failures: list[str] = []
     assert_runtime.check_absent(failures, ("json", "surely_not_installed_xyz"))
     assert failures == ["json is installed but must not be in this image"]
+
+
+# Which checks each variant runs, in order. Pinned so that moving the dispatch
+# into VARIANT_CHECKS (or adding a variant) cannot silently drop or add one.
+EXPECTED_CHECKS = {
+    "full": ["interpreter", "asr", "torch:full", "whisper_torch", "xtts:full", "stream", "kokoro:False"],
+    "kokoro": ["interpreter", "asr", "kokoro:True", "absent:kokoro"],
+    "cuda": ["interpreter", "asr", "torch:cuda", "whisper_torch", "xtts:cuda", "ct2:cuda", "ort:cuda", "kokoro:True"],
+    "rocm": ["interpreter", "asr", "torch:rocm", "whisper_torch", "xtts:rocm", "ct2:rocm", "ort:rocm", "kokoro:True"],
+    "agent": ["interpreter", "agent", "absent:agent"],
+}
+
+
+def _record_checks(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    import assert_runtime as ar
+
+    calls: list[str] = []
+    forbidden = {ar.KOKORO_FORBIDDEN: "kokoro", ar.AGENT_FORBIDDEN: "agent"}
+    monkeypatch.setattr(ar, "check_interpreter", lambda f: calls.append("interpreter"))
+    monkeypatch.setattr(ar, "check_asr", lambda f: calls.append("asr"))
+    monkeypatch.setattr(ar, "check_torch", lambda f, v="full": calls.append(f"torch:{v}") or True)
+    monkeypatch.setattr(ar, "check_whisper_torch", lambda f: calls.append("whisper_torch"))
+    monkeypatch.setattr(ar, "check_xtts", lambda f, v="full": calls.append(f"xtts:{v}"))
+    monkeypatch.setattr(ar, "check_stream", lambda f: calls.append("stream"))
+    monkeypatch.setattr(ar, "check_kokoro", lambda f, *, require_model: calls.append(f"kokoro:{require_model}"))
+    monkeypatch.setattr(ar, "check_ctranslate2_gpu", lambda f, v: calls.append(f"ct2:{v}"))
+    monkeypatch.setattr(ar, "check_onnxruntime_variant", lambda f, v: calls.append(f"ort:{v}"))
+    monkeypatch.setattr(ar, "check_agent", lambda f: calls.append("agent"))
+    monkeypatch.setattr(ar, "check_absent", lambda f, mods: calls.append(f"absent:{forbidden[mods]}"))
+    return calls
+
+
+@pytest.mark.unit
+def test_every_variant_has_pinned_checks() -> None:
+    assert set(VARIANTS) == set(EXPECTED_CHECKS)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("variant", sorted(EXPECTED_CHECKS))
+def test_variant_runs_exactly_its_checks(variant: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _record_checks(monkeypatch)
+    assert main(["--variant", variant]) == 0
+    assert calls == EXPECTED_CHECKS[variant]
