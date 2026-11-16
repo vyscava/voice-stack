@@ -78,7 +78,8 @@ from pathlib import Path
 # without arguments and installs everything. "kokoro" and "full" are targets of
 # the root Dockerfile; "cuda" and "rocm" are docker/Dockerfile.cuda / .rocm.
 # "agent" is the voice agent's own target: no speech engines at all, because
-# it reaches ASR and TTS over HTTP.
+# it reaches ASR and TTS over HTTP. "asr-cuda" is the GPU batch-ASR target of
+# the root Dockerfile: faster-whisper on CUDA 12, no torch.
 # (VARIANTS itself is derived from VARIANT_CHECKS, at the end of this file.)
 
 # Which build of each torch package a variant must carry, as the prefix of the
@@ -107,6 +108,10 @@ DEFAULT_KOKORO_VOICES = "/app/models/kokoro/voices-v1.0.bin"
 
 # What the slim image must never contain (import names).
 KOKORO_FORBIDDEN = ("torch", "torchaudio", "torchcodec", "whisper", "TTS", "transformers")
+
+# What the GPU ASR image's CTranslate2 loads on the GPU: cuBLAS 12 and the cuDNN 9
+# front library plus the convolution engine Whisper's encoder needs.
+ASR_CUDA_LIBRARIES = ("libcublas.so.12", "libcublasLt.so.12", "libcudnn.so.9", "libcudnn_cnn.so.9")
 
 # The agent image holds no speech model: it calls the ASR and TTS services.
 AGENT_FORBIDDEN = (*KOKORO_FORBIDDEN, "faster_whisper", "ctranslate2", "kokoro_onnx")
@@ -520,6 +525,39 @@ def _checks_gpu(variant: str) -> Callable[[list[str]], None]:
     return checks
 
 
+def check_cuda_libraries(failures: list[str], sonames: tuple[str, ...]) -> None:
+    """Each CUDA library CTranslate2 dlopen()s at its first GPU call resolves here.
+
+    The load happens only on a GPU, which CI does not have, so a missing or
+    unregistered library would otherwise surface as the first transcription
+    failing on the deploy host.
+    """
+    for soname in sonames:
+        error = load_error(soname)
+        if error is None:
+            print(f"{soname} resolves")
+        else:
+            failures.append(f"{soname} does not resolve, ASR_DEVICE=cuda would fail: {error}")
+
+
+def load_error(soname: str) -> str | None:
+    """Why the dynamic linker cannot load ``soname``, or None when it can."""
+    import ctypes
+
+    try:
+        ctypes.CDLL(soname)
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+def checks_asr_cuda(failures: list[str]) -> None:
+    check_asr(failures)
+    check_ctranslate2_gpu(failures, "cuda")
+    check_cuda_libraries(failures, ASR_CUDA_LIBRARIES)
+    check_absent(failures, KOKORO_FORBIDDEN)
+
+
 def checks_agent(failures: list[str]) -> None:
     check_agent(failures)
     check_absent(failures, AGENT_FORBIDDEN)
@@ -533,6 +571,7 @@ VARIANT_CHECKS: dict[str, Callable[[list[str]], None]] = {
     "cuda": _checks_gpu("cuda"),
     "rocm": _checks_gpu("rocm"),
     "agent": checks_agent,
+    "asr-cuda": checks_asr_cuda,
 }
 VARIANTS = tuple(VARIANT_CHECKS)
 

@@ -138,6 +138,15 @@ asr = [
   "soundfile",
   "resampy",
 ]
+# The CUDA libraries CTranslate2 dlopen()s to run faster-whisper on an NVIDIA
+# GPU (the asr-cuda image). CTranslate2 4.x on PyPI is built against CUDA 12:
+# cuBLAS 12 for the matrix work, cuDNN 9 for the encoder's convolutions. The
+# driver (libcuda.so.1) comes from the host at run time.
+asr-cuda = [
+  "voice-stack[asr]",
+  "nvidia-cublas-cu12>=12,<13",
+  "nvidia-cudnn-cu12>=9,<10",
+]
 # The PyTorch Whisper engine (ASR_ENGINE=whisper). Full image only; it is the
 # one ASR feature that needs torch.
 asr-whisper = [

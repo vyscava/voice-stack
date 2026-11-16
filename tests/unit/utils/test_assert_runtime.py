@@ -164,6 +164,7 @@ EXPECTED_CHECKS = {
     "cuda": ["interpreter", "asr", "torch:cuda", "whisper_torch", "xtts:cuda", "ct2:cuda", "ort:cuda", "kokoro:True"],
     "rocm": ["interpreter", "asr", "torch:rocm", "whisper_torch", "xtts:rocm", "ct2:rocm", "ort:rocm", "kokoro:True"],
     "agent": ["interpreter", "agent", "absent:agent"],
+    "asr-cuda": ["interpreter", "asr", "ct2:cuda", "cuda_libs", "absent:kokoro"],
 }
 
 
@@ -182,6 +183,7 @@ def _record_checks(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(ar, "check_ctranslate2_gpu", lambda f, v: calls.append(f"ct2:{v}"))
     monkeypatch.setattr(ar, "check_onnxruntime_variant", lambda f, v: calls.append(f"ort:{v}"))
     monkeypatch.setattr(ar, "check_agent", lambda f: calls.append("agent"))
+    monkeypatch.setattr(ar, "check_cuda_libraries", lambda f, libs: calls.append("cuda_libs"))
     monkeypatch.setattr(ar, "check_absent", lambda f, mods: calls.append(f"absent:{forbidden[mods]}"))
     return calls
 
@@ -197,3 +199,23 @@ def test_variant_runs_exactly_its_checks(variant: str, monkeypatch: pytest.Monke
     calls = _record_checks(monkeypatch)
     assert main(["--variant", variant]) == 0
     assert calls == EXPECTED_CHECKS[variant]
+
+
+@pytest.mark.unit
+def test_check_cuda_libraries_reports_only_the_missing_one() -> None:
+    import ctypes.util
+
+    import assert_runtime
+
+    present = ctypes.util.find_library("c") or "libc.so.6"
+    failures: list[str] = []
+    assert_runtime.check_cuda_libraries(failures, (present, "libsurely_not_here.so.9"))
+    assert len(failures) == 1
+    assert failures[0].startswith("libsurely_not_here.so.9 does not resolve")
+
+
+@pytest.mark.unit
+def test_asr_cuda_checks_the_libraries_ctranslate2_loads() -> None:
+    from assert_runtime import ASR_CUDA_LIBRARIES
+
+    assert {"libcublas.so.12", "libcudnn.so.9"} <= set(ASR_CUDA_LIBRARIES)
