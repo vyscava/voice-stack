@@ -200,11 +200,16 @@ class VoiceAgent(Agent):
                     # holds a line under 20 characters until more text arrives, and the
                     # ack would only be heard glued to the brain's first sentence.
                     yield FlushSentinel()
-                    self._ticker.start()  # "loading" ticks fill the wait after the line
+                    if not spoke["first"]:
+                        # "loading" ticks fill the wait after the ack/thinking line. Not
+                        # after a progress line: the answer's audio already stopped them
+                        # once, and nothing would stop them again before the next words.
+                        self._ticker.start()
                     continue
-                if spoke["first"] and chunk.startswith("\n"):
+                if spoke["first"] and tools["preamble"] is not None and chunk.startswith("\n"):
                     # A new paragraph after a tool round: its own sentence, not glued
-                    # to the preamble.
+                    # to the preamble. Only in a tool turn, so a plain answer's
+                    # paragraphs keep their prosody.
                     yield FlushSentinel()
                 if not spoke["first"]:
                     spoke["first"] = True

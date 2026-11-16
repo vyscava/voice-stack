@@ -606,3 +606,23 @@ async def test_a_portuguese_turn_gets_the_portuguese_apology():
     agent.language = "en"
     out = [c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)]
     assert out[0].startswith("Sorry")
+
+
+@pytest.mark.asyncio
+async def test_a_progress_line_does_not_restart_the_ticks():
+    ticker = RecordingTicker()
+    brain = ToolBrain("Vou verificar.", _tool(), (0.2, "Pronto."))
+    settings = _filler_settings(AGENT_ACK_AFTER_S=0, AGENT_FILLER_AFTER_S=0, AGENT_PROGRESS_AFTER_S=0.05)
+    agent = worker.VoiceAgent(brain=brain, settings=settings, call_id="c", ticker=ticker)
+    agent.language = "pt"
+    out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)])
+    assert "Ainda estou verificando. " in out
+    assert "start" not in ticker.events  # nothing would stop them over the answer
+
+
+@pytest.mark.asyncio
+async def test_a_plain_answers_paragraphs_are_not_flushed():
+    settings = _filler_settings(AGENT_ACK_AFTER_S=0, AGENT_FILLER_AFTER_S=0)
+    agent = worker.VoiceAgent(brain=ScriptedBrain("First.", "\n\nSecond."), settings=settings, call_id="c")
+    out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)])
+    assert out == ["First.", "\n\nSecond."]

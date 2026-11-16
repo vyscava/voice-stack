@@ -48,9 +48,11 @@ class FakeResponse:
         self._lines = lines
         self._closed = closed
 
-    async def iter_lines(self):
-        for line in self._lines:
-            yield line
+    async def iter_text(self):
+        # Split across chunk boundaries on purpose: lines arrive in pieces on a real stream.
+        body = "\n".join(self._lines) + "\n"
+        for i in range(0, len(body), 7):
+            yield body[i : i + 7]
 
 
 class FakeStreamingCall:
@@ -311,3 +313,59 @@ async def test_nothing_after_done_is_spoken():
         OpenAICompatBrain(client=client, model="m", system_prompt="p").reply([], call_id="c", turn_id=1, language="en")
     )
     assert out == ["Hi."]
+
+
+@pytest.mark.asyncio
+async def test_sse_lines_split_only_on_cr_lf_crlf():
+    from voice_agent.brains import sse_lines
+
+    async def pieces(*xs):
+        for x in xs:
+            yield x
+
+    got = [line async for line in sse_lines(pieces("a\u2028b\r", "\nc\rd\n", "\n", "e\x85f", "\r"))]
+    assert got == ["a\u2028b", "c", "d", "", "e\x85f"]
+
+
+@pytest.mark.asyncio
+async def test_the_real_sdk_stream_keeps_unicode_line_separators_and_raises_on_http_errors():
+    """Through the real AsyncOpenAI client and httpx, not a fake response."""
+    import httpx
+    from openai import APIStatusError, AsyncOpenAI
+
+    body = (
+        'data: {"choices":[{"delta":{"content":"a\u2028b"}}]}\n\n'
+        'event: hermes.tool.progress\ndata: {"tool":"t","label":"T","status":"running"}\n\n'
+        'data: {"choices":[{"delta":{"content":" done"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    status = {"code": 200}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status["code"], text=body, headers={"content-type": "text/event-stream"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = AsyncOpenAI(base_url="http://brain.test/v1", api_key="x", http_client=http, max_retries=0)
+    brain = OpenAICompatBrain(client=client, model="m", system_prompt="p")
+    out = await _collect(brain.reply([Turn("user", "hi")], call_id="c", turn_id=1, language="en"))
+    assert [o for o in out if isinstance(o, str)] == ["a\u2028b", " done"]
+    assert sum(1 for o in out if not isinstance(o, str)) == 1
+    status["code"] = 500
+    with pytest.raises(APIStatusError):
+        await _collect(brain.reply([Turn("user", "hi")], call_id="c", turn_id=1, language="en"))
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_error_inside_the_stream_is_a_failure_not_a_silent_cut():
+    from voice_agent.brains import BrainStreamError
+
+    client, completions = _client(["Hi"])
+    lines = _sse_chunk("Hi") + ['data: {"error": {"message": "upstream died"}}', ""]
+    completions.create = lambda **kw: FakeStreamingCall(lines, completions.closed)
+    gen = OpenAICompatBrain(client=client, model="m", system_prompt="p").reply(
+        [], call_id="c", turn_id=1, language="en"
+    )
+    assert await gen.__anext__() == "Hi"
+    with pytest.raises(BrainStreamError, match="upstream died"):
+        await gen.__anext__()

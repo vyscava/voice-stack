@@ -130,7 +130,7 @@ class OpenAICompatBrain:
             extra_body=self._extra_body or None,
             extra_headers=self._headers(call_id),
         ) as response:
-            async for event, data in iter_sse(response.iter_lines()):
+            async for event, data in iter_sse(sse_lines(response.iter_text())):
                 if event is None or event == "message":
                     if data.strip() == "[DONE]":
                         return
@@ -183,6 +183,29 @@ class NatsBrain:
         await self._agent.close()
 
 
+async def sse_lines(text: AsyncIterable[str]) -> AsyncIterator[str]:
+    """Lines as the SSE format defines them: split on CRLF, LF or CR only.
+
+    Not ``str.splitlines`` (what httpx's ``aiter_lines`` uses): that also
+    splits on U+2028/U+2029/U+0085, which a server may send unescaped inside a
+    JSON ``data:`` line, and the cut line would lose its text.
+    """
+    buffer = ""
+    async for piece in text:
+        buffer += piece
+        while True:
+            cut = min((i for i in (buffer.find("\r"), buffer.find("\n")) if i >= 0), default=-1)
+            if cut < 0 or (buffer[cut] == "\r" and cut == len(buffer) - 1):
+                break  # no end of line yet, or a CR that may be the first half of CRLF
+            end = cut + 2 if buffer.startswith("\r\n", cut) else cut + 1
+            yield buffer[:cut]
+            buffer = buffer[end:]
+    if buffer.endswith("\r"):
+        buffer = buffer[:-1]
+    if buffer:
+        yield buffer
+
+
 async def iter_sse(lines: AsyncIterable[str]) -> AsyncIterator[tuple[str | None, str]]:
     """Server-sent events as ``(event name or None, data)``, per the SSE format.
 
@@ -210,9 +233,21 @@ async def iter_sse(lines: AsyncIterable[str]) -> AsyncIterator[tuple[str | None,
         yield event, "\n".join(data)
 
 
+class BrainStreamError(RuntimeError):
+    """The endpoint reported an error inside the stream."""
+
+
 def _delta_content(data: str) -> str | None:
     try:
-        choices = json.loads(data).get("choices") or []
+        obj = json.loads(data)
+    except ValueError:
+        logger.warning(f"brain stream: skipped an unreadable chunk: {data[:120]!r}")
+        return None
+    if isinstance(obj, dict) and obj.get("error"):
+        # The SDK's parsed stream raised on this; keep it a failure, not a silent cut.
+        raise BrainStreamError(str(obj["error"])[:200])
+    try:
+        choices = obj.get("choices") or []
         content = (choices[0].get("delta") or {}).get("content") if choices else None
     except (ValueError, AttributeError, IndexError):
         logger.warning(f"brain stream: skipped an unreadable chunk: {data[:120]!r}")
