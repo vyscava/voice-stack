@@ -34,6 +34,23 @@ STT_STREAM_FALLBACKS = Counter(
     "Calls that switched from streaming ASR to batch STT, by reason (busy, disabled, connect, stall, error).",
     ["reason"],
 )
+STT_PRIMARY_FALLBACKS = Counter(
+    "voice_agent_stt_primary_fallbacks_total",
+    "Utterances the primary batch ASR failed (timeout or error) and the fallback ASR transcribed instead.",
+    ["reason"],
+)
+STT_REQUESTS = Counter(
+    "voice_agent_stt_requests_total",
+    "Batch utterances transcribed, by which ASR answered (primary, fallback). Only with AGENT_ASR_PRIMARY_URL set.",
+    ["service"],
+)
+# Every label exists at 0 from the start: increase() needs a sample before the
+# first event, or the first fallback after a (re)start is never counted and an
+# alert on "2 in 30m" really fires on the third.
+for _reason in ("timeout", "error"):
+    STT_PRIMARY_FALLBACKS.labels(reason=_reason)
+for _service in ("primary", "fallback"):
+    STT_REQUESTS.labels(service=_service)
 
 # LiveKit's session "error" events. A TTS failing every request leaves the
 # caller in silence while the process looks healthy; this is how that shows.

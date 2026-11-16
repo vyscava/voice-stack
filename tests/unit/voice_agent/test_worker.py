@@ -503,3 +503,33 @@ async def test_barge_in_stops_the_ticks():
         await task
     await gen.aclose()
     assert ticker.events[-1] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_batch_with_a_primary_url_tries_it_first_and_falls_back_to_asr_url():
+    from voice_agent.fallback_stt import FallbackBatchSTT
+
+    plugin = worker.build_stt(
+        _settings(AGENT_ASR_PRIMARY_URL="http://gpu:5011/", AGENT_ASR_PRIMARY_TIMEOUT_S=2.0), vad=None
+    )
+    assert isinstance(plugin, FallbackBatchSTT)
+    assert str(plugin.primary._client.base_url).rstrip("/") == "http://gpu:5011/v1"
+    assert str(plugin.fallback._client.base_url).rstrip("/") == "http://asr:5001/v1"
+    assert plugin.primary._opts.detect_language is True
+    assert plugin.primary_timeout_s == 2.0
+
+
+@pytest.mark.asyncio
+async def test_a_blank_primary_url_keeps_the_single_batch_stt():
+    from livekit.plugins import openai
+
+    assert isinstance(worker.build_stt(_settings(AGENT_ASR_PRIMARY_URL="  "), vad=None), openai.STT)
+
+
+@pytest.mark.asyncio
+async def test_stream_mode_falls_back_to_the_primary_first_batch(monkeypatch):
+    from voice_agent.fallback_stt import FallbackBatchSTT
+
+    monkeypatch.setenv("AGENT_STT_MODE", "stream")
+    plugin = worker.build_stt(_settings(AGENT_ASR_PRIMARY_URL="http://gpu:5011"), vad=None)
+    assert isinstance(plugin.batch, FallbackBatchSTT)

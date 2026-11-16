@@ -254,6 +254,18 @@ class Settings(BaseSettings):
     AGENT_WEB_PORT: int = Field(default=5004, description="Port of the built-in call page, token, health, metrics.")
     AGENT_ASR_URL: str = Field(default="http://localhost:5001", description="Base URL of the ASR service.")
     AGENT_TTS_URL: str = Field(default="http://localhost:5002", description="Base URL of the TTS service.")
+    # A second batch ASR tried FIRST, typically a GPU service with a bigger
+    # model. AGENT_ASR_URL then becomes its fallback for the same audio.
+    AGENT_ASR_PRIMARY_URL: str = Field(
+        default="",
+        description="Batch ASR tried first; AGENT_ASR_URL becomes its fallback. Empty = only AGENT_ASR_URL.",
+    )
+    AGENT_ASR_PRIMARY_TIMEOUT_S: float = Field(
+        default=3.0, description="Seconds to wait for the primary ASR before sending the audio to the fallback."
+    )
+    AGENT_ASR_PRIMARY_COOLDOWN_S: float = Field(
+        default=30.0, description="After a primary ASR failure, skip it for this long (the fallback answers)."
+    )
     # How the caller's speech reaches ASR. batch: one HTTP request per VAD
     # segment. stream: the ASR /v1/stream WebSocket, partials while they speak;
     # falls back to batch for the call when the stream refuses or fails.
