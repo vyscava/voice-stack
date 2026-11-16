@@ -176,3 +176,15 @@ async def test_a_skipped_primary_does_not_extend_its_cooldown() -> None:
         await _text(adapter)
     clock.now = 1030.0  # ... and do not push the retry later
     assert await _text(adapter) == "from gpu"
+
+
+def test_the_fallback_series_exist_before_the_first_event() -> None:
+    # increase() needs a sample before the first event: a series born at 1
+    # loses that event, and the "2 in 30m" alert would fire on the third.
+    from prometheus_client import generate_latest
+
+    text = generate_latest().decode()
+    for reason in ("timeout", "error"):
+        assert f'voice_agent_stt_primary_fallbacks_total{{reason="{reason}"}}' in text
+    for service in ("primary", "fallback"):
+        assert f'voice_agent_stt_requests_total{{service="{service}"}}' in text
