@@ -26,6 +26,7 @@ from livekit.plugins import openai, silero
 from core.settings import Settings, get_settings
 from voice_agent import metrics
 from voice_agent.brains import Brain, build_brain, history_from_chat_items
+from voice_agent.fallback_stt import FallbackBatchSTT
 from voice_agent.fillers import Filler, FillerPicker, parse_phrases
 from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_fillers
 from voice_agent.stream_audio import stream_url
@@ -78,17 +79,30 @@ def stt_mode(settings: Settings) -> str:
     return mode
 
 
+def _openai_stt(base_url: str) -> openai.STT:
+    return openai.STT(base_url=base_url.rstrip("/") + "/v1", api_key="unused", model="whisper-1", detect_language=True)
+
+
+def build_batch_stt(settings: Settings) -> stt.STT[Any]:
+    """AGENT_ASR_URL alone, or AGENT_ASR_PRIMARY_URL first with AGENT_ASR_URL as its fallback."""
+    batch = _openai_stt(settings.AGENT_ASR_URL)
+    primary_url = settings.AGENT_ASR_PRIMARY_URL.strip()
+    if not primary_url:
+        return batch
+    return FallbackBatchSTT(
+        primary=_openai_stt(primary_url),
+        fallback=batch,
+        primary_timeout_s=settings.AGENT_ASR_PRIMARY_TIMEOUT_S,
+        cooldown_s=settings.AGENT_ASR_PRIMARY_COOLDOWN_S,
+    )
+
+
 def build_stt(settings: Settings, *, vad: Any) -> stt.STT[Any]:
     """Batch (one request per VAD segment) or streaming with batch as its fallback.
 
     Built per call: a streaming fallback lasts for the rest of that call only.
     """
-    batch = openai.STT(
-        base_url=settings.AGENT_ASR_URL.rstrip("/") + "/v1",
-        api_key="unused",
-        model="whisper-1",
-        detect_language=True,
-    )
+    batch = build_batch_stt(settings)
     if stt_mode(settings) == "batch":
         return batch
     url = stream_url(settings.AGENT_ASR_URL, settings.AGENT_ASR_STREAM_URL)

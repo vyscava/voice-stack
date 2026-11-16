@@ -24,6 +24,11 @@ services:
       AGENT_WEB_PORT: "5004"
 
       AGENT_ASR_URL: http://voice-stack-asr:5001
+      # A GPU batch ASR tried first, from the deploy's secret store (its host is
+      # deployment detail). Empty = the CPU ASR above answers alone; when set,
+      # the CPU ASR is its fallback for the same audio.
+      AGENT_ASR_PRIMARY_URL: ${AGENT_ASR_PRIMARY_URL:-}
+      AGENT_ASR_PRIMARY_TIMEOUT_S: ${AGENT_ASR_PRIMARY_TIMEOUT_S:-3.0}
       AGENT_TTS_URL: http://voice-stack-tts:5002
       # Streaming STT from the voice-stack-asr-stream stack (its own process, so
       # the model never competes with batch ASR). A stream that is refused,
