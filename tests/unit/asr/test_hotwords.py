@@ -52,10 +52,14 @@ def test_options_have_no_hotwords_by_default(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_hotwords_are_part_of_the_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
     # A cached transcript made without the word list must not answer a request made with it.
+    audio = b"\x01\x02" * 800
     monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", None)
-    without = _options()
+    without = base.ASRBase.create_hash_cache_key(audio_bytes=audio, conf=_options())
+    again = base.ASRBase.create_hash_cache_key(audio_bytes=audio, conf=_options())
     monkeypatch.setattr(base.settings, "ASR_TRANSCRIBE_HOTWORDS", "Iris")
-    assert _options() != without
+    with_words = base.ASRBase.create_hash_cache_key(audio_bytes=audio, conf=_options())
+    assert without == again  # the key is stable; only the word list changed it
+    assert with_words != without
 
 
 def _transcribe_kwargs(monkeypatch: pytest.MonkeyPatch, hotwords: str | None) -> dict[str, object]:
