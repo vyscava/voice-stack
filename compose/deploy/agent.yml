@@ -47,6 +47,13 @@ services:
       AGENT_BRAIN: ${AGENT_BRAIN:?set by the deployer}
       # A tool-using agent brain can take 20 s before its first words.
       AGENT_BRAIN_TIMEOUT_S: ${AGENT_BRAIN_TIMEOUT_S:-45}
+      # The deployed brain says its own short line before a tool ("Let me check
+      # ...") about 2.2 s after the caller stops, so the canned ack only covers a
+      # brain slower than that, and the ticks are off: callers heard both as
+      # robotic filler. Code defaults (0.4 s ack, ticks on) suit a brain that
+      # never speaks before its tools.
+      AGENT_ACK_AFTER_S: ${AGENT_ACK_AFTER_S:-2.5}
+      AGENT_TICKS: ${AGENT_TICKS:-false}
       AGENT_LLM_URL: ${AGENT_LLM_URL:-}
       AGENT_LLM_MODEL: ${AGENT_LLM_MODEL:-}
       AGENT_LLM_API_KEY: ${AGENT_LLM_API_KEY:-unused}

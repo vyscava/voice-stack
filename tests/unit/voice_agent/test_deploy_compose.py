@@ -82,3 +82,14 @@ def test_every_agent_asr_setting_reaches_the_container():
 def test_the_deployed_brain_timeout_allows_a_tool_using_brain():
     # A tool-using agent brain can take ~20 s before its first words: 20 s cut it to the apology.
     assert _agent_environment()["AGENT_BRAIN_TIMEOUT_S"] == "${AGENT_BRAIN_TIMEOUT_S:-45}"
+
+
+def test_the_deploy_retires_the_ticks_and_delays_the_ack():
+    """The deployed brain speaks its own preamble (~2.2 s): canned filler only covers a slower brain."""
+    from core.settings import Settings
+
+    env = _agent_environment()
+    assert env["AGENT_ACK_AFTER_S"] == "${AGENT_ACK_AFTER_S:-2.5}"
+    assert env["AGENT_TICKS"] == "${AGENT_TICKS:-false}"
+    # Both are real settings, so the values reach the agent.
+    assert {"AGENT_ACK_AFTER_S", "AGENT_TICKS"} <= set(Settings.model_fields)
