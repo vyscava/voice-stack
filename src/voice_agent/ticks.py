@@ -50,7 +50,7 @@ async def tick_frames(*, interval_s: float, sample_rate: int = SAMPLE_RATE) -> A
 
 
 class Ticker(Protocol):
-    def start(self) -> None: ...
+    def start(self, delay_s: float | None = None) -> None: ...
 
     def stop(self) -> None: ...
 
@@ -60,7 +60,7 @@ class Ticker(Protocol):
 class NullTicker:
     """Ticks turned off (and the default in tests)."""
 
-    def start(self) -> None:
+    def start(self, delay_s: float | None = None) -> None:
         return None
 
     def stop(self) -> None:
@@ -83,14 +83,15 @@ class BackgroundTicker:
         self._handle: Any = None
         self._deadline: asyncio.TimerHandle | None = None
 
-    def start(self) -> None:
+    def start(self, delay_s: float | None = None) -> None:
+        """Tick after ``delay_s`` (default: the configured delay), unless already on."""
         self._cancel_deadline()
         if self._pending is not None or self._handle is not None:
             return
-        self._pending = asyncio.ensure_future(self._start_later())
+        self._pending = asyncio.ensure_future(self._start_later(self._delay_s if delay_s is None else delay_s))
 
-    async def _start_later(self) -> None:
-        await asyncio.sleep(self._delay_s)
+    async def _start_later(self, delay_s: float) -> None:
+        await asyncio.sleep(delay_s)
         from livekit.agents.voice.background_audio import AudioConfig
 
         cfg = AudioConfig(tick_frames(interval_s=self._interval_s), volume=self._volume, fade_out=0.08)

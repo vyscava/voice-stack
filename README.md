@@ -452,6 +452,10 @@ What it does on its own:
   `AGENT_TICKS_DELAY_S`, `AGENT_TICKS_VOLUME`, `AGENT_TICKS_INTERVAL_S`;
   `AGENT_TICKS_MAX_TAIL_S` stops them if that audio never comes), so the wait
   never sounds like a dropped call. The sound is generated in code.
+- **Long tool runs:** after the brain has spoken, a tool that keeps it quiet
+  gets a progress line (`AGENT_PROGRESS_AFTER_S`), then the same ticks
+  (`AGENT_TOOL_TICKS`, starting `AGENT_TOOL_TICKS_DELAY_S` after the line) until
+  the brain's next words start sounding. This works independently of `AGENT_TICKS`.
 - **Slow brain:** if it is still silent after `AGENT_FILLER_AFTER_S` (6 s),
   a thinking line follows (`AGENT_MSG_FILLER`, `AGENT_MSG_FILLER_PT`). A fast
   answer gets none of these, and no filler is sent back to the brain as history.

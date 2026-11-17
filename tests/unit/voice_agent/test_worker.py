@@ -382,8 +382,8 @@ class RecordingTicker:
     def __init__(self):
         self.events: list[str] = []
 
-    def start(self):
-        self.events.append("start")
+    def start(self, delay_s=None):
+        self.events.append("start" if delay_s is None else f"start:{delay_s}")
 
     def stop(self):
         self.events.append("stop")
@@ -608,16 +608,97 @@ async def test_a_portuguese_turn_gets_the_portuguese_apology():
     assert out[0].startswith("Sorry")
 
 
+def _tool_wait_settings(**kw):
+    base = {
+        "AGENT_ACK_AFTER_S": 0,
+        "AGENT_FILLER_AFTER_S": 0,
+        "AGENT_PROGRESS_AFTER_S": 0.05,
+        "AGENT_TOOL_TICKS_DELAY_S": 1.7,
+        "AGENT_TICKS_MAX_TAIL_S": 1.5,
+    }
+    base.update(kw)
+    return _filler_settings(**base)
+
+
 @pytest.mark.asyncio
-async def test_a_progress_line_does_not_restart_the_ticks():
+async def test_a_progress_line_starts_ticks_that_the_next_words_hand_to_their_audio(monkeypatch):
+    async def fake_tts(agent, text, model_settings):
+        async for _ in text:
+            pass
+        yield "frame"
+
+    monkeypatch.setattr(worker.Agent.default, "tts_node", fake_tts)
     ticker = RecordingTicker()
     brain = ToolBrain("Vou verificar.", _tool(), (0.2, "Pronto."))
-    settings = _filler_settings(AGENT_ACK_AFTER_S=0, AGENT_FILLER_AFTER_S=0, AGENT_PROGRESS_AFTER_S=0.05)
+    agent = worker.VoiceAgent(brain=brain, settings=_tool_wait_settings(), call_id="c", ticker=ticker)
+    agent.language = "pt"
+    gen = agent.llm_node(_chat_ctx(("user", "oi")), None, None)
+    assert await gen.__anext__() == "Vou verificar."
+    # As in a call, the preamble sounds while the tool runs, which uses up the
+    # first-words hand-off: the ticks after the progress line need their own.
+    assert [f async for f in agent.tts_node(_one("Vou verificar."), None)] == ["frame"]
+    rest = [(_shape([c])[0], list(ticker.events)) async for c in gen]
+    assert [c for c, _ in rest] == [FLUSH, "Ainda estou verificando. ", FLUSH, "Pronto."]
+    # the progress line starts them (after its flush), with the tool-wait delay
+    assert not [e for e in rest[2][1] if e.startswith("start")]
+    # the next words do not stop them: they arm the deadline and wait for their audio
+    assert rest[3][1][-2:] == ["start:1.7", "stop_later:1.5"]
+    assert ticker.events.count("start:1.7") == 1
+    n = len(ticker.events)
+    assert [f async for f in agent.tts_node(_one("Pronto."), None)] == ["frame"]
+    assert ticker.events[n:] == ["stop"], "the answer's first frame ends the tool-wait ticks"
+
+
+@pytest.mark.asyncio
+async def test_tool_wait_ticks_can_be_turned_off():
+    ticker = RecordingTicker()
+    brain = ToolBrain("Vou verificar.", _tool(), (0.2, "Pronto."))
+    settings = _tool_wait_settings(AGENT_TOOL_TICKS=False)
     agent = worker.VoiceAgent(brain=brain, settings=settings, call_id="c", ticker=ticker)
     agent.language = "pt"
     out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)])
     assert "Ainda estou verificando. " in out
-    assert "start" not in ticker.events  # nothing would stop them over the answer
+    assert not [e for e in ticker.events if e.startswith("start")]
+
+
+@pytest.mark.asyncio
+async def test_tool_wait_ticks_stop_when_the_reply_ends_without_more_words():
+    ticker = RecordingTicker()
+    brain = ToolBrain("Vou verificar.", _tool(), (0.2, _tool("completed")))
+    agent = worker.VoiceAgent(brain=brain, settings=_tool_wait_settings(), call_id="c", ticker=ticker)
+    _ = [c async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)]
+    assert "start:1.7" in ticker.events
+    assert ticker.events[-1] == "stop", "nothing will sound to stop them later"
+
+
+@pytest.mark.asyncio
+async def test_a_barge_in_during_a_tool_wait_stops_its_ticks():
+    ticker = RecordingTicker()
+    brain = ToolBrain("Vou verificar.", _tool(), (5, "Pronto."))
+    agent = worker.VoiceAgent(brain=brain, settings=_tool_wait_settings(), call_id="c", ticker=ticker)
+    agent.language = "pt"
+    gen = agent.llm_node(_chat_ctx(("user", "oi")), None, None)
+    while _shape([await gen.__anext__()])[0] != "Ainda estou verificando. ":
+        pass
+    await gen.__anext__()  # the line's flush; the ticks start on the next pull
+    task = asyncio.ensure_future(gen.__anext__())
+    await asyncio.sleep(0.02)
+    assert ticker.events[-1] == "start:1.7"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await gen.aclose()
+    assert ticker.events[-1] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_the_wait_before_the_first_words_ticks_only_when_enabled():
+    ticker = RecordingTicker()
+    settings = _filler_settings(AGENT_TICKS=False)
+    agent = worker.VoiceAgent(brain=SlowBrain(0.08), settings=settings, call_id="c", ticker=ticker)
+    out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)])
+    assert out[0] == "Okay. "  # the ack still plays
+    assert not [e for e in ticker.events if e.startswith("start")]
 
 
 @pytest.mark.asyncio
@@ -626,3 +707,12 @@ async def test_a_plain_answers_paragraphs_are_not_flushed():
     agent = worker.VoiceAgent(brain=ScriptedBrain("First.", "\n\nSecond."), settings=settings, call_id="c")
     out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)])
     assert out == ["First.", "\n\nSecond."]
+
+
+@pytest.mark.parametrize(
+    ("before_words", "tool_runs", "needed"),
+    [(False, False, False), (True, False, True), (False, True, True), (True, True, True)],
+)
+def test_the_tick_player_exists_when_either_kind_of_tick_is_on(before_words, tool_runs, needed):
+    settings = _settings(AGENT_TICKS=before_words, AGENT_TOOL_TICKS=tool_runs)
+    assert worker.ticks_needed(settings) is needed
