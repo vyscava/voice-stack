@@ -637,9 +637,7 @@ async def test_a_progress_line_starts_ticks_that_the_next_words_hand_to_their_au
     # As in a call, the preamble sounds while the tool runs, which uses up the
     # first-words hand-off: the ticks after the progress line need their own.
     assert [f async for f in agent.tts_node(_one("Vou verificar."), None)] == ["frame"]
-    rest = []
-    async for c in gen:
-        rest.append((_shape([c])[0], list(ticker.events)))
+    rest = [(_shape([c])[0], list(ticker.events)) async for c in gen]
     assert [c for c, _ in rest] == [FLUSH, "Ainda estou verificando. ", FLUSH, "Pronto."]
     # the progress line starts them (after its flush), with the tool-wait delay
     assert not [e for e in rest[2][1] if e.startswith("start")]
