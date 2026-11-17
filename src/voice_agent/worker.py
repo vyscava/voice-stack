@@ -178,6 +178,9 @@ class VoiceAgent(Agent):
         self._ticker.stop()  # a new turn starts quiet
         completed = False
         tools: dict[str, bool | None] = {"preamble": None}  # None: no tool this turn
+        # Ticks started by a progress line: the brain's next words hand them to
+        # tts_node, which stops them when those words start sounding.
+        tool_wait = {"ticking": False}
         brain = guarded(reply, timeout_s=s.AGENT_BRAIN_TIMEOUT_S, apology=apology_for(s, lang), on_failure=failed)
         brain = with_progress(brain, after_s=s.AGENT_PROGRESS_AFTER_S, line=lambda: self._fillers.progress(lang))
         try:
@@ -201,10 +204,15 @@ class VoiceAgent(Agent):
                     # ack would only be heard glued to the brain's first sentence.
                     yield FlushSentinel()
                     if not spoke["first"]:
-                        # "loading" ticks fill the wait after the ack/thinking line. Not
-                        # after a progress line: the answer's audio already stopped them
-                        # once, and nothing would stop them again before the next words.
-                        self._ticker.start()
+                        # "loading" ticks fill the wait after the ack/thinking line.
+                        if s.AGENT_TICKS:
+                            self._ticker.start()
+                    elif s.AGENT_TOOL_TICKS:
+                        # A progress line: a tool is still running after the brain
+                        # spoke (an agent call can take a minute). Tick through the
+                        # rest of the wait, starting once the line has been heard.
+                        self._ticker.start(delay_s=s.AGENT_TOOL_TICKS_DELAY_S)
+                        tool_wait["ticking"] = True
                     continue
                 if spoke["first"] and tools["preamble"] is not None and chunk.startswith("\n"):
                     # A new paragraph after a tool round: its own sentence, not glued
@@ -219,12 +227,20 @@ class VoiceAgent(Agent):
                     self._ticker.stop_later(s.AGENT_TICKS_MAX_TAIL_S)
                     if outcome["value"] == "ok":  # an apology is not brain latency
                         metrics.STAGE_SECONDS.labels(stage="brain_first_text").observe(time.monotonic() - started)
+                elif tool_wait["ticking"] and chunk.strip():
+                    # The tool is done and the brain speaks again: tick until these
+                    # words sound, as after the first words.
+                    tool_wait["ticking"] = False
+                    self._ticks_until_audio = True
+                    self._ticker.stop_later(s.AGENT_TICKS_MAX_TAIL_S)
                 yield chunk
             completed = True
         finally:
-            if not (completed and self._ticks_until_audio):
+            # Barge-in, error, or tool-wait ticks no words will follow: never leave
+            # the ticks running.
+            if tool_wait["ticking"] or not (completed and self._ticks_until_audio):
                 self._ticks_until_audio = False
-                self._ticker.stop()  # barge-in or error: never leave the ticks running
+                self._ticker.stop()
         metrics.TURNS.labels(outcome=outcome["value"]).inc()
         if tools["preamble"] is not None:
             metrics.TOOL_TURNS.labels(preamble="yes" if tools["preamble"] else "no").inc()
@@ -254,7 +270,7 @@ async def entrypoint(ctx: JobContext) -> None:
     brain = build_brain(settings)
     ctx.add_shutdown_callback(brain.aclose)
     ticker: Ticker | None = None
-    if settings.AGENT_TICKS:
+    if settings.AGENT_TICKS or settings.AGENT_TOOL_TICKS:
         player = BackgroundAudioPlayer()
         await player.start(room=ctx.room)
         ctx.add_shutdown_callback(player.aclose)

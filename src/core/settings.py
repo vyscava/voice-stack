@@ -368,6 +368,14 @@ class Settings(BaseSettings):
     AGENT_TICKS_MAX_TAIL_S: float = Field(
         default=2.0, description="After the brain's first words, stop the ticks this long later even if no audio came."
     )
+    # The same ticks during a long tool run after the brain has spoken: from
+    # shortly after the progress line until the brain's next words sound.
+    AGENT_TOOL_TICKS: bool = Field(
+        default=True, description="Play soft ticks during a long tool run, after the progress line."
+    )
+    AGENT_TOOL_TICKS_DELAY_S: float = Field(
+        default=2.0, description="Start the tool-run ticks this long after the progress line, once it has been heard."
+    )
     AGENT_MSG_FILLER: str = Field(default="Hmm, let me think.", description="Thinking line(s), '|'-separated.")
     AGENT_MSG_FILLER_PT: str = Field(default="Hum, deixa eu pensar.", description="Thinking line(s), '|'-separated.")
     # After the brain has started speaking, a tool run that leaves the caller in

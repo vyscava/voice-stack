@@ -93,3 +93,12 @@ def test_the_deploy_retires_the_ticks_and_delays_the_ack():
     assert env["AGENT_TICKS"] == "${AGENT_TICKS:-false}"
     # Both are real settings, so the values reach the agent.
     assert {"AGENT_ACK_AFTER_S", "AGENT_TICKS"} <= set(Settings.model_fields)
+
+
+def test_the_deploy_ticks_through_long_tool_runs():
+    """Retired before the first words, the ticks stay on for a long tool run (an agent call)."""
+    from core.settings import Settings
+
+    env = _agent_environment()
+    assert env["AGENT_TOOL_TICKS"] == "${AGENT_TOOL_TICKS:-true}"
+    assert "AGENT_TOOL_TICKS" in Settings.model_fields
