@@ -261,6 +261,11 @@ class VoiceAgent(Agent):
                 self._ticker.stop()
 
 
+def ticks_needed(settings: Settings) -> bool:
+    """Whether a call needs the background tick player at all."""
+    return settings.AGENT_TICKS or settings.AGENT_TOOL_TICKS
+
+
 async def entrypoint(ctx: JobContext) -> None:
     settings = get_settings()
     await ctx.connect()
@@ -270,7 +275,7 @@ async def entrypoint(ctx: JobContext) -> None:
     brain = build_brain(settings)
     ctx.add_shutdown_callback(brain.aclose)
     ticker: Ticker | None = None
-    if settings.AGENT_TICKS or settings.AGENT_TOOL_TICKS:
+    if ticks_needed(settings):
         player = BackgroundAudioPlayer()
         await player.start(room=ctx.room)
         ctx.add_shutdown_callback(player.aclose)

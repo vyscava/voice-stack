@@ -706,3 +706,12 @@ async def test_a_plain_answers_paragraphs_are_not_flushed():
     agent = worker.VoiceAgent(brain=ScriptedBrain("First.", "\n\nSecond."), settings=settings, call_id="c")
     out = _shape([c async for c in agent.llm_node(_chat_ctx(("user", "hi")), None, None)])
     assert out == ["First.", "\n\nSecond."]
+
+
+@pytest.mark.parametrize(
+    ("before_words", "tool_runs", "needed"),
+    [(False, False, False), (True, False, True), (False, True, True), (True, True, True)],
+)
+def test_the_tick_player_exists_when_either_kind_of_tick_is_on(before_words, tool_runs, needed):
+    settings = _settings(AGENT_TICKS=before_words, AGENT_TOOL_TICKS=tool_runs)
+    assert worker.ticks_needed(settings) is needed
