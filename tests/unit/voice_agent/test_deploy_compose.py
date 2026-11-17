@@ -101,4 +101,5 @@ def test_the_deploy_ticks_through_long_tool_runs():
 
     env = _agent_environment()
     assert env["AGENT_TOOL_TICKS"] == "${AGENT_TOOL_TICKS:-true}"
-    assert "AGENT_TOOL_TICKS" in Settings.model_fields
+    assert env["AGENT_TOOL_TICKS_DELAY_S"] == "${AGENT_TOOL_TICKS_DELAY_S:-2.0}"
+    assert {"AGENT_TOOL_TICKS", "AGENT_TOOL_TICKS_DELAY_S"} <= set(Settings.model_fields)

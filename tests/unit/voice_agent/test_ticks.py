@@ -117,9 +117,9 @@ async def test_stop_later_stops_unless_restarted_or_stopped_first():
 async def test_a_start_can_set_its_own_delay():
     player = FakePlayer()
     t = _ticker(player, delay=5.0)
-    t.start(delay_s=0.02)
-    await asyncio.sleep(0.01)
+    t.start(delay_s=0.2)
+    await asyncio.sleep(0.02)
     assert player.played == []
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.4)
     assert len(player.played) == 1, "the per-start delay, not the configured 5 s"
     t.stop()
