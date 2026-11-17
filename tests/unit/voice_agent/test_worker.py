@@ -622,27 +622,30 @@ def _tool_wait_settings(**kw):
 
 @pytest.mark.asyncio
 async def test_a_progress_line_starts_ticks_that_the_next_words_hand_to_their_audio(monkeypatch):
-    ticker = RecordingTicker()
-    brain = ToolBrain("Vou verificar.", _tool(), (0.2, "Pronto."))
-    agent = worker.VoiceAgent(brain=brain, settings=_tool_wait_settings(), call_id="c", ticker=ticker)
-    agent.language = "pt"
-    seen = [(_shape([c])[0], list(ticker.events)) async for c in agent.llm_node(_chat_ctx(("user", "oi")), None, None)]
-    shapes = [c for c, _ in seen]
-    assert shapes == ["Vou verificar.", FLUSH, "Ainda estou verificando. ", FLUSH, "Pronto."]
-    # the preamble ticks nothing; the progress line starts them (after its flush),
-    # with the tool-wait delay
-    assert "start:1.7" not in seen[3][1]
-    # the next words do not stop them: they arm the deadline and wait for their audio
-    assert seen[4][1][-2:] == ["start:1.7", "stop_later:1.5"]
-    assert ticker.events[-1] == "stop_later:1.5"
-    assert ticker.events.count("start:1.7") == 1
-
     async def fake_tts(agent, text, model_settings):
         async for _ in text:
             pass
         yield "frame"
 
     monkeypatch.setattr(worker.Agent.default, "tts_node", fake_tts)
+    ticker = RecordingTicker()
+    brain = ToolBrain("Vou verificar.", _tool(), (0.2, "Pronto."))
+    agent = worker.VoiceAgent(brain=brain, settings=_tool_wait_settings(), call_id="c", ticker=ticker)
+    agent.language = "pt"
+    gen = agent.llm_node(_chat_ctx(("user", "oi")), None, None)
+    assert await gen.__anext__() == "Vou verificar."
+    # As in a call, the preamble sounds while the tool runs, which uses up the
+    # first-words hand-off: the ticks after the progress line need their own.
+    assert [f async for f in agent.tts_node(_one("Vou verificar."), None)] == ["frame"]
+    rest = []
+    async for c in gen:
+        rest.append((_shape([c])[0], list(ticker.events)))
+    assert [c for c, _ in rest] == [FLUSH, "Ainda estou verificando. ", FLUSH, "Pronto."]
+    # the progress line starts them (after its flush), with the tool-wait delay
+    assert not [e for e in rest[2][1] if e.startswith("start")]
+    # the next words do not stop them: they arm the deadline and wait for their audio
+    assert rest[3][1][-2:] == ["start:1.7", "stop_later:1.5"]
+    assert ticker.events.count("start:1.7") == 1
     n = len(ticker.events)
     assert [f async for f in agent.tts_node(_one("Pronto."), None)] == ["frame"]
     assert ticker.events[n:] == ["stop"], "the answer's first frame ends the tool-wait ticks"
