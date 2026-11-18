@@ -79,6 +79,7 @@ def test_an_unlisted_detection_is_decoded_again_in_the_most_likely_listed_langua
     assert [c.kwargs["language"] for c in model.transcribe.call_args_list] == [None, "pt"]
     assert result.text == "Obrigado"
     assert result.language_code == "pt"
+    assert result.confidence == pytest.approx(0.31)  # detection's view of pt, not the forced decode's 1.0
     assert LANGUAGE_OVERRIDES.labels(detected="ru", chosen="pt")._value.get() == before + 1
 
 
@@ -127,8 +128,9 @@ def test_detect_language_answers_with_the_most_likely_listed_language() -> None:
     assert result.confidence == pytest.approx(0.31)
 
 
-def test_a_bad_code_stops_the_service_at_startup() -> None:
-    with pytest.raises(ValueError, match="ASR_LANGUAGES"), _engine("en,portuguese", Mock()):
+@pytest.mark.parametrize("languages", ["en,portuguese", "en,jp", "xx"])
+def test_a_bad_code_stops_the_service_at_startup(languages: str) -> None:
+    with pytest.raises(ValueError, match="ASR_LANGUAGES"), _engine(languages, Mock()):
         pass
 
 

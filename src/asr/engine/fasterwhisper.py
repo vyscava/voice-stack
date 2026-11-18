@@ -7,6 +7,7 @@ from typing import Any, cast
 import numpy as np
 import numpy.typing as npt
 from faster_whisper import WhisperModel
+from faster_whisper.tokenizer import _LANGUAGE_CODES
 from faster_whisper.transcribe import Segment, TranscriptionInfo
 
 from asr.engine.base import ASRBase, CacheConf, DetectLanguageResult, TranscribeResult, transcribe_effective_options
@@ -32,6 +33,11 @@ class ASRFasterWhisper(ASRBase):
         raw_languages = getattr(settings, "ASR_LANGUAGES", "")
         # Parsed once here so a bad ASR_LANGUAGES stops the service at startup.
         self.allowed_languages = parse_allowed_languages(raw_languages if isinstance(raw_languages, str) else "")
+        unsupported = [code for code in self.allowed_languages if code not in _LANGUAGE_CODES]
+        if unsupported:
+            # A well-formed but unknown code ("jp" for "ja") would otherwise pass here
+            # and fail every request that falls back to it.
+            raise ValueError(f"ASR_LANGUAGES has code(s) Whisper does not know: {unsupported}")
         if self.allowed_languages:
             logger.info(f"Language detection limited to {','.join(self.allowed_languages)}")
         self._load_model()
@@ -163,8 +169,11 @@ class ASRFasterWhisper(ASRBase):
         # Detection runs inside transcribe() and the decode is lazy, so replacing an
         # unlisted language here costs one detection pass, not a second full decode.
         detected = getattr(info, "language", None)
+        chosen_prob: float | None = None
         if props.language is None and needs_override(detected, self.allowed_languages):
-            chosen, _ = best_allowed_language(getattr(info, "all_language_probs", None), self.allowed_languages)
+            chosen, chosen_prob = best_allowed_language(
+                getattr(info, "all_language_probs", None), self.allowed_languages
+            )
             logger.info(f"Detected language {detected!r} is not in ASR_LANGUAGES; decoding as {chosen!r}")
             LANGUAGE_OVERRIDES.labels(detected=str(detected), chosen=chosen).inc()
             segments_iter, info = self._model_transcribe(audio_f32, props, chosen)
@@ -217,6 +226,9 @@ class ASRFasterWhisper(ASRBase):
         # Language info (if available)
         lang = LanguageCode.from_string(getattr(info, "language", None))
         lang_prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+        if chosen_prob is not None:
+            # A forced decode reports 1.0; keep what detection actually thought of the language.
+            lang_prob = chosen_prob
 
         result = TranscribeResult(
             text=full_text,
