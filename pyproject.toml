@@ -96,7 +96,7 @@ tts-kokoro = [
   # extension, and kokoro-onnx's API has moved between minor versions
   # (from_session arrived late). Bump both together and re-run the engine tests.
   "kokoro-onnx==0.6.1",
-  "onnxruntime==1.31.1",
+  "onnxruntime==1.32.0",
   "numpy",
   "soundfile",
 ]
