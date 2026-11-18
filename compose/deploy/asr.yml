@@ -45,6 +45,9 @@ services:
       # Vocabulary biasing (names the speakers use), from the deploy's
       # secret store so personal words stay out of this repo. Empty = off.
       ASR_TRANSCRIBE_HOTWORDS: ${ASR_TRANSCRIBE_HOTWORDS:-}
+      # The languages the callers speak. Whisper otherwise picks from ~100 and
+      # hears a short "obrigado" or "thanks" as Russian now and then.
+      ASR_LANGUAGES: en,pt
       ASR_VAD_ENABLED: "true"
       ASR_IDLE_TIMEOUT_MINUTES: "60"
       ASR_MAX_CONCURRENT_REQUESTS: "2"

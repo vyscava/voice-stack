@@ -9,7 +9,13 @@ import numpy.typing as npt
 from faster_whisper import WhisperModel
 from faster_whisper.transcribe import Segment, TranscriptionInfo
 
-from asr.engine.base import ASRBase, DetectLanguageResult, TranscribeResult, transcribe_effective_options
+from asr.engine.base import ASRBase, CacheConf, DetectLanguageResult, TranscribeResult, transcribe_effective_options
+from asr.engine.language_allowlist import (
+    LANGUAGE_OVERRIDES,
+    best_allowed_language,
+    needs_override,
+    parse_allowed_languages,
+)
 from core.logging import logger_asr as logger
 from core.settings import get_settings
 from utils.audio.audio_helper import (
@@ -23,6 +29,11 @@ settings = get_settings()
 class ASRFasterWhisper(ASRBase):
     def __init__(self) -> None:
         super().__init__()
+        raw_languages = getattr(settings, "ASR_LANGUAGES", "")
+        # Parsed once here so a bad ASR_LANGUAGES stops the service at startup.
+        self.allowed_languages = parse_allowed_languages(raw_languages if isinstance(raw_languages, str) else "")
+        if self.allowed_languages:
+            logger.info(f"Language detection limited to {','.join(self.allowed_languages)}")
         self._load_model()
 
     def _load_model(self) -> None:
@@ -148,16 +159,15 @@ class ASRFasterWhisper(ASRBase):
         segments_iter: Iterable[Segment]
         info: TranscriptionInfo
 
-        segments_iter, info = self.model.transcribe(
-            audio=audio_f32,
-            language=props.language,
-            task=props.task or "",
-            beam_size=props.beam_size or 5,
-            temperature=props.temperature or 0,
-            best_of=props.best_of or 1,
-            word_timestamps=props.word_timestamps if props.word_timestamps is not None else False,
-            hotwords=props.hotwords,
-        )
+        segments_iter, info = self._model_transcribe(audio_f32, props, props.language)
+        # Detection runs inside transcribe() and the decode is lazy, so replacing an
+        # unlisted language here costs one detection pass, not a second full decode.
+        detected = getattr(info, "language", None)
+        if props.language is None and needs_override(detected, self.allowed_languages):
+            chosen, _ = best_allowed_language(getattr(info, "all_language_probs", None), self.allowed_languages)
+            logger.info(f"Detected language {detected!r} is not in ASR_LANGUAGES; decoding as {chosen!r}")
+            LANGUAGE_OVERRIDES.labels(detected=str(detected), chosen=chosen).inc()
+            segments_iter, info = self._model_transcribe(audio_f32, props, chosen)
 
         # Stop Running time for Faster-Whisper
         asr_ms = int((time.time() - t_asr) * 1000)
@@ -228,6 +238,23 @@ class ASRFasterWhisper(ASRBase):
             self.helper_save_on_cache(raw_bytes=raw_bytes, result=result, opts=props)
 
         return result
+
+    def _model_transcribe(
+        self, audio_f32: npt.NDArray[np.float32], props: CacheConf, language: str | None
+    ) -> tuple[Iterable[Segment], TranscriptionInfo]:
+        segments: Iterable[Segment]
+        info: TranscriptionInfo
+        segments, info = self.model.transcribe(
+            audio=audio_f32,
+            language=language,
+            task=props.task or "",
+            beam_size=props.beam_size or 5,
+            temperature=props.temperature or 0,
+            best_of=props.best_of or 1,
+            word_timestamps=props.word_timestamps if props.word_timestamps is not None else False,
+            hotwords=props.hotwords,
+        )
+        return segments, info
 
     def _detect_language_core(
         self,
@@ -311,7 +338,11 @@ class ASRFasterWhisper(ASRBase):
         lang_prob: float
 
         # Faster-Whisper accepts raw float32 NumPy 1-D arrays directly
-        lang_code, lang_prob, _ = self.model.detect_language(audio=audio_f32)
+        lang_code, lang_prob, all_probs = self.model.detect_language(audio=audio_f32)
+        if request_language is None and needs_override(lang_code, self.allowed_languages):
+            detected = lang_code
+            lang_code, lang_prob = best_allowed_language(all_probs, self.allowed_languages)
+            LANGUAGE_OVERRIDES.labels(detected=str(detected), chosen=lang_code).inc()
 
         # Stop Running time for Faster-Whisper
         asr_ms = int((time.time() - t_asr) * 1000)
