@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     ASR_CACHE_MAX_ITEMS: int = Field(default=64, description="Number of transcription to keep in memory")
     ASR_VAD_ENABLED: bool = Field(default=True)
     ASR_TRANSCRIBE_LANG: str | None = Field(default=None, description="Force language to use while transcribing.")
+    ASR_LANGUAGES: str = Field(
+        default="",
+        description="ISO codes language detection may answer with, e.g. en,pt; blank = any (faster-whisper only)",
+    )
     ASR_TRANSCRIBE_BEAM_SIZE: int = Field(
         default=5, description="Width of beam search (number of hypotheses tracked during decoding)"
     )

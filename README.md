@@ -197,6 +197,7 @@ Bare-metal/systemd installs use the per-service templates instead:
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warning`, `error` |
 | `ASR_VAD_ENABLED` | `true` | Voice Activity Detection (30-50% faster transcription) |
 | `ASR_TRANSCRIBE_HOTWORDS` | _(empty)_ | Words the speakers are likely to say (names, product names), comma-separated, e.g. `Ana, Jellyfin, NAS`. faster-whisper prepends them to every decoding window, which biases recognition toward those spellings. Only the first ~223 tokens count, so list the most important words first. Measure with negatives (sound-alikes that must not become a listed word) before trusting a long list. faster-whisper engine only |
+| `ASR_LANGUAGES` | _(empty)_ | Languages detection may answer with, as comma-separated ISO codes, e.g. `en,pt`. Whisper otherwise picks from about 100 languages and hears short turns ("obrigado", "valeu") as an unrelated one. A detection outside the list is replaced by the most probable listed language and the audio is decoded again in it; correctly detected turns cost nothing extra. A language the request asks for is never replaced. Replacements are counted in `asr_language_overrides_total{detected,chosen}`. Empty = any language. faster-whisper engine only |
 | `TTS_VOICES_DIR` | `/app/voices` | Directory with .wav samples for voice cloning |
 
 ### Resource / Concurrency
