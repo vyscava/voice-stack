@@ -19,6 +19,8 @@ def settings(monkeypatch):
         LIVEKIT_API_SECRET="x" * 40,  # a dummy, deliberately low-entropy so secret scanners pass it
         AGENT_PUBLIC_LIVEKIT_URL="wss://media.example.test",
         AGENT_TOKEN_TTL_MIN=30,
+        AGENT_CALL_TOKEN="x" * 40,
+        AGENT_CALL_TO="callee",
     )
     monkeypatch.setattr(web, "get_settings", lambda: s)
     return s
