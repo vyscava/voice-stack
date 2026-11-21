@@ -28,6 +28,7 @@ from voice_agent import metrics
 from voice_agent.brains import Brain, ToolProgress, build_brain, history_from_chat_items
 from voice_agent.fallback_stt import FallbackBatchSTT
 from voice_agent.fillers import Filler, FillerPicker, parse_phrases
+from voice_agent.outbound_job import outbound_from_metadata, run_outbound
 from voice_agent.policy import guarded, preemptive_generation_allowed, voice_for_language, with_fillers, with_progress
 from voice_agent.stream_audio import stream_url
 from voice_agent.stream_stt import AsrStreamSTT
@@ -109,7 +110,7 @@ def build_stt(settings: Settings, *, vad: Any) -> stt.STT[Any]:
     return AsrStreamSTT(url=url, batch=batch, vad=vad, final_timeout_s=settings.AGENT_ASR_STREAM_FINAL_TIMEOUT_S)
 
 
-def build_session(settings: Settings, *, vad: Any) -> AgentSession:
+def build_session(settings: Settings, *, vad: Any) -> AgentSession[Any]:
     return AgentSession(
         stt=build_stt(settings, vad=vad),
         tts=openai.TTS(
@@ -153,9 +154,7 @@ class VoiceAgent(Agent):
         self.language: str | None = None
         self._fillers = build_fillers(settings)
 
-    async def llm_node(  # type: ignore[override]
-        self, chat_ctx: Any, tools: Any, model_settings: Any
-    ) -> AsyncIterator[str | FlushSentinel]:
+    async def llm_node(self, chat_ctx: Any, tools: Any, model_settings: Any) -> AsyncIterator[str | FlushSentinel]:
         self._turn_id += 1
         s = self._settings
         history = history_from_chat_items(chat_ctx.items, strip_prefixes=self._fillers.phrases())
@@ -177,7 +176,7 @@ class VoiceAgent(Agent):
         self._ticks_until_audio = False
         self._ticker.stop()  # a new turn starts quiet
         completed = False
-        tools: dict[str, bool | None] = {"preamble": None}  # None: no tool this turn
+        turn_tools: dict[str, bool | None] = {"preamble": None}  # None: no tool this turn
         # Ticks started by a progress line: the brain's next words hand them to
         # tts_node, which stops them when those words start sounding.
         tool_wait = {"ticking": False}
@@ -187,8 +186,8 @@ class VoiceAgent(Agent):
             async for chunk in with_fillers(brain, stages=stages):
                 if isinstance(chunk, ToolProgress):
                     if chunk.running:
-                        if tools["preamble"] is None:
-                            tools["preamble"] = spoke["first"]
+                        if turn_tools["preamble"] is None:
+                            turn_tools["preamble"] = spoke["first"]
                         if spoke["first"]:
                             # Speak what the brain said before the tool NOW: LiveKit's
                             # sentence tokenizer would otherwise hold the last sentence
@@ -214,7 +213,7 @@ class VoiceAgent(Agent):
                         self._ticker.start(delay_s=s.AGENT_TOOL_TICKS_DELAY_S)
                         tool_wait["ticking"] = True
                     continue
-                if spoke["first"] and tools["preamble"] is not None and chunk.startswith("\n"):
+                if spoke["first"] and turn_tools["preamble"] is not None and chunk.startswith("\n"):
                     # A new paragraph after a tool round: its own sentence, not glued
                     # to the preamble. Only in a tool turn, so a plain answer's
                     # paragraphs keep their prosody.
@@ -242,12 +241,10 @@ class VoiceAgent(Agent):
                 self._ticks_until_audio = False
                 self._ticker.stop()
         metrics.TURNS.labels(outcome=outcome["value"]).inc()
-        if tools["preamble"] is not None:
-            metrics.TOOL_TURNS.labels(preamble="yes" if tools["preamble"] else "no").inc()
+        if turn_tools["preamble"] is not None:
+            metrics.TOOL_TURNS.labels(preamble="yes" if turn_tools["preamble"] else "no").inc()
 
-    async def tts_node(  # type: ignore[override]
-        self, text: AsyncIterable[str], model_settings: Any
-    ) -> AsyncIterator[rtc.AudioFrame]:
+    async def tts_node(self, text: AsyncIterable[str], model_settings: Any) -> AsyncIterator[rtc.AudioFrame]:
         """LiveKit's TTS, plus: stop the ticks when the brain's answer starts sounding."""
         try:
             async for frame in Agent.default.tts_node(self, text, model_settings):
@@ -269,6 +266,7 @@ def ticks_needed(settings: Settings) -> bool:
 async def entrypoint(ctx: JobContext) -> None:
     settings = get_settings()
     await ctx.connect()
+    outbound = outbound_from_metadata(ctx.room.metadata or "")
     call_id = ctx.room.name
     # One brain per call, closed with the call: its HTTP/NATS client is bound
     # to this call's event loop.
@@ -301,7 +299,8 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         if voice != state["voice"]:
             state["voice"] = voice
-            session.tts.update_options(voice=voice)
+            if session.tts is not None:
+                session.tts.update_options(voice=voice)  # type: ignore[attr-defined]
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev: Any) -> None:
@@ -323,7 +322,9 @@ async def entrypoint(ctx: JobContext) -> None:
     metrics.CALLS.inc()
     logger.info(f"voice call started: {call_id}")
     await session.start(room=ctx.room, agent=agent)
-    if settings.AGENT_GREETING:
+    if outbound is not None:
+        await run_outbound(ctx, session, settings, outbound)
+    elif settings.AGENT_GREETING:
         await session.say(settings.AGENT_GREETING)
 
 

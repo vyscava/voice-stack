@@ -292,6 +292,18 @@ class Settings(BaseSettings):
     AGENT_CALLER_IDENTITY: str = Field(default="caller", description="Participant identity in call tokens.")
     AGENT_TOKEN_TTL_MIN: int = Field(default=60, description="Lifetime of a call token, in minutes.")
 
+    AGENT_CALL_TOKEN: str = Field(
+        default="", description="Bearer token for POST /v1/calls. Empty = outbound calls disabled."
+    )
+    AGENT_CALL_TRUNK_NAME: str = Field(default="asterisk-out", description="Name of the LiveKit outbound SIP trunk.")
+    AGENT_CALL_TO: str = Field(default="", description="SIP user the trunk dials; the request cannot choose it.")
+    AGENT_CALL_RING_TIMEOUT_S: int = Field(default=40, description="Outbound call ring timeout, in seconds.")
+    AGENT_CALL_MAX_DURATION_S: int = Field(default=1800, description="Maximum outbound call duration, in seconds.")
+    AGENT_CALL_QUIET_HOURS: str = Field(default="", description="HH:MM-HH:MM, empty = no quiet-hours window.")
+    AGENT_CALL_TIMEZONE: str = Field(default="UTC", description="Timezone used for the quiet-hours window.")
+    AGENT_CALL_MAX_PER_DAY: int = Field(default=3, description="Maximum outbound attempts in a rolling 24-hour period.")
+    AGENT_CALL_MIN_INTERVAL_MIN: int = Field(default=30, description="Minimum minutes between outbound attempts.")
+
     # Which brain answers. openai = an OpenAI-compatible /chat/completions
     # endpoint; nats = a peer agent over NATS request/reply (text only).
     AGENT_BRAIN: str = Field(default="openai", description="openai | nats")

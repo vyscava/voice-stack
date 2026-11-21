@@ -24,6 +24,23 @@ def _agent_environment() -> dict:
     return service["environment"]
 
 
+def test_outbound_call_settings_pass_through():
+    env = _agent_environment()
+    expected = {
+        "AGENT_CALL_TOKEN": "${AGENT_CALL_TOKEN:-}",
+        "AGENT_CALL_TRUNK_NAME": "${AGENT_CALL_TRUNK_NAME:-asterisk-out}",
+        "AGENT_CALL_TO": "${AGENT_CALL_TO:-}",
+        "AGENT_CALL_RING_TIMEOUT_S": "${AGENT_CALL_RING_TIMEOUT_S:-40}",
+        "AGENT_CALL_MAX_DURATION_S": "${AGENT_CALL_MAX_DURATION_S:-1800}",
+        "AGENT_CALL_QUIET_HOURS": "${AGENT_CALL_QUIET_HOURS:-}",
+        "AGENT_CALL_TIMEZONE": "${AGENT_CALL_TIMEZONE:-UTC}",
+        "AGENT_CALL_MAX_PER_DAY": "${AGENT_CALL_MAX_PER_DAY:-3}",
+        "AGENT_CALL_MIN_INTERVAL_MIN": "${AGENT_CALL_MIN_INTERVAL_MIN:-30}",
+    }
+    assert set(expected) <= set(Settings.model_fields)
+    assert {name: env[name] for name in expected} == expected
+
+
 def test_every_brain_setting_is_forwarded():
     brain_settings = {name for name in Settings.model_fields if name.startswith(BRAIN_PREFIXES) or name in BRAIN_EXTRAS}
     assert "AGENT_LLM_API_KEY" in brain_settings

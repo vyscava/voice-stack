@@ -439,6 +439,28 @@ can start a call, so put it behind whatever restricts access in your setup.
 Browsers may refuse to let a page on a public site connect to a private
 address, which is why the page is served by the agent itself.
 
+### Outbound calls
+
+An optional outbound-call API can ring one configured SIP destination. It is
+disabled with `404` until both `AGENT_CALL_TOKEN` and `AGENT_CALL_TO` are set.
+When enabled, send an authenticated `POST /v1/calls` with a spoken-friendly
+`reason` and a lowercase `requested_by` identifier; the destination is always
+server-side configuration, never request input. Poll `GET /v1/calls/{call_id}`
+for the call status.
+
+The policy checks, in order, for an active call, valid quiet-hours/timezone
+configuration, quiet hours, the rolling 24-hour attempt cap, and the minimum
+interval between attempts. Refused requests return `409`, `429`, or `503` as
+appropriate. Call history is in memory, so a process restart also resets the
+attempt history and daily cap. The outbound agent's first brain turn begins
+with `[phone-system]`; brains should treat that as system context rather than
+words spoken by the person on the phone.
+
+Relevant settings are `AGENT_CALL_TOKEN`, `AGENT_CALL_TRUNK_NAME`,
+`AGENT_CALL_TO`, `AGENT_CALL_RING_TIMEOUT_S`, `AGENT_CALL_MAX_DURATION_S`,
+`AGENT_CALL_QUIET_HOURS`, `AGENT_CALL_TIMEZONE`, `AGENT_CALL_MAX_PER_DAY`, and
+`AGENT_CALL_MIN_INTERVAL_MIN`. Keep the bearer token on a TLS-protected route.
+
 What it does on its own:
 
 - **Language:** ASR detects the language (it is never told "English"), the
