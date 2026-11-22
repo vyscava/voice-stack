@@ -1,6 +1,9 @@
 """HTTP contract tests for outbound calls."""
 
+import asyncio
+import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -180,3 +183,116 @@ def test_outbound_metric_counts_each_branch(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert response.status_code == 202
     assert web.metrics.OUTBOUND_CALLS.labels("dialing")._value.get() == before + 1
+
+
+class FakeSIP:
+    def __init__(self, trunks: list[Any], error: Exception | None = None) -> None:
+        self.trunks = trunks
+        self.error = error
+        self.participant_requests: list[Any] = []
+
+    async def list_outbound_trunk(self, request: Any) -> Any:
+        return SimpleNamespace(items=self.trunks)
+
+    async def create_sip_participant(self, request: Any) -> Any:
+        if self.error is not None:
+            raise self.error
+        self.participant_requests.append(request)
+
+
+class FakeRooms:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.created: list[Any] = []
+        self.deleted: list[Any] = []
+
+    async def create_room(self, request: Any) -> Any:
+        if self.error is not None:
+            raise self.error
+        self.created.append(request)
+
+    async def delete_room(self, request: Any) -> Any:
+        self.deleted.append(request)
+
+
+class FakeLiveKit:
+    def __init__(
+        self,
+        trunks: list[Any] | None = None,
+        sip_error: Exception | None = None,
+        room_error: Exception | None = None,
+    ) -> None:
+        self.sip = FakeSIP(
+            trunks if trunks is not None else [SimpleNamespace(name="asterisk-out", sip_trunk_id="trunk-1")],
+            sip_error,
+        )
+        self.room = FakeRooms(room_error)
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _record() -> Any:
+    return SimpleNamespace(call_id="call-out-x", reason="r", requested_by="agent-a")
+
+
+def _lk_settings() -> Settings:
+    return Settings(
+        LIVEKIT_URL="ws://livekit",
+        LIVEKIT_API_KEY="***",
+        LIVEKIT_API_SECRET="***" * 40,
+        AGENT_CALL_TO="callee",
+        AGENT_CALL_TRUNK_NAME="asterisk-out",
+        AGENT_CALL_RING_TIMEOUT_S=40,
+        AGENT_CALL_MAX_DURATION_S=1800,
+    )
+
+
+def test_create_outbound_room_starts_sip_participant_without_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLiveKit()
+    monkeypatch.setattr("livekit.api.LiveKitAPI", lambda *args: fake)
+    asyncio.run(web.create_outbound_room(_lk_settings(), _record()))
+    assert len(fake.room.created) == 1
+    assert fake.room.created[0].name == "call-out-x"
+    assert fake.room.created[0].agents == []
+    metadata = json.loads(fake.room.created[0].metadata)
+    assert metadata["outbound"]["call_id"] == "call-out-x"
+    request = fake.sip.participant_requests[0]
+    assert request.sip_trunk_id == "trunk-1"
+    assert request.sip_call_to == "callee"
+    assert request.room_name == "call-out-x"
+    assert request.participant_identity == "callee"
+    assert request.wait_until_answered is False
+    assert request.ringing_timeout.seconds == 40
+    assert request.max_call_duration.seconds == 1800
+    assert not fake.room.deleted
+    assert fake.closed
+
+
+def test_create_outbound_room_without_trunk_fails_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLiveKit(trunks=[])
+    monkeypatch.setattr("livekit.api.LiveKitAPI", lambda *args: fake)
+    with pytest.raises(RuntimeError, match="trunk"):
+        asyncio.run(web.create_outbound_room(_lk_settings(), _record()))
+    assert not fake.room.created
+    assert not fake.sip.participant_requests
+    assert not fake.room.deleted
+
+
+def test_create_outbound_room_sip_failure_deletes_the_room(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLiveKit(sip_error=RuntimeError("sip down"))
+    monkeypatch.setattr("livekit.api.LiveKitAPI", lambda *args: fake)
+    with pytest.raises(RuntimeError, match="sip down"):
+        asyncio.run(web.create_outbound_room(_lk_settings(), _record()))
+    assert len(fake.room.created) == 1
+    assert len(fake.room.deleted) == 1
+    assert fake.room.deleted[0].room == "call-out-x"
+
+
+def test_create_outbound_room_room_failure_does_not_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLiveKit(room_error=RuntimeError("room down"))
+    monkeypatch.setattr("livekit.api.LiveKitAPI", lambda *args: fake)
+    with pytest.raises(RuntimeError, match="room down"):
+        asyncio.run(web.create_outbound_room(_lk_settings(), _record()))
+    assert not fake.room.deleted

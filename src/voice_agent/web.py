@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Body, FastAPI, Header
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from google.protobuf.duration_pb2 import Duration
 
 from core.settings import Settings, get_settings
 from voice_agent import calls, metrics
@@ -85,7 +86,12 @@ async def create_outbound_room(settings: Settings, record: calls.CallRecord) -> 
     from livekit import api
 
     lk = api.LiveKitAPI(settings.LIVEKIT_URL, settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET)
+    room_created = False
     try:
+        trunks = (await lk.sip.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())).items
+        trunk = next((item for item in trunks if item.name == settings.AGENT_CALL_TRUNK_NAME), None)
+        if trunk is None:
+            raise RuntimeError("outbound SIP trunk is not configured")
         await lk.room.create_room(
             api.CreateRoomRequest(
                 name=record.call_id,
@@ -99,9 +105,28 @@ async def create_outbound_room(settings: Settings, record: calls.CallRecord) -> 
                     }
                 ),
                 empty_timeout=30,
-                agents=[api.RoomAgentDispatch(agent_name="")],
             )
         )
+        room_created = True
+        await lk.sip.create_sip_participant(
+            api.CreateSIPParticipantRequest(
+                sip_trunk_id=trunk.sip_trunk_id,
+                sip_call_to=settings.AGENT_CALL_TO,
+                room_name=record.call_id,
+                participant_identity="callee",
+                participant_name="callee",
+                wait_until_answered=False,
+                ringing_timeout=Duration(seconds=settings.AGENT_CALL_RING_TIMEOUT_S),
+                max_call_duration=Duration(seconds=settings.AGENT_CALL_MAX_DURATION_S),
+            )
+        )
+    except Exception:
+        if room_created:
+            try:
+                await lk.room.delete_room(api.DeleteRoomRequest(room=record.call_id))
+            except Exception:
+                pass
+        raise
     finally:
         await lk.aclose()
 
