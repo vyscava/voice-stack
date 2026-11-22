@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from google.protobuf.duration_pb2 import Duration
-from livekit import api
+from livekit import api, rtc
 from livekit.agents import AgentSession, JobContext
 
 from core.settings import Settings
@@ -40,14 +40,6 @@ def outbound_from_metadata(metadata: object) -> dict[str, str] | None:
     return {"call_id": call_id, "reason": reason, "requested_by": requested_by}
 
 
-def status_for_sip_error(code: int | None) -> str:
-    if code in (408, 480, 487):
-        return "no_answer"
-    if code in (486, 600, 603):
-        return "busy"
-    return "failed"
-
-
 def context_turn(outbound: dict[str, str]) -> str:
     return (
         "[phone-system] You placed this call. The person you called just answered. Reason for the call: "
@@ -56,31 +48,52 @@ def context_turn(outbound: dict[str, str]) -> str:
     )
 
 
-async def dial(ctx: JobContext, settings: Settings, outbound: dict[str, str]) -> tuple[str, str]:
-    del outbound
-    trunks = (await ctx.api.sip.list_sip_outbound_trunk(api.ListSIPOutboundTrunkRequest())).items
-    trunk = next((item for item in trunks if item.name == settings.AGENT_CALL_TRUNK_NAME), None)
-    if trunk is None:
-        return "failed", "no_trunk"
+async def wait_for_answer(ctx: JobContext, settings: Settings) -> tuple[str, str]:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.AGENT_CALL_RING_TIMEOUT_S
     try:
-        await ctx.api.sip.create_sip_participant(
-            api.CreateSIPParticipantRequest(
-                sip_trunk_id=trunk.sip_trunk_id,
-                sip_call_to=settings.AGENT_CALL_TO,
-                room_name=ctx.room.name,
-                participant_identity="callee",
-                participant_name="callee",
-                wait_until_answered=True,
-                ringing_timeout=Duration(seconds=settings.AGENT_CALL_RING_TIMEOUT_S),
-                max_call_duration=Duration(seconds=settings.AGENT_CALL_MAX_DURATION_S),
-            )
+        participant = await asyncio.wait_for(
+            ctx.wait_for_participant(identity="callee", kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP),
+            timeout=settings.AGENT_CALL_RING_TIMEOUT_S,
         )
-    except api.SipCallError as err:
-        code = err.sip_status_code
-        return status_for_sip_error(code), f"sip_{code}"
-    except api.TwirpError:
-        return "failed", "error"
-    return "answered", ""
+    except asyncio.TimeoutError:
+        return "no_answer", "timeout"
+    except RuntimeError:
+        return "no_answer", "disconnected"
+    while True:
+        changed = asyncio.Event()
+
+        def on_attributes(
+            changed_attributes: dict[str, str], changed_participant: rtc.Participant, event: asyncio.Event = changed
+        ) -> None:
+            if changed_participant is participant and "sip.callStatus" in changed_attributes:
+                event.set()
+
+        def on_disconnected(disconnected_participant: rtc.Participant, event: asyncio.Event = changed) -> None:
+            if disconnected_participant is participant:
+                event.set()
+
+        ctx.room.on("participant_attributes_changed", on_attributes)
+        ctx.room.on("participant_disconnected", on_disconnected)
+        try:
+            # Register before reading state so a transition cannot fall between the read and wait.
+            status = participant.attributes.get("sip.callStatus", "")
+            if status == "active":
+                return "answered", ""
+            if status in {"hangup", "disconnected", "failed", "terminated"}:
+                return "no_answer", status
+            if participant not in ctx.room.remote_participants.values():
+                return "no_answer", "disconnected"
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return "no_answer", "timeout"
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return "no_answer", "timeout"
+        finally:
+            ctx.room.off("participant_attributes_changed", on_attributes)
+            ctx.room.off("participant_disconnected", on_disconnected)
 
 
 async def run_outbound(
@@ -88,11 +101,8 @@ async def run_outbound(
 ) -> None:
     call_id = outbound["call_id"]
 
-    async def _run() -> tuple[str, str]:
-        return await dial(ctx, settings, outbound)
-
     try:
-        status, detail = await _run()
+        status, detail = await wait_for_answer(ctx, settings)
         now = datetime.now(timezone.utc)
         calls.REGISTRY.update(call_id, status, detail, now=now)
         metrics.OUTBOUND_CALLS.labels(status).inc()
