@@ -310,7 +310,11 @@ class Settings(BaseSettings):
         default=1.5, description="Seconds after answer to wait for the generated opening before the fallback."
     )
     AGENT_CALL_OPENING_FALLBACK: str = Field(
-        default="", description="Fallback opening; {reason} is replaced by the call's reason. Empty = built-in."
+        default="",
+        description="Fallback opening; {reason} and {name} are filled in. Empty = built-in line.",
+    )
+    AGENT_CALL_CALLER_NAME: str = Field(
+        default="", description="Who is calling, named by the built-in fallback opening. Empty = not named."
     )
 
     # Which brain answers. openai = an OpenAI-compatible /chat/completions
