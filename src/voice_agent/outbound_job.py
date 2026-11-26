@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,7 +18,9 @@ from voice_agent.brains import Brain, Turn
 
 logger = logging.getLogger("voice_agent")
 
-DEFAULT_OPENING_FALLBACK = "Hi, I'm calling about this: {reason}"
+DEFAULT_OPENING_FALLBACK = "Hi, I'm calling about: {reason}"
+NAMED_OPENING_FALLBACK = "Hi, it's {name}, calling about: {reason}"
+_PLACEHOLDER = re.compile(r"\{(name|reason)\}")
 
 
 def outbound_from_metadata(metadata: object) -> dict[str, str] | None:
@@ -64,9 +67,18 @@ async def generate_opening(brain: Brain, outbound: dict[str, str]) -> str:
 
 
 def fallback_opening(settings: Settings, outbound: dict[str, str]) -> str:
-    """A fixed opening built from the request's reason (a plain replace, never str.format)."""
-    template = settings.AGENT_CALL_OPENING_FALLBACK.strip() or DEFAULT_OPENING_FALLBACK
-    return template.replace("{reason}", outbound["reason"])
+    """A fixed opening built from the request's reason and the caller's name.
+
+    An explicit template wins; otherwise the built-in line names the caller when
+    AGENT_CALL_CALLER_NAME is set. ``{name}`` and ``{reason}`` are filled in one
+    pass, never with str.format, so braces in either value stay literal.
+    """
+    name = settings.AGENT_CALL_CALLER_NAME.strip()
+    template = settings.AGENT_CALL_OPENING_FALLBACK.strip() or (
+        NAMED_OPENING_FALLBACK if name else DEFAULT_OPENING_FALLBACK
+    )
+    values = {"name": name, "reason": outbound["reason"]}
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], template).strip()
 
 
 async def ready_opening(task: asyncio.Task[str], settings: Settings, outbound: dict[str, str]) -> tuple[str, str]:

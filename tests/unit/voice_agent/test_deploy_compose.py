@@ -38,6 +38,7 @@ def test_outbound_call_settings_pass_through():
         "AGENT_CALL_MIN_INTERVAL_MIN": "${AGENT_CALL_MIN_INTERVAL_MIN:-30}",
         "AGENT_CALL_OPENING_WAIT_S": "${AGENT_CALL_OPENING_WAIT_S:-1.5}",
         "AGENT_CALL_OPENING_FALLBACK": "${AGENT_CALL_OPENING_FALLBACK:-}",
+        "AGENT_CALL_CALLER_NAME": "${AGENT_CALL_CALLER_NAME:-}",
     }
     assert set(expected) <= set(Settings.model_fields)
     assert {name: env[name] for name in expected} == expected

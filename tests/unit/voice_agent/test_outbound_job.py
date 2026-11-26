@@ -13,6 +13,7 @@ from voice_agent.brains import ToolProgress, Turn
 from voice_agent.outbound import CallRequest
 from voice_agent.outbound_job import (
     DEFAULT_OPENING_FALLBACK,
+    NAMED_OPENING_FALLBACK,
     context_turn,
     fallback_opening,
     generate_opening,
@@ -417,6 +418,37 @@ def test_fallback_opening_uses_the_template_and_the_reason():
     assert fallback_opening(settings(), OUTBOUND) == DEFAULT_OPENING_FALLBACK.replace("{reason}", "the backup finished")
     custom = settings(AGENT_CALL_OPENING_FALLBACK="Hello, this is the assistant. {reason}.")
     assert fallback_opening(custom, OUTBOUND) == "Hello, this is the assistant. the backup finished."
+
+
+def test_fallback_opening_names_the_caller_when_one_is_set():
+    named = settings(AGENT_CALL_CALLER_NAME="  Ada ")
+    assert fallback_opening(named, OUTBOUND) == "Hi, it's Ada, calling about: the backup finished"
+    assert fallback_opening(settings(), OUTBOUND) == "Hi, I'm calling about: the backup finished"
+    assert NAMED_OPENING_FALLBACK == "Hi, it's {name}, calling about: {reason}"
+
+
+def test_an_explicit_fallback_template_wins_over_the_caller_name():
+    both = settings(AGENT_CALL_CALLER_NAME="Ada", AGENT_CALL_OPENING_FALLBACK="{name} here. {reason}.")
+    assert fallback_opening(both, OUTBOUND) == "Ada here. the backup finished."
+
+
+def test_a_caller_name_with_braces_is_inserted_literally():
+    odd = settings(AGENT_CALL_CALLER_NAME="{reason}")
+    assert fallback_opening(odd, OUTBOUND) == "Hi, it's {reason}, calling about: the backup finished"
+
+
+@pytest.mark.parametrize("template", ["", "{name}: {reason}"])
+def test_placeholders_inside_the_reason_stay_literal(template):
+    # The reason comes from another agent's request: it must never pull in the name.
+    outbound = {**OUTBOUND, "reason": "x {name} {reason}"}
+    named = settings(AGENT_CALL_CALLER_NAME="Ada", AGENT_CALL_OPENING_FALLBACK=template)
+    assert "x {name} {reason}" in fallback_opening(named, outbound)
+    assert fallback_opening(named, outbound).count("Ada") == 1
+
+
+def test_an_empty_name_in_a_custom_template_leaves_no_stray_space():
+    custom = settings(AGENT_CALL_OPENING_FALLBACK="{name} Hi, {reason}")
+    assert fallback_opening(custom, OUTBOUND) == "Hi, the backup finished"
 
 
 def test_fallback_opening_template_is_not_str_format():
