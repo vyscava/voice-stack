@@ -29,6 +29,11 @@ BRAIN_FAILURES = Counter("voice_agent_brain_failures_total", "Brain replies repl
 BARGE_INS = Counter("voice_agent_barge_ins_total", "Times the caller started talking while the agent spoke.")
 CALLS = Counter("voice_agent_calls_total", "Calls started.")
 OUTBOUND_CALLS = Counter("voice_agent_outbound_calls_total", "Outbound calls, by result.", ["result"])
+OUTBOUND_OPENINGS = Counter(
+    "voice_agent_outbound_openings_total",
+    "Openings spoken on answered outbound calls, by source (brain, fallback).",
+    ["source"],
+)
 FILLERS = Counter("voice_agent_fillers_total", "Lines the agent said itself before the brain spoke, by kind.", ["kind"])
 STT_STREAM_FALLBACKS = Counter(
     "voice_agent_stt_stream_fallbacks_total",
