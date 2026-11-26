@@ -45,6 +45,8 @@ def test_turn_handling_caps_the_turn_and_uses_vad_interruption():
     )
     assert th["user_turn_limit"] == {"max_duration": 12}
     assert th["interruption"]["mode"] == "vad"
+    # Words heard over an uninterruptible opening are kept and answered after it.
+    assert th["interruption"]["discard_audio_if_uninterruptible"] is False
     assert th["endpointing"] == {"min_delay": 0.4, "max_delay": 2.5}
 
 

@@ -303,6 +303,15 @@ class Settings(BaseSettings):
     AGENT_CALL_TIMEZONE: str = Field(default="UTC", description="Timezone used for the quiet-hours window.")
     AGENT_CALL_MAX_PER_DAY: int = Field(default=3, description="Maximum outbound attempts in a rolling 24-hour period.")
     AGENT_CALL_MIN_INTERVAL_MIN: int = Field(default=30, description="Minimum minutes between outbound attempts.")
+    # The opening of an outbound call is generated while the phone rings and spoken
+    # whole on answer. If the brain is not ready this long after the answer, a fixed
+    # line from the template below is spoken instead.
+    AGENT_CALL_OPENING_WAIT_S: float = Field(
+        default=1.5, description="Seconds after answer to wait for the generated opening before the fallback."
+    )
+    AGENT_CALL_OPENING_FALLBACK: str = Field(
+        default="", description="Fallback opening; {reason} is replaced by the call's reason. Empty = built-in."
+    )
 
     # Which brain answers. openai = an OpenAI-compatible /chat/completions
     # endpoint; nats = a peer agent over NATS request/reply (text only).

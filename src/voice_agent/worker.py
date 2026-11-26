@@ -59,8 +59,10 @@ def turn_handling(settings: Settings) -> dict[str, Any]:
             "min_delay": settings.AGENT_MIN_ENDPOINTING_DELAY_S,
             "max_delay": settings.AGENT_MAX_ENDPOINTING_DELAY_S,
         },
-        # VAD-based: adaptive interruption is a hosted feature.
-        "interruption": {"mode": "vad"},
+        # VAD-based: adaptive interruption is a hosted feature. Words heard while
+        # uninterruptible speech plays (an outbound call's opening) are kept, not
+        # discarded, so they become the caller's first turn once it ends.
+        "interruption": {"mode": "vad", "discard_audio_if_uninterruptible": False},
         # Background speech never goes silent; cap the turn so it still ends.
         "user_turn_limit": {"max_duration": settings.AGENT_MAX_USER_TURN_S},
         # Off by default: it calls the brain speculatively before the turn is
@@ -323,7 +325,7 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info(f"voice call started: {call_id}")
     await session.start(room=ctx.room, agent=agent)
     if outbound is not None:
-        await run_outbound(ctx, session, settings, outbound)
+        await run_outbound(ctx, session, settings, outbound, brain=brain)
     elif settings.AGENT_GREETING:
         await session.say(settings.AGENT_GREETING)
 

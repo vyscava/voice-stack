@@ -9,8 +9,17 @@ import pytest
 
 from core.settings import Settings
 from voice_agent import calls
+from voice_agent.brains import ToolProgress, Turn
 from voice_agent.outbound import CallRequest
-from voice_agent.outbound_job import context_turn, outbound_from_metadata, run_outbound, wait_for_answer
+from voice_agent.outbound_job import (
+    DEFAULT_OPENING_FALLBACK,
+    context_turn,
+    fallback_opening,
+    generate_opening,
+    outbound_from_metadata,
+    run_outbound,
+    wait_for_answer,
+)
 
 
 @pytest.mark.parametrize(
@@ -38,7 +47,7 @@ def test_context_turn_is_tagged_and_carries_the_reason():
     assert "the backup finished" in text
 
 
-def settings(ring_timeout_s: int = 40) -> Settings:
+def settings(ring_timeout_s: int = 40, **overrides: Any) -> Settings:
     return Settings(
         LIVEKIT_URL="ws://livekit",
         LIVEKIT_API_KEY="key",
@@ -47,6 +56,7 @@ def settings(ring_timeout_s: int = 40) -> Settings:
         AGENT_CALL_TRUNK_NAME="asterisk-out",
         AGENT_CALL_RING_TIMEOUT_S=ring_timeout_s,
         AGENT_CALL_MAX_DURATION_S=1800,
+        **overrides,
     )
 
 
@@ -108,12 +118,97 @@ class Ctx:
         self.shutdowns.append(reason)
 
 
-class Session:
+class ChatCtx:
+    def __init__(self, items: list[Any] | None = None) -> None:
+        self.items: list[Any] = list(items or [])
+
+    def copy(self) -> "ChatCtx":
+        return ChatCtx(self.items)
+
+    def add_message(self, *, role: str, content: str) -> None:
+        self.items.append(SimpleNamespace(role=role, text_content=content))
+
+
+class Agent:
     def __init__(self) -> None:
-        self.replies: list[str] = []
+        self._chat_ctx = ChatCtx()
+
+    @property
+    def chat_ctx(self) -> ChatCtx:
+        return self._chat_ctx.copy()
+
+    async def update_chat_ctx(self, chat_ctx: ChatCtx) -> None:
+        self._chat_ctx = chat_ctx.copy()
+
+
+class Handle:
+    def __init__(self, on_playout: Any = None) -> None:
+        self._on_playout = on_playout
+
+    def __await__(self):
+        async def wait() -> "Handle":
+            if self._on_playout is not None:
+                self._on_playout()
+            return self
+
+        return wait().__await__()
+
+
+class Session:
+    """Records what the job asked the session to say or reply.
+
+    ``callee_says`` is appended to the agent's chat context while the opening
+    plays, the way LiveKit keeps a user turn it heard during uninterruptible speech.
+    """
+
+    def __init__(self, callee_says: str | None = None) -> None:
+        self.replies: list[dict[str, Any]] = []
+        self.said: list[tuple[str, Any]] = []
+        self.history_at_say: list[Any] = []
+        self.current_agent = Agent()
+        self._callee_says = callee_says
 
     async def generate_reply(self, **kwargs: Any) -> None:
-        self.replies.append(kwargs["user_input"])
+        self.replies.append(kwargs)
+
+    def say(self, text: str, **kwargs: Any) -> Handle:
+        self.said.append((text, kwargs.get("allow_interruptions")))
+        self.history_at_say = list(self.current_agent._chat_ctx.items)
+
+        def playout() -> None:
+            agent = self.current_agent
+            if self._callee_says:
+                agent._chat_ctx.add_message(role="user", content=self._callee_says)
+            agent._chat_ctx.add_message(role="assistant", content=text)
+
+        return Handle(playout)
+
+
+class Brain:
+    """A brain whose reply can be slow, fail, or include tool progress; records its calls."""
+
+    def __init__(self, chunks: list[Any] | None = None, *, delay_s: float = 0.0, error: Exception | None = None):
+        self.chunks = chunks if chunks is not None else ["Hi! ", "The backup ", "finished."]
+        self.delay_s = delay_s
+        self.error = error
+        self.calls: list[list[Turn]] = []
+        self.cancelled = False
+
+    async def reply(self, history: list[Turn], *, call_id: str, turn_id: int, language: str | None):
+        self.calls.append(history)
+        try:
+            if self.delay_s:
+                await asyncio.sleep(self.delay_s)
+            if self.error is not None:
+                raise self.error
+            for chunk in self.chunks:
+                yield chunk
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+    async def aclose(self) -> None:
+        pass
 
 
 def now() -> datetime:
@@ -228,8 +323,9 @@ async def test_run_outbound_answered_opens_with_the_reason(monkeypatch):
         session,
         settings(),
         {"call_id": record.call_id, "reason": record.reason, "requested_by": record.requested_by},
+        brain=Brain(),
     )
-    assert "the backup finished" in session.replies[0]
+    assert session.said == [("Hi! The backup finished.", False)]
     assert not ctx.api.room.deleted
     assert ctx.callbacks
     assert not ctx.shutdowns
@@ -248,7 +344,11 @@ async def test_run_outbound_no_answer_shuts_down_job_and_deletes_room(monkeypatc
     monkeypatch.setattr(job, "wait_for_answer", fake_wait)
     ctx = Ctx(Room())
     await run_outbound(
-        ctx, Session(), settings(), {"call_id": record.call_id, "reason": "r", "requested_by": "agent-a"}
+        ctx,
+        Session(),
+        settings(),
+        {"call_id": record.call_id, "reason": "r", "requested_by": "agent-a"},
+        brain=Brain(),
     )
     stored = registry.get(record.call_id, record.started_at, 40, 1800)
     assert stored is not None and stored.status == "no_answer" and stored.detail == "timeout"
@@ -268,8 +368,176 @@ async def test_run_outbound_job_error_marks_failed(monkeypatch):
     monkeypatch.setattr(job, "wait_for_answer", broken)
     ctx = Ctx(Room())
     await run_outbound(
-        ctx, Session(), settings(), {"call_id": record.call_id, "reason": "r", "requested_by": "agent-a"}
+        ctx,
+        Session(),
+        settings(),
+        {"call_id": record.call_id, "reason": "r", "requested_by": "agent-a"},
+        brain=Brain(),
     )
     stored = registry.get(record.call_id, record.started_at, 40, 1800)
     assert stored is not None and stored.status == "failed" and stored.detail == "job_error"
     assert ctx.api.room.deleted and ctx.shutdowns
+
+
+# --- The opening: generated while the phone rings, spoken whole on answer ------------------
+
+OUTBOUND = {"call_id": "call-out-c", "reason": "the backup finished", "requested_by": "agent-a"}
+
+
+def _registry(monkeypatch, reason: str = "the backup finished") -> dict[str, str]:
+    registry = calls.CallRegistry()
+    record = registry.start(CallRequest(reason, "agent-a"), now(), 40, 1800)
+    monkeypatch.setattr(calls, "REGISTRY", registry)
+    return {"call_id": record.call_id, "reason": record.reason, "requested_by": record.requested_by}
+
+
+def _answer_after(
+    monkeypatch, status: str = "answered", detail: str = "", *, seen: list[int] | None = None, brain=None
+):
+    import voice_agent.outbound_job as job
+
+    async def fake_wait(ctx_, settings_):
+        await asyncio.sleep(0.01)  # ringing: the opening request is already on its way
+        if seen is not None and brain is not None:
+            seen.append(len(brain.calls))
+        return status, detail
+
+    monkeypatch.setattr(job, "wait_for_answer", fake_wait)
+
+
+@pytest.mark.asyncio
+async def test_generate_opening_asks_the_brain_with_the_context_turn_and_drops_tool_progress():
+    brain = Brain(["Hi. ", ToolProgress(tool="t", label="l", status="running"), "Calling about the backup."])
+    text = await generate_opening(brain, OUTBOUND)
+    assert text == "Hi. Calling about the backup."
+    assert brain.calls == [[Turn(role="user", text=context_turn(OUTBOUND))]]
+
+
+def test_fallback_opening_uses_the_template_and_the_reason():
+    assert fallback_opening(settings(), OUTBOUND) == DEFAULT_OPENING_FALLBACK.replace("{reason}", "the backup finished")
+    custom = settings(AGENT_CALL_OPENING_FALLBACK="Hello, this is the assistant. {reason}.")
+    assert fallback_opening(custom, OUTBOUND) == "Hello, this is the assistant. the backup finished."
+
+
+def test_fallback_opening_template_is_not_str_format():
+    # Braces other than {reason} are left alone: a template is never str.format()ed.
+    custom = settings(AGENT_CALL_OPENING_FALLBACK="{0} {reason} {missing}")
+    assert fallback_opening(custom, OUTBOUND) == "{0} the backup finished {missing}"
+
+
+@pytest.mark.asyncio
+async def test_opening_is_requested_while_ringing_and_spoken_uninterruptible_on_answer(monkeypatch):
+    outbound = _registry(monkeypatch)
+    brain = Brain()
+    seen: list[int] = []
+    _answer_after(monkeypatch, seen=seen, brain=brain)
+    session = Session()
+    await run_outbound(Ctx(Room()), session, settings(), outbound, brain=brain)
+    assert seen == [1]  # the brain was asked before the callee answered
+    assert session.said == [("Hi! The backup finished.", False)]
+    assert session.replies == []  # no generate_reply: no ack, no thinking line
+
+
+@pytest.mark.asyncio
+async def test_context_turn_is_in_the_chat_before_the_opening_is_spoken(monkeypatch):
+    outbound = _registry(monkeypatch)
+    _answer_after(monkeypatch)
+    session = Session()
+    await run_outbound(Ctx(Room()), session, settings(), outbound, brain=Brain())
+    assert [(i.role, i.text_content) for i in session.history_at_say] == [("user", context_turn(outbound))]
+    items = session.current_agent._chat_ctx.items
+    assert [(i.role, i.text_content) for i in items] == [
+        ("user", context_turn(outbound)),
+        ("assistant", "Hi! The backup finished."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_slow_brain_falls_back_after_the_wait_and_is_cancelled(monkeypatch):
+    outbound = _registry(monkeypatch)
+    _answer_after(monkeypatch)
+    brain = Brain(delay_s=5.0)
+    session = Session()
+    cancelled_before_speaking: list[bool] = []
+    say = session.say
+
+    def recording_say(text: str, **kwargs: Any) -> Handle:
+        cancelled_before_speaking.append(brain.cancelled)
+        return say(text, **kwargs)
+
+    session.say = recording_say  # type: ignore[method-assign]
+    await run_outbound(Ctx(Room()), session, settings(AGENT_CALL_OPENING_WAIT_S=0.05), outbound, brain=brain)
+    assert session.said == [(fallback_opening(settings(), outbound), False)]
+    # The stale request is stopped before the fallback plays, not after the call's first turn.
+    assert cancelled_before_speaking == [True]
+
+
+@pytest.mark.asyncio
+async def test_brain_ready_within_the_wait_after_answer_is_used(monkeypatch):
+    outbound = _registry(monkeypatch)
+    _answer_after(monkeypatch)
+    brain = Brain(delay_s=0.05)  # still generating at answer, done inside the wait
+    session = Session()
+    await run_outbound(Ctx(Room()), session, settings(AGENT_CALL_OPENING_WAIT_S=1.0), outbound, brain=brain)
+    assert session.said == [("Hi! The backup finished.", False)]
+
+
+@pytest.mark.parametrize(
+    "brain", [Brain(error=RuntimeError("down")), Brain(error=TimeoutError("peer")), Brain(chunks=["  ", ""])]
+)
+@pytest.mark.asyncio
+async def test_failed_or_empty_brain_falls_back(monkeypatch, brain):
+    outbound = _registry(monkeypatch)
+    _answer_after(monkeypatch)
+    session = Session()
+    await run_outbound(Ctx(Room()), session, settings(), outbound, brain=brain)
+    assert session.said == [(fallback_opening(settings(), outbound), False)]
+
+
+@pytest.mark.asyncio
+async def test_callee_speaking_during_the_opening_gets_a_reply_after_it(monkeypatch):
+    outbound = _registry(monkeypatch)
+    _answer_after(monkeypatch)
+    session = Session(callee_says="hello?")
+    await run_outbound(Ctx(Room()), session, settings(), outbound, brain=Brain())
+    assert session.said == [("Hi! The backup finished.", False)]
+    assert session.replies == [{}]  # one reply, to what is already in the chat (the callee's words)
+
+
+@pytest.mark.asyncio
+async def test_unanswered_call_discards_the_opening_without_speaking(monkeypatch):
+    outbound = _registry(monkeypatch)
+    _answer_after(monkeypatch, "no_answer", "timeout")
+    brain = Brain(delay_s=5.0)
+    session = Session()
+    ctx = Ctx(Room())
+    await run_outbound(ctx, session, settings(), outbound, brain=brain)
+    assert session.said == [] and session.replies == []  # no TTS
+    assert brain.cancelled
+    assert ctx.shutdowns
+
+
+@pytest.mark.asyncio
+async def test_job_error_discards_the_opening(monkeypatch):
+    outbound = _registry(monkeypatch)
+    import voice_agent.outbound_job as job
+
+    async def broken(ctx_, settings_):
+        await asyncio.sleep(0.01)
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(job, "wait_for_answer", broken)
+    brain = Brain(delay_s=5.0)
+    session = Session()
+    await run_outbound(Ctx(Room()), session, settings(), outbound, brain=brain)
+    assert session.said == [] and brain.cancelled
+
+
+@pytest.mark.asyncio
+async def test_the_reason_and_the_opening_are_never_logged(monkeypatch, caplog):
+    outbound = _registry(monkeypatch, reason="a private reason 7f3a")
+    _answer_after(monkeypatch)
+    caplog.set_level("DEBUG")
+    await run_outbound(Ctx(Room()), Session(), settings(), outbound, brain=Brain(["Spoken opening 9c2e."]))
+    assert caplog.records  # the job does log (call id and result)
+    assert "7f3a" not in caplog.text and "9c2e" not in caplog.text
